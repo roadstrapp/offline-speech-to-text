@@ -1,0 +1,2 @@
+- Introduces the Offline Speech to Text identity and logo
+- Enables private, caller-supplied audio transcription for app integrations
