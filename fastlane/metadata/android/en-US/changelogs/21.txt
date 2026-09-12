@@ -1,0 +1,3 @@
+- Keeps the APK compact with clear, verified on-demand Parakeet model setup
+- Improves the true-black voice-input interface and model guidance
+- Replaces the launcher and store artwork with a circular black icon and white microphone

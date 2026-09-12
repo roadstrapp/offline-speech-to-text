@@ -30,13 +30,15 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
 /**
- * Lets the user pick the speech model: the built-in Parakeet model, or any
+ * Lets the user pick the speech model: the recommended Parakeet model, or any
  * transcribe.cpp GGUF model imported from a locally downloaded file. Import
  * goes through the system file picker (SAF), so the app itself needs no
  * internet or storage permission — download links are only *shown* here and
@@ -45,7 +47,7 @@ import java.util.Locale;
  * The selection is stored as marker files in filesDir (same pattern as the
  * other settings), read by the Rust engine loader:
  *   - {@code active_model}: file name of the GGUF under {@code files/models/},
- *     absent/empty = built-in model.
+ *     absent/empty = bundled model when present, otherwise no model.
  *   - {@code model_language}: optional language hint for GGUF models.
  */
 public class ModelsActivity extends AppCompatActivity {
@@ -80,8 +82,8 @@ public class ModelsActivity extends AppCompatActivity {
     }
 
     private static final ModelLink[] MODEL_LINKS = {
-            new ModelLink("Parakeet TDT 110M", R.string.model_desc_parakeet110m, "135 MB",
-                    "https://huggingface.co/handy-computer/parakeet-tdt_ctc-110m-gguf/resolve/main/parakeet-tdt_ctc-110m-Q8_0.gguf"),
+            new ModelLink("Parakeet TDT 0.6B v3 Q4", R.string.model_desc_parakeet_default,
+                    "463 MiB", DefaultModelContract.DOWNLOAD_URL),
             new ModelLink("SenseVoice Small", R.string.model_desc_sensevoice, "241 MB",
                     "https://huggingface.co/handy-computer/SenseVoiceSmall-gguf/resolve/main/SenseVoiceSmall-Q8_0.gguf"),
             new ModelLink("Whisper Small", R.string.model_desc_whisper_small, "257 MB",
@@ -108,6 +110,11 @@ public class ModelsActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_models);
+
+        if (!BuildConfig.HAS_BUNDLED_MODEL) {
+            ((TextView) findViewById(R.id.text_models_desc))
+                    .setText(R.string.models_desc_import_required);
+        }
 
         modelList = findViewById(R.id.model_list);
         statusText = findViewById(R.id.txt_model_status);
@@ -415,37 +422,66 @@ public class ModelsActivity extends AppCompatActivity {
 
         new Thread(() -> {
             boolean ok = false;
+            long copied = 0;
+            String sha256 = "";
             try (InputStream in = getContentResolver().openInputStream(uri);
                  OutputStream out = new FileOutputStream(tmp)) {
+                MessageDigest digest = MessageDigest.getInstance("SHA-256");
                 byte[] buf = new byte[1024 * 1024];
-                long copied = 0;
                 int read;
                 while (in != null && (read = in.read(buf)) != -1) {
                     out.write(buf, 0, read);
+                    digest.update(buf, 0, read);
                     copied += read;
                     if (size > 0) {
                         int pct = (int) (copied * 100 / size);
                         runOnUiThread(() -> importBar.setProgress(pct));
                     }
                 }
+                sha256 = toHex(digest.digest());
                 ok = true;
-            } catch (IOException e) {
+            } catch (IOException | NoSuchAlgorithmException e) {
                 Log.e(TAG, "Model import failed", e);
             }
 
-            boolean success = ok && tmp.renameTo(dest);
-            if (!success) tmp.delete();
+            boolean defaultMismatch = ok
+                    && DefaultModelContract.FILE_NAME.equals(name)
+                    && !DefaultModelContract.matches(name, copied, sha256);
+            boolean moved = ok && !defaultMismatch && tmp.renameTo(dest);
+            if (!moved) tmp.delete();
+            boolean activated = false;
+            if (moved) {
+                try {
+                    ImportedModelSelection.activate(getFilesDir(), name);
+                    activated = true;
+                } catch (IOException e) {
+                    Log.e(TAG, "Imported model could not be activated", e);
+                }
+            }
+            final boolean success = moved && activated;
             runOnUiThread(() -> {
                 importButton.setEnabled(true);
                 importArea.setVisibility(View.GONE);
                 if (success) {
                     snackbar(getString(R.string.models_import_done, name));
                     refreshList();
+                    statusText.setText(getString(R.string.models_loading));
+                    reloadModelNative(this);
+                } else if (defaultMismatch) {
+                    snackbar(getString(R.string.models_import_default_mismatch));
                 } else {
                     snackbar(getString(R.string.models_import_failed));
                 }
             });
         }, "model-import").start();
+    }
+
+    private static String toHex(byte[] bytes) {
+        StringBuilder result = new StringBuilder(bytes.length * 2);
+        for (byte value : bytes) {
+            result.append(String.format(Locale.ROOT, "%02x", value & 0xff));
+        }
+        return result.toString();
     }
 
     private String queryDisplayName(Uri uri) {

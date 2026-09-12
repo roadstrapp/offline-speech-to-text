@@ -5,7 +5,10 @@ plugins {
     id("com.android.application")
 }
 
-val omitBundledModel = providers.gradleProperty("omitBundledModel").orNull == "true"
+// Private APK candidates keep the 485 MB default model out of the package.
+// Developers may opt into a bundled build explicitly when another delivery
+// channel can carry it.
+val includeBundledModel = providers.gradleProperty("includeBundledModel").orNull == "true"
 
 android {
     namespace = "dev.notune.transcribe"
@@ -15,9 +18,9 @@ android {
         applicationId = "app.offlinespeechtotext"
         minSdk = 26
         targetSdk = 35
-        versionCode = 20
-        versionName = "0.1.19"
-        buildConfigField("boolean", "HAS_BUNDLED_MODEL", (!omitBundledModel).toString())
+        versionCode = 21
+        versionName = "0.1.20"
+        buildConfigField("boolean", "HAS_BUNDLED_MODEL", includeBundledModel.toString())
         ndk {
             abiFilters += "arm64-v8a"
         }
@@ -67,7 +70,9 @@ android {
 
     // Play Asset Delivery: large model files go into a separate asset pack
     // so the base module stays under the 200 MB Play Store limit.
-    assetPacks += listOf(":model_assets")
+    if (includeBundledModel) {
+        assetPacks += listOf(":model_assets")
+    }
 }
 
 // For APK builds (assemble/install), asset packs are ignored by AGP so we
@@ -77,7 +82,7 @@ android {
 val isBundle = gradle.startParameter.taskNames.any {
     it.contains("bundle", ignoreCase = true)
 }
-if (!isBundle && !omitBundledModel) {
+if (!isBundle && includeBundledModel) {
     android.sourceSets.getByName("main") {
         assets.srcDirs(
             "src/main/assets",
@@ -169,22 +174,33 @@ tasks.named("preBuild") {
 // Model asset download task
 // ---------------------------------------------------------------------------
 
-data class ModelFile(val name: String, val sha256: String)
+data class ModelFile(val name: String, val size: Long, val sha256: String)
 
 // The bundled GGUF goes into the model_assets asset pack so the base module
 // stays under the Play Store 200 MB compressed-download limit.
 val modelPackFiles = listOf(
-    ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf",
+    ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,
         "b68557be1e3c40207fd7c4bd9d63f1d3316b963f15325bfb0cc16a8bb0ffd181"),
 )
 
-val huggingFaceRepo = "https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/main"
+val huggingFaceRepo = "https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/85ac09ea12fc4b1112fa76810059364bc6adc9de"
 
 fun downloadToDir(assetsDir: File, files: List<ModelFile>) {
     assetsDir.mkdirs()
+    val expectedNames = files.map { it.name }.toSet()
+    assetsDir.listFiles { file -> file.extension.equals("gguf", ignoreCase = true) }
+        ?.filterNot { it.name in expectedNames }
+        ?.forEach {
+            println("  - Removing superseded bundled model ${it.name}")
+            if (!it.delete()) throw GradleException("Failed to remove superseded model ${it.name}")
+        }
     files.forEach { model ->
         val destFile = File(assetsDir, model.name)
-        if (destFile.exists() && model.sha256.isNotEmpty()) {
+        if (destFile.exists() && destFile.length() != model.size) {
+            println("  ✗ ${model.name} size mismatch, re-downloading...")
+            destFile.delete()
+        }
+        if (destFile.exists()) {
             val digest = MessageDigest.getInstance("SHA-256")
             FileInputStream(destFile).use { fis ->
                 val buf = ByteArray(8192)
@@ -214,6 +230,12 @@ fun downloadToDir(assetsDir: File, files: List<ModelFile>) {
                 throw GradleException("Failed to download ${model.name} (curl exit code $exitCode)")
             }
 
+            if (destFile.length() != model.size) {
+                destFile.delete()
+                throw GradleException(
+                    "Size verification failed for ${model.name}: expected ${model.size} bytes"
+                )
+            }
             if (model.sha256.isNotEmpty()) {
                 val digest = MessageDigest.getInstance("SHA-256")
                 FileInputStream(destFile).use { fis ->
@@ -252,7 +274,7 @@ val downloadModels by tasks.registering {
 }
 
 tasks.named("preBuild") {
-    if (!omitBundledModel) {
+    if (includeBundledModel) {
         dependsOn(downloadModels)
     }
 }

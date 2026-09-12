@@ -46,15 +46,15 @@
     <string name="models_title">Modèles vocaux</string>
     <string name="models_section">Modèle vocal</string>
     <string name="models_active_section">Modèle actif</string>
-    <string name="models_builtin_sub">Inclus dans l\'application · 25 langues européennes</string>
-    <string name="model_desc_parakeet110m">Anglais uniquement, petit et rapide</string>
+
+
     <string name="model_desc_sensevoice">Anglais, chinois, cantonais, japonais, coréen ; rapide</string>
     <string name="model_desc_whisper_small">99 langues, compact ; traduit vers l\'anglais</string>
     <string name="model_desc_nemotron">40 langues dont chinois, japonais, coréen, arabe, hindi ; avec ponctuation</string>
-    <string name="model_desc_parakeet_v3_q8">Comme le modèle intégré, précision supérieure</string>
+
     <string name="model_desc_whisper_turbo">99 langues, le plus précis de cette liste ; ne traduit pas</string>
     <string name="model_desc_browse">Parcourir tous les modèles transcribe.cpp</string>
-    <string name="models_desc">Le modèle intégré fonctionne immédiatement. Vous pouvez aussi importer n\'importe quel modèle GGUF transcribe.cpp téléchargé. L\'application reste entièrement hors ligne ; les téléchargements passent par votre navigateur. Le clavier vocal prend en compte un changement de modèle après son redémarrage.</string>
+
     <string name="models_loading">Chargement du modèle…</string>
     <string name="models_import">Importer un fichier de modèle (.gguf)</string>
     <string name="models_importing">Importation de %1$s…</string>

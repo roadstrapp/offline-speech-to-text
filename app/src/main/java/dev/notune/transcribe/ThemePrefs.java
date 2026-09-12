@@ -29,21 +29,14 @@ public final class ThemePrefs {
 
     public static int getMode(Context context) {
         File file = new File(context.getFilesDir(), FILE_NAME);
-        if (!file.exists()) return AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM;
+        if (!file.exists()) return StoredThemeMode.resolve(null);
         try (FileInputStream in = new FileInputStream(file)) {
             byte[] buf = new byte[8];
             int n = in.read(buf);
-            if (n <= 0) return AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM;
-            int mode = Integer.parseInt(new String(buf, 0, n).trim());
-            if (mode == AppCompatDelegate.MODE_NIGHT_NO
-                    || mode == AppCompatDelegate.MODE_NIGHT_YES
-                    || mode == AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM) {
-                return mode;
-            }
-            return AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM;
-        } catch (IOException | NumberFormatException e) {
+            return StoredThemeMode.resolve(n > 0 ? new String(buf, 0, n) : null);
+        } catch (IOException e) {
             Log.w(TAG, "Failed to read theme mode", e);
-            return AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM;
+            return StoredThemeMode.resolve(null);
         }
     }
 

@@ -20,7 +20,6 @@ import android.content.res.ColorStateList;
 import android.view.ContextThemeWrapper;
 import java.io.File;
 
-import com.google.android.material.color.DynamicColors;
 import com.google.android.material.color.MaterialColors;
 
 public class RustInputMethodService extends InputMethodService {
@@ -100,12 +99,12 @@ public class RustInputMethodService extends InputMethodService {
         try {
             // The IME is a non-AppCompat Service in a separate process, so
             // AppCompat's delegate can't theme it. Build a context that is
-            // night-aware (per the saved preference), wears the Material 3 theme,
-            // and picks up Material You dynamic color — matching the app.
+            // night-aware (per the saved preference) and wears the Material 3
+            // theme. Do not add dynamic color: it can replace the true-black
+            // night surface selected by AppTheme.
             Context night = ThemePrefs.wrapForNight(this, ThemePrefs.getMode(this));
             viewIsNight = ThemePrefs.isNight(night);
-            Context themed = DynamicColors.wrapContextIfAvailable(
-                    new ContextThemeWrapper(night, R.style.AppTheme));
+            Context themed = new ContextThemeWrapper(night, R.style.AppTheme);
             View view = LayoutInflater.from(themed).inflate(R.layout.ime_layout, null);
             inputView = view;
 

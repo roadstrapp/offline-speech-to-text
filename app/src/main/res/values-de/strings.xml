@@ -46,15 +46,15 @@
     <string name="models_title">Sprachmodelle</string>
     <string name="models_section">Sprachmodell</string>
     <string name="models_active_section">Aktives Modell</string>
-    <string name="models_builtin_sub">In der App enthalten · 25 europäische Sprachen</string>
-    <string name="model_desc_parakeet110m">Nur Englisch, klein und schnell</string>
+
+
     <string name="model_desc_sensevoice">Englisch, Chinesisch, Kantonesisch, Japanisch, Koreanisch; schnell</string>
     <string name="model_desc_whisper_small">99 Sprachen, kompakt; übersetzt ins Englische</string>
     <string name="model_desc_nemotron">40 Sprachen inkl. Chinesisch, Japanisch, Koreanisch, Arabisch, Hindi; mit Interpunktion</string>
-    <string name="model_desc_parakeet_v3_q8">Wie das integrierte Modell, höhere Präzision</string>
+
     <string name="model_desc_whisper_turbo">99 Sprachen, am genauesten in dieser Liste; kann nicht übersetzen</string>
     <string name="model_desc_browse">Alle transcribe.cpp-Modelle durchstöbern</string>
-    <string name="models_desc">Das integrierte Modell funktioniert sofort. Du kannst auch jedes heruntergeladene transcribe.cpp-GGUF-Modell importieren. Die App bleibt vollständig offline; Downloads laufen über deinen Browser. Die Sprach-Tastatur übernimmt einen Modellwechsel nach ihrem Neustart.</string>
+
     <string name="models_loading">Modell wird geladen…</string>
     <string name="models_import">Modelldatei importieren (.gguf)</string>
     <string name="models_importing">Importiere %1$s…</string>

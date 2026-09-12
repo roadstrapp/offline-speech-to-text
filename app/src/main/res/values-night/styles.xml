@@ -4,6 +4,12 @@
     <style name="AppTheme" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/colorPrimary</item>
         <item name="colorOnPrimary">@color/white</item>
+        <item name="colorSurface">@color/amoled_black</item>
+        <item name="colorSurfaceContainer">@color/amoled_black</item>
+        <item name="colorSurfaceContainerHigh">@color/amoled_black</item>
+        <item name="colorSurfaceContainerHighest">@color/amoled_black</item>
+        <item name="android:colorBackground">@color/amoled_black</item>
+        <item name="android:windowBackground">@color/amoled_black</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>

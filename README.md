@@ -5,10 +5,10 @@ An offline, privacy-focused speech-to-text tool for Android, built with Rust. Ta
 ## Features
 
 - **Voice input in any app:** Tap the microphone on the keyboard you already use (SwiftKey, etc.) or a website's voice search, and your speech is transcribed straight into the text field. The app registers as your device's speech-to-text provider.
-- **100% offline & private:** The Parakeet TDT model runs entirely on-device — no audio ever leaves your phone, and no network is required.
+- **Offline & private transcription:** The Parakeet TDT model runs entirely on-device — no audio ever leaves your phone. The model is downloaded separately in your browser once, then the app needs no network access.
 - **Live Subtitles:** Real-time captions for any audio/video playing on your device.
 - **Optional voice keyboard:** A built-in keyboard you can switch to for voice input wherever you prefer it.
-- **Supported Languages:** Bulgarian, Croatian, Czech, Danish, Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Slovak, Slovenian, Spanish, Swedish, Russian, Ukrainian.
+- **Default model languages:** The Parakeet TDT 0.6B v3 Q4 default supports 25 European languages, including English and Spanish.
 - **Custom models:** Import any [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) GGUF model (Whisper, Nemotron streaming, Canary, more Parakeet variants, …) from a downloaded file — the app stays fully offline; downloads happen in your browser.
 - **Efficient native backend:** All models run through [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) (ggml), wrapped in a safe Rust core.
 
@@ -69,7 +69,7 @@ This relies on the undocumented `PROJECT_MEDIA` app-op; on some OEM builds it ma
 
 ### Custom speech models
 
-The built-in Parakeet model works out of the box. Under **Manage speech models** you can additionally import any [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) GGUF model: download a `.gguf` file in your browser (the in-app *Where to get models* dialog lists direct links, e.g. a tiny 135 MB English-only Parakeet, the multilingual Nemotron 3.5 streaming model with punctuation, or Whisper large-v3-turbo), then import it via the system file picker and select it. The app itself needs no internet permission — model files are simply copied into the app's private storage. An optional language hint (e.g. `en-US`, or `auto`) can be set for imported models.
+The recommended default is Parakeet TDT 0.6B v3 Q4. To keep the private APK small enough to deliver, the model is not embedded: open **Manage speech models**, use *Where to get models*, download it in your browser, then import it with the system file picker. The app verifies the exact 485,425,504 bytes and SHA-256 `b68557be1e3c40207fd7c4bd9d63f1d3316b963f15325bfb0cc16a8bb0ffd181` before activating it. This model supports 25 European languages, including English and Spanish. You may also import another compatible [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) GGUF model; every successful import becomes active immediately and reloads the engine. The app itself has no internet permission.
 
 ## Prerequisites
 
@@ -130,7 +130,7 @@ export STORE_PASS=yourpassword
 
 ### Model Assets
 
-The built-in Parakeet TDT GGUF model (~485 MB) is automatically downloaded from HuggingFace during the first build via a Gradle task. The checksum is verified with SHA-256. No manual download is needed.
+Private APK builds omit the model by default and offer the exact Parakeet TDT 0.6B v3 Q4 artifact through a pinned browser download. Its size and SHA-256 are verified during import. Developers can opt into a model-bearing build with `-PincludeBundledModel=true`; that build downloads and verifies the same artifact before packaging.
 
 ## Project Structure
 
@@ -153,7 +153,7 @@ The built-in Parakeet TDT GGUF model (~485 MB) is automatically downloaded from 
 
 ## Acknowledgments
 
-- **Speech Model:** [Parakeet TDT 0.6b v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) by NVIDIA.
+- **Speech Model:** [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) by NVIDIA and Suno.
     - GGUF conversion by [handy-computer](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf).
     - Licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 - **Inference Backend:** [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) by CJ Pais / Handy Computer.
