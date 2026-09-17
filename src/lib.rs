@@ -1,7 +1,9 @@
 pub mod assets;
 pub mod audio;
 pub mod engine;
+pub mod foreground_recording;
 pub mod ime;
+pub mod long_audio_chunking;
 pub mod main_activity;
 pub mod models;
 pub mod recog_service;

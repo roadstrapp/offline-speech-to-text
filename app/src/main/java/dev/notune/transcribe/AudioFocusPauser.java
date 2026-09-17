@@ -9,24 +9,33 @@ public class AudioFocusPauser {
     private AudioFocusRequest focusRequest = null;
     private AudioManager.OnAudioFocusChangeListener listener = focusChange -> { };
 
-    public void request(Context ctx) {
+    public boolean request(Context ctx) {
+        return request(ctx, focusChange -> { });
+    }
+
+    public boolean request(Context ctx, AudioManager.OnAudioFocusChangeListener focusListener) {
         try {
             AudioManager am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
-            if (am == null) return;
+            if (am == null) return false;
 
             // always release first
             abandon(ctx);
+            listener = focusListener;
 
+            final int result;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 focusRequest = new AudioFocusRequest.Builder(
                         AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE
-                ).build();
-                am.requestAudioFocus(focusRequest);
+                ).setOnAudioFocusChangeListener(listener).build();
+                result = am.requestAudioFocus(focusRequest);
             } else {
                 // Pre-O: best effort
-                am.requestAudioFocus(listener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
+                result = am.requestAudioFocus(listener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
             }
-        } catch (Exception ignored) { }
+            return result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     public void abandon(Context ctx) {

@@ -29,7 +29,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_MainActivity_initNative
     activity: JObject,
 ) {
     android_logger::init_once(
-        android_logger::Config::default().with_max_level(log::LevelFilter::Info),
+        android_logger::Config::default().with_max_level(log::LevelFilter::Off),
     );
 
     let vm = env.get_java_vm().expect("Failed to get JavaVM");
@@ -48,7 +48,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_MainActivity_initNative
 /// in progress) is waited for but not counted into the measured time.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_notune_transcribe_MainActivity_benchmarkNative(
-    mut env: JNIEnv,
+    env: JNIEnv,
     _class: JClass,
     activity: JObject,
     samples: jni::objects::JFloatArray,
@@ -99,12 +99,11 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_MainActivity_benchmarkN
         let compute_secs = started.elapsed().as_secs_f32();
 
         match result {
-            Ok(text) => {
+            Ok(_text) => {
                 log::info!(
-                    "benchmark: {:.1}s audio in {:.2}s -> {:?}",
+                    "benchmark: {:.1}s audio in {:.2}s",
                     audio_secs,
-                    compute_secs,
-                    text
+                    compute_secs
                 );
                 deliver_benchmark_result(
                     &mut env,

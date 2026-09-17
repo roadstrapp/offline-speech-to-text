@@ -62,21 +62,21 @@
     <string name="models_import_failed">Falha na importação: não foi possível copiar o arquivo.</string>
     <string name="models_import_no_space">Armazenamento livre insuficiente para importar este modelo.</string>
     <string name="models_import_bad_title">Não é um modelo GGUF</string>
-    <string name="models_import_bad_body">Selecione um arquivo de modelo .gguf para o transcribe.cpp. Toque em «Onde obter modelos» para os links de download.</string>
-    <string name="models_links">Onde obter modelos</string>
-    <string name="models_links_title">Downloads de modelos (abrir no navegador)</string>
+    <string name="models_import_bad_body">Selecione um arquivo de modelo .gguf para o transcribe.cpp. Use «Explorar sites de modelos» apenas para um download manual.</string>
+    <string name="models_links">Explorar sites de modelos</string>
+    <string name="models_links_title">Sites de modelos</string>
     <string name="models_no_browser">Nenhum navegador encontrado para abrir o link.</string>
     <string name="models_delete">Excluir modelo</string>
     <string name="models_delete_confirm">Excluir %1$s do armazenamento do app?</string>
     <string name="models_language_section">Idioma</string>
-    <string name="models_language_desc">O idioma passado ao modelo. «Automático» deixa o modelo decidir. Se a fala for transcrita no idioma ou alfabeto errado, escolha seu idioma explicitamente. Idiomas não suportados pelo modelo ativo são ignorados.</string>
+    <string name="models_language_desc">Use «Automático», salvo se o idioma ou alfabeto estiver errado; opções incompatíveis são ignoradas.</string>
     <string name="models_language_auto">Automático</string>
     <string name="models_language_saved">Idioma salvo</string>
     <string name="models_translate">Traduzir para inglês</string>
     <string name="models_translate_desc">Para modelos compatíveis (p. ex. Whisper): a fala em qualquer idioma vira texto em inglês, inclusive nas legendas ao vivo. Os demais modelos ignoram.</string>
     <string name="btn_models">Gerenciar modelos de voz</string>
     <string name="models_threads_section">Threads da CPU</string>
-    <string name="models_threads_desc">Threads usadas na transcrição. “Automático” escolhe um valor conforme a CPU deste aparelho. Se a transcrição estiver lenta, teste outros valores; mais threads nem sempre é mais rápido.</string>
+    <string name="models_threads_desc">Recomenda-se «Automático». Teste outro valor apenas se a transcrição estiver lenta.</string>
     <string name="models_threads_auto">Automático</string>
 
     <string name="section_benchmark">Teste de desempenho</string>
@@ -93,7 +93,6 @@
 
     <string name="section_voice">Entrada de voz</string>
     <string name="voice_status_ready">Pronto. Em qualquer app, toque no microfone de um teclado compatível e sua fala é digitada no campo de texto.</string>
-    <string name="voice_status_need_mic">É necessário acesso ao microfone para a entrada de voz.</string>
     <string name="voice_status_almost">Quase lá. Ao tocar no microfone do seu teclado, escolha «Offline Speech to Text» e depois «Sempre». Toque em «Testar entrada de voz» abaixo para configurar agora.</string>
     <string name="btn_voice_try">Testar entrada de voz</string>
     <string name="btn_voice_grant">Conceder acesso ao microfone</string>

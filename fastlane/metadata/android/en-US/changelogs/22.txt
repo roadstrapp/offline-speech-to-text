@@ -1,0 +1,4 @@
+- Adds clear microphone and voice-keyboard setup states with recovery actions
+- Reorganizes the home screen around Setup, Models, Subtitles, History, Appearance, and Privacy
+- Shows active model size, language scope, provenance, readiness, and a retry action
+- Adds safe versioned settings migration without deleting models or user data

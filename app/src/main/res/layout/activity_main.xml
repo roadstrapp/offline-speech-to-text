@@ -29,26 +29,18 @@
         android:paddingBottom="16dp">
 
         <LinearLayout
+            android:id="@+id/home_content"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical">
 
-            <!-- Tagline -->
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/welcome_subtitle"
-                android:textAppearance="?attr/textAppearanceBodyLarge"
-                android:textColor="?attr/colorOnSurfaceVariant"
-                android:layout_marginTop="8dp"
-                android:layout_marginBottom="16dp"/>
-
             <!-- 1. Speech model card -->
             <com.google.android.material.card.MaterialCardView
+                android:id="@+id/card_models"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                app:contentPadding="16dp">
+                android:layout_marginBottom="8dp"
+                app:contentPadding="12dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -66,7 +58,7 @@
                             android:layout_width="24dp"
                             android:layout_height="24dp"
                             android:src="@drawable/ic_model"
-                            android:contentDescription="@string/models_section"
+                            android:importantForAccessibility="no"
                             app:tint="?attr/colorPrimary"
                             android:layout_marginEnd="12dp"/>
 
@@ -74,18 +66,11 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
+                            android:id="@+id/heading_models"
                             android:text="@string/models_section"
-                            android:textAppearance="?attr/textAppearanceTitleLarge"/>
+                            android:accessibilityHeading="true"
+                            android:textAppearance="?attr/textAppearanceTitleMedium"/>
                     </LinearLayout>
-
-                    <TextView
-                        android:id="@+id/text_models_desc"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="@string/models_desc"
-                        android:textAppearance="?attr/textAppearanceBodyMedium"
-                        android:textColor="?attr/colorOnSurfaceVariant"
-                        android:layout_marginBottom="8dp"/>
 
                     <!-- Native engine warm-up state, updated from Rust. -->
                     <TextView
@@ -95,7 +80,7 @@
                         android:text="@string/status_checking"
                         android:textAppearance="?attr/textAppearanceBodySmall"
                         android:textColor="?attr/colorOnSurfaceVariant"
-                        android:layout_marginBottom="16dp"/>
+                        android:layout_marginBottom="8dp"/>
 
                     <Button
                         android:id="@+id/btn_models"
@@ -109,10 +94,11 @@
                  search fire RECOGNIZE_SPEECH, which RecognizeActivity handles). The
                  status text/icon and button visibility are set in MainActivity. -->
             <com.google.android.material.card.MaterialCardView
+                android:id="@+id/card_setup"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                app:contentPadding="16dp">
+                android:layout_marginBottom="8dp"
+                app:contentPadding="12dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -130,7 +116,7 @@
                             android:layout_width="24dp"
                             android:layout_height="24dp"
                             android:src="@drawable/ic_mic"
-                            android:contentDescription="@string/section_voice"
+                            android:importantForAccessibility="no"
                             app:tint="?attr/colorPrimary"
                             android:layout_marginEnd="12dp"/>
 
@@ -138,17 +124,26 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
-                            android:text="@string/section_voice"
-                            android:textAppearance="?attr/textAppearanceTitleLarge"/>
+                            android:id="@+id/heading_setup"
+                            android:text="@string/section_setup"
+                            android:accessibilityHeading="true"
+                            android:textAppearance="?attr/textAppearanceTitleMedium"/>
 
                         <ImageView
                             android:id="@+id/img_voice_status"
                             android:layout_width="28dp"
                             android:layout_height="28dp"
                             android:src="@drawable/ic_check_circle"
-                            android:contentDescription="@string/section_voice"
+                            android:importantForAccessibility="no"
                             app:tint="@color/status_ok"/>
                     </LinearLayout>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/section_voice"
+                        android:textAppearance="?attr/textAppearanceTitleMedium"
+                        android:layout_marginBottom="4dp"/>
 
                     <TextView
                         android:id="@+id/text_voice_status"
@@ -157,7 +152,7 @@
                         android:text="@string/voice_status_ready"
                         android:textAppearance="?attr/textAppearanceBodyMedium"
                         android:textColor="?attr/colorOnSurfaceVariant"
-                        android:layout_marginBottom="16dp"/>
+                        android:layout_marginBottom="8dp"/>
 
                     <!-- Shown only when RECORD_AUDIO is missing. -->
                     <Button
@@ -168,12 +163,29 @@
                         android:visibility="gone"
                         android:layout_marginBottom="8dp"/>
 
-                    <!-- One-tap self-test: fires the real RECOGNIZE_SPEECH intent. -->
-                    <Button
-                        android:id="@+id/btn_voice_try"
+                    <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="@string/btn_voice_try"/>
+                        android:orientation="horizontal"
+                        android:baselineAligned="false">
+
+                        <!-- One-tap self-test: fires the real RECOGNIZE_SPEECH intent. -->
+                        <Button
+                            android:id="@+id/btn_voice_try"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:layout_marginEnd="4dp"
+                            android:text="@string/btn_voice_try" />
+
+                        <Button
+                            android:id="@+id/btn_foreground_record"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:layout_marginStart="4dp"
+                            android:text="@string/btn_foreground_record" />
+                    </LinearLayout>
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btn_voice_help"
@@ -181,6 +193,36 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:text="@string/btn_voice_help"/>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/section_ime"
+                        android:textAppearance="?attr/textAppearanceTitleMedium"
+                        android:layout_marginTop="12dp"
+                        android:layout_marginBottom="4dp"/>
+
+                    <TextView
+                        android:id="@+id/text_ime_status"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/ime_status_disabled"
+                        android:textAppearance="?attr/textAppearanceBodyMedium"
+                        android:textColor="?attr/colorOnSurfaceVariant"
+                        android:layout_marginBottom="8dp"/>
+
+                    <Button
+                        android:id="@+id/btn_ime_picker"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/btn_ime_enable"/>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_ime_settings"
+                        style="@style/Widget.Material3.Button.TextButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/btn_ime_settings"/>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
@@ -188,8 +230,8 @@
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                app:contentPadding="16dp">
+                android:layout_marginBottom="8dp"
+                app:contentPadding="12dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -207,7 +249,7 @@
                             android:layout_width="24dp"
                             android:layout_height="24dp"
                             android:src="@drawable/ic_subtitles"
-                            android:contentDescription="@string/section_subs"
+                            android:importantForAccessibility="no"
                             app:tint="?attr/colorPrimary"
                             android:layout_marginEnd="12dp"/>
 
@@ -215,17 +257,11 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
+                            android:id="@+id/heading_subtitles"
                             android:text="@string/section_subs"
-                            android:textAppearance="?attr/textAppearanceTitleLarge"/>
+                            android:accessibilityHeading="true"
+                            android:textAppearance="?attr/textAppearanceTitleMedium"/>
                     </LinearLayout>
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="@string/desc_subs"
-                        android:textAppearance="?attr/textAppearanceBodyMedium"
-                        android:textColor="?attr/colorOnSurfaceVariant"
-                        android:layout_marginBottom="16dp"/>
 
                     <Button
                         android:id="@+id/btn_subs_start"
@@ -242,12 +278,27 @@
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_more_settings"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:text="@string/home_more_settings" />
+
+            <LinearLayout
+                android:id="@+id/advanced_home_sections"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
             <!-- 4. Appearance Card -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                app:contentPadding="16dp">
+                android:layout_marginBottom="8dp"
+                app:contentPadding="12dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -265,7 +316,7 @@
                             android:layout_width="24dp"
                             android:layout_height="24dp"
                             android:src="@drawable/ic_palette"
-                            android:contentDescription="@string/section_appearance"
+                            android:importantForAccessibility="no"
                             app:tint="?attr/colorPrimary"
                             android:layout_marginEnd="12dp"/>
 
@@ -273,8 +324,10 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
+                            android:id="@+id/heading_appearance"
                             android:text="@string/section_appearance"
-                            android:textAppearance="?attr/textAppearanceTitleLarge"/>
+                            android:accessibilityHeading="true"
+                            android:textAppearance="?attr/textAppearanceTitleMedium"/>
                     </LinearLayout>
 
                     <RadioGroup
@@ -310,65 +363,12 @@
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
-            <!-- 5. Dedicated Voice keyboard (IME): an optional way to use voice
-                 input, kept above the settings so it stays easy to find. -->
-            <com.google.android.material.card.MaterialCardView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                app:contentPadding="16dp">
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical">
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical"
-                        android:layout_marginBottom="8dp">
-
-                        <ImageView
-                            android:layout_width="24dp"
-                            android:layout_height="24dp"
-                            android:src="@drawable/ic_keyboard_switch"
-                            android:contentDescription="@string/section_ime"
-                            app:tint="?attr/colorPrimary"
-                            android:layout_marginEnd="12dp"/>
-
-                        <TextView
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="@string/section_ime"
-                            android:textAppearance="?attr/textAppearanceTitleLarge"/>
-                    </LinearLayout>
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="@string/desc_ime"
-                        android:textAppearance="?attr/textAppearanceBodyMedium"
-                        android:textColor="?attr/colorOnSurfaceVariant"
-                        android:layout_marginBottom="16dp"/>
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btn_ime_settings"
-                        style="@style/Widget.Material3.Button.OutlinedButton"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="@string/btn_ime_settings"/>
-                </LinearLayout>
-            </com.google.android.material.card.MaterialCardView>
-
             <!-- 6. Settings Card -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                app:contentPadding="16dp">
+                android:layout_marginBottom="8dp"
+                app:contentPadding="12dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -386,7 +386,7 @@
                             android:layout_width="24dp"
                             android:layout_height="24dp"
                             android:src="@drawable/ic_settings"
-                            android:contentDescription="@string/section_settings"
+                            android:importantForAccessibility="no"
                             app:tint="?attr/colorPrimary"
                             android:layout_marginEnd="12dp"/>
 
@@ -394,8 +394,10 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
+                            android:id="@+id/heading_settings"
                             android:text="@string/section_settings"
-                            android:textAppearance="?attr/textAppearanceTitleLarge"/>
+                            android:accessibilityHeading="true"
+                            android:textAppearance="?attr/textAppearanceTitleMedium"/>
                     </LinearLayout>
 
                     <!-- Auto-start recording -->
@@ -419,13 +421,6 @@
                                 android:text="@string/setting_auto_record"
                                 android:textAppearance="?attr/textAppearanceBodyLarge"/>
 
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="@string/setting_auto_record_desc"
-                                android:textAppearance="?attr/textAppearanceBodySmall"
-                                android:textColor="?attr/colorOnSurfaceVariant"
-                                android:layout_marginTop="2dp"/>
                         </LinearLayout>
 
                         <com.google.android.material.materialswitch.MaterialSwitch
@@ -455,13 +450,6 @@
                                 android:text="@string/setting_pause_audio"
                                 android:textAppearance="?attr/textAppearanceBodyLarge"/>
 
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="@string/setting_pause_audio_desc"
-                                android:textAppearance="?attr/textAppearanceBodySmall"
-                                android:textColor="?attr/colorOnSurfaceVariant"
-                                android:layout_marginTop="2dp"/>
                         </LinearLayout>
 
                         <com.google.android.material.materialswitch.MaterialSwitch
@@ -491,13 +479,6 @@
                                 android:text="@string/setting_select_transcription"
                                 android:textAppearance="?attr/textAppearanceBodyLarge"/>
 
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="@string/setting_select_transcription_desc"
-                                android:textAppearance="?attr/textAppearanceBodySmall"
-                                android:textColor="?attr/colorOnSurfaceVariant"
-                                android:layout_marginTop="2dp"/>
                         </LinearLayout>
 
                         <com.google.android.material.materialswitch.MaterialSwitch
@@ -527,13 +508,6 @@
                                 android:text="@string/setting_record_background"
                                 android:textAppearance="?attr/textAppearanceBodyLarge"/>
 
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="@string/setting_record_background_desc"
-                                android:textAppearance="?attr/textAppearanceBodySmall"
-                                android:textColor="?attr/colorOnSurfaceVariant"
-                                android:layout_marginTop="2dp"/>
                         </LinearLayout>
 
                         <com.google.android.material.materialswitch.MaterialSwitch
@@ -563,19 +537,41 @@
                                 android:text="@string/setting_auto_stop"
                                 android:textAppearance="?attr/textAppearanceBodyLarge"/>
 
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="@string/setting_auto_stop_desc"
-                                android:textAppearance="?attr/textAppearanceBodySmall"
-                                android:textColor="?attr/colorOnSurfaceVariant"
-                                android:layout_marginTop="2dp"/>
                         </LinearLayout>
 
                         <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/switch_auto_stop"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"/>
+                    </LinearLayout>
+
+                    <!-- Voice-input panel position -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:layout_marginTop="16dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/setting_recognize_panel_position"
+                            android:textAppearance="?attr/textAppearanceBodyLarge" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="@string/setting_recognize_panel_position_desc"
+                            android:textAppearance="?attr/textAppearanceBodySmall"
+                            android:textColor="?attr/colorOnSurfaceVariant" />
+
+                        <Spinner
+                            android:id="@+id/spinner_recognize_panel_position"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:minHeight="48dp" />
                     </LinearLayout>
 
                     <!-- Subtitle line count -->
@@ -590,14 +586,6 @@
                             android:layout_height="wrap_content"
                             android:text="@string/setting_subtitle_lines"
                             android:textAppearance="?attr/textAppearanceBodyLarge"/>
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="@string/setting_subtitle_lines_desc"
-                            android:textAppearance="?attr/textAppearanceBodySmall"
-                            android:textColor="?attr/colorOnSurfaceVariant"
-                            android:layout_marginTop="2dp"/>
 
                         <RadioGroup
                             android:id="@+id/rg_subtitle_lines"
@@ -635,8 +623,8 @@
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                app:contentPadding="16dp">
+                android:layout_marginBottom="8dp"
+                app:contentPadding="12dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -654,7 +642,7 @@
                             android:layout_width="24dp"
                             android:layout_height="24dp"
                             android:src="@drawable/ic_mic"
-                            android:contentDescription="@string/section_benchmark"
+                            android:importantForAccessibility="no"
                             app:tint="?attr/colorPrimary"
                             android:layout_marginEnd="12dp"/>
 
@@ -662,17 +650,11 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
+                            android:id="@+id/heading_benchmark"
                             android:text="@string/section_benchmark"
-                            android:textAppearance="?attr/textAppearanceTitleLarge"/>
+                            android:accessibilityHeading="true"
+                            android:textAppearance="?attr/textAppearanceTitleMedium"/>
                     </LinearLayout>
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="@string/desc_benchmark"
-                        android:textAppearance="?attr/textAppearanceBodyMedium"
-                        android:textColor="?attr/colorOnSurfaceVariant"
-                        android:layout_marginBottom="16dp"/>
 
                     <TextView
                         android:id="@+id/text_bench_result"
@@ -690,6 +672,120 @@
                         android:text="@string/btn_benchmark"/>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
+
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                app:contentPadding="12dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:id="@+id/heading_privacy"
+                        android:text="@string/section_privacy_about"
+                        android:accessibilityHeading="true"
+                        android:textAppearance="?attr/textAppearanceTitleMedium"
+                        android:layout_marginBottom="8dp"/>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/privacy_about_body"
+                        android:textAppearance="?attr/textAppearanceBodyMedium"
+                        android:textColor="?attr/colorOnSurfaceVariant"
+                        android:layout_marginBottom="8dp"/>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:layout_marginTop="12dp">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:layout_marginEnd="16dp">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="@string/setting_diagnostic_logging"
+                                android:textAppearance="?attr/textAppearanceBodyLarge"/>
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="@string/setting_diagnostic_logging_desc"
+                                android:textAppearance="?attr/textAppearanceBodySmall"
+                                android:textColor="?attr/colorOnSurfaceVariant"
+                                android:layout_marginTop="2dp"/>
+                        </LinearLayout>
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/switch_diagnostic_logging"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"/>
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/diagnostic_log_clear_desc"
+                        android:textAppearance="?attr/textAppearanceBodySmall"
+                        android:textColor="?attr/colorOnSurfaceVariant"
+                        android:layout_marginTop="12dp"/>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_clear_diagnostic_log"
+                        style="@style/Widget.Material3.Button.OutlinedButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/diagnostic_log_clear"
+                        android:layout_marginBottom="8dp"/>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:baselineAligned="false"
+                        android:layout_marginBottom="8dp">
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btn_source"
+                            style="@style/Widget.Material3.Button.TextButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/source_link"/>
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btn_license"
+                            style="@style/Widget.Material3.Button.TextButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/license_link"/>
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/text_version"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textAppearance="?attr/textAppearanceBodySmall"
+                        android:textColor="?attr/colorOnSurfaceVariant"/>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            </LinearLayout>
 
         </LinearLayout>
     </ScrollView>

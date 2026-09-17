@@ -40,8 +40,7 @@ public class VoiceRecognitionService extends RecognitionService {
 
     static {
         try {
-            System.loadLibrary("c++_shared");
-            System.loadLibrary("android_transcribe_app");
+            NativeLibraries.load();
         } catch (UnsatisfiedLinkError e) {
             Log.e(TAG, "Failed to load native libraries", e);
         }
@@ -258,7 +257,17 @@ public class VoiceRecognitionService extends RecognitionService {
 
     /** Invoked by the shared engine loader during model warm-up; UI-less here. */
     public void onStatusUpdate(String status) {
-        Log.d(TAG, "engine: " + status);
+        DiagnosticLog.event(getFilesDir(), "service_state", "state=" + diagnosticState(status));
+    }
+
+    private static String diagnosticState(String status) {
+        if (status == null) return "unknown";
+        if (status.startsWith("Error")) return "error";
+        if (status.contains("Loading") || status.contains("Initializing")) return "loading";
+        if (status.contains("Transcribing") || status.contains("Processing")) return "processing";
+        if (status.contains("Waiting")) return "idle";
+        if (status.equals("Ready")) return "ready";
+        return "unknown";
     }
 
     private void safeError(int errorCode) {

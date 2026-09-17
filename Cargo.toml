@@ -6,6 +6,11 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib"]
 
+[profile.release]
+# Imported GGUF files are untrusted input. Keep panic containment active at
+# the native model-loader boundary instead of aborting the app process.
+panic = "unwind"
+
 [dependencies]
 cpal = "0.15"
 log = "0.4"

@@ -62,21 +62,21 @@
     <string name="models_import_failed">Сбой импорта: не удалось скопировать файл.</string>
     <string name="models_import_no_space">Недостаточно свободной памяти для импорта этой модели.</string>
     <string name="models_import_bad_title">Это не модель GGUF</string>
-    <string name="models_import_bad_body">Выберите файл модели .gguf для transcribe.cpp. Нажмите «Где взять модели» для ссылок на скачивание.</string>
-    <string name="models_links">Где взять модели</string>
-    <string name="models_links_title">Загрузки моделей (открыть в браузере)</string>
+    <string name="models_import_bad_body">Выберите файл модели .gguf для transcribe.cpp. Используйте «Просмотреть сайты моделей» только для ручной загрузки.</string>
+    <string name="models_links">Просмотреть сайты моделей</string>
+    <string name="models_links_title">Сайты моделей</string>
     <string name="models_no_browser">Не найден браузер для открытия ссылки.</string>
     <string name="models_delete">Удалить модель</string>
     <string name="models_delete_confirm">Удалить %1$s из хранилища приложения?</string>
     <string name="models_language_section">Язык</string>
-    <string name="models_language_desc">Язык, передаваемый модели. «Автоматически» позволяет модели решать сама. Если речь распознаётся не на том языке или не в том алфавите, выберите язык явно. Языки, не поддерживаемые активной моделью, игнорируются.</string>
+    <string name="models_language_desc">Оставьте «Автоматически»; при ошибке выберите язык вручную. Неподдерживаемые варианты игнорируются.</string>
     <string name="models_language_auto">Автоматически</string>
     <string name="models_language_saved">Язык сохранён</string>
     <string name="models_translate">Переводить на английский</string>
     <string name="models_translate_desc">Для моделей с поддержкой перевода (например, Whisper): речь на любом языке становится английским текстом, в том числе в субтитрах. Остальные модели игнорируют эту настройку.</string>
     <string name="btn_models">Управление речевыми моделями</string>
     <string name="models_threads_section">Потоки ЦП</string>
-    <string name="models_threads_desc">Потоки, используемые для распознавания. «Автоматически» подбирает значение под процессор этого устройства. Если распознавание медленное, попробуйте другие значения; больше потоков не всегда быстрее.</string>
+    <string name="models_threads_desc">Рекомендуется «Автоматически». Меняйте значение, только если распознавание идёт медленно.</string>
     <string name="models_threads_auto">Автоматически</string>
 
     <string name="section_benchmark">Тест скорости</string>
@@ -93,7 +93,6 @@
 
     <string name="section_voice">Голосовой ввод</string>
     <string name="voice_status_ready">Готово. В любом приложении нажмите микрофон на поддерживаемой клавиатуре, и ваша речь будет введена в текстовое поле.</string>
-    <string name="voice_status_need_mic">Для голосового ввода нужен доступ к микрофону.</string>
     <string name="voice_status_almost">Почти готово. Когда вы нажмёте микрофон на клавиатуре, выберите «Offline Speech to Text», затем «Всегда». Нажмите «Проверить голосовой ввод» ниже, чтобы настроить это сейчас.</string>
     <string name="btn_voice_try">Проверить голосовой ввод</string>
     <string name="btn_voice_grant">Предоставить доступ к микрофону</string>

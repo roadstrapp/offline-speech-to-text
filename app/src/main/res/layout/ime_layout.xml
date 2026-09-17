@@ -73,6 +73,97 @@
             android:textAppearance="?attr/textAppearanceBodySmall"/>
     </FrameLayout>
 
+    <!-- Recording replaces the microphone target with a reachable 2x2 action
+         grid: pause/cancel in the left column and insert/insert+switch in the right. -->
+    <LinearLayout
+        android:id="@+id/ime_recording_actions"
+        android:layout_width="match_parent"
+        android:layout_height="200dp"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:paddingStart="4dp"
+        android:paddingEnd="4dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="horizontal"
+            android:paddingBottom="4dp">
+
+            <ImageButton
+                android:id="@+id/ime_pause_resume"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:layout_marginEnd="4dp"
+                android:minHeight="72dp"
+                android:minWidth="72dp"
+                android:background="@drawable/bg_ime_key"
+                android:contentDescription="@string/ime_pause_recording"
+                android:padding="22dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_pause"
+                android:tint="?attr/colorOnSurfaceVariant" />
+
+            <ImageButton
+                android:id="@+id/ime_transcribe_keep"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:minHeight="72dp"
+                android:minWidth="72dp"
+                android:background="@drawable/bg_ime_key"
+                android:contentDescription="@string/ime_transcribe_keep"
+                android:padding="22dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_paste"
+                android:tint="?attr/colorOnSurfaceVariant" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="horizontal"
+            android:paddingTop="4dp">
+
+            <ImageButton
+                android:id="@+id/ime_cancel_recording"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:layout_marginEnd="4dp"
+                android:minHeight="72dp"
+                android:minWidth="72dp"
+                android:background="@drawable/bg_ime_key"
+                android:contentDescription="@string/ime_cancel_recording"
+                android:padding="22dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_close"
+                android:tint="?attr/colorOnSurfaceVariant" />
+
+            <ImageButton
+                android:id="@+id/ime_transcribe_switch"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:minHeight="72dp"
+                android:minWidth="72dp"
+                android:background="@drawable/bg_ime_key"
+                android:contentDescription="@string/ime_transcribe_switch"
+                android:padding="22dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_keyboard_switch"
+                android:tint="?attr/colorOnSurfaceVariant" />
+        </LinearLayout>
+    </LinearLayout>
+
     <!-- Bottom key row -->
     <LinearLayout
         android:layout_width="match_parent"
@@ -80,19 +171,6 @@
         android:orientation="horizontal"
         android:baselineAligned="false"
         android:paddingTop="8dp">
-
-        <ImageView
-            android:id="@+id/ime_switch_keyboard"
-            android:layout_width="52dp"
-            android:layout_height="44dp"
-            android:src="@drawable/ic_keyboard_switch"
-            android:scaleType="centerInside"
-            android:background="@drawable/bg_ime_key"
-            android:tint="?attr/colorOnSurfaceVariant"
-            android:clickable="true"
-            android:focusable="true"
-            android:layout_marginEnd="8dp"
-            android:contentDescription="Switch keyboard"/>
 
         <ImageView
             android:id="@+id/ime_space"
@@ -131,7 +209,20 @@
             android:tint="?attr/colorOnSurfaceVariant"
             android:clickable="true"
             android:focusable="true"
+            android:layout_marginEnd="8dp"
             android:contentDescription="Backspace"/>
+
+        <ImageView
+            android:id="@+id/ime_switch_keyboard"
+            android:layout_width="64dp"
+            android:layout_height="44dp"
+            android:src="@drawable/ic_keyboard_switch"
+            android:scaleType="centerInside"
+            android:background="@drawable/bg_ime_key"
+            android:tint="?attr/colorOnSurfaceVariant"
+            android:clickable="true"
+            android:focusable="true"
+            android:contentDescription="@string/ime_switch_keyboard"/>
     </LinearLayout>
 
 </LinearLayout>

@@ -1,12 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Offline Speech to Text</string>
-    <string name="welcome_title">Voice Input &amp; Subtitles</string>
-    <string name="welcome_subtitle">Fully offline, private, and fast.</string>
+    <string name="welcome_title">Voice input</string>
+    <string name="welcome_subtitle">Private, on-device transcription</string>
+
+    <string name="section_setup">Setup</string>
     
-    <string name="section_ime">Alternative: Voice keyboard</string>
-    <string name="desc_ime">Prefer a dedicated keyboard? Enable the Offline Speech to Text keyboard, then switch to it from your keyboard switcher when you want voice input as its own keyboard.</string>
+    <string name="section_ime">Voice keyboard</string>
+    <string name="desc_ime">Optional: enable the dedicated voice keyboard, then select it from Android\'s keyboard picker.</string>
     <string name="btn_ime_settings">Open Keyboard Settings</string>
+    <string name="ime_status_disabled">Disabled. Enable it in Android settings.</string>
+    <string name="ime_status_enabled">Enabled. Choose it from the keyboard picker.</string>
+    <string name="ime_status_selected">Enabled and selected.</string>
+    <string name="btn_ime_enable">Enable voice keyboard</string>
+    <string name="btn_ime_choose">Choose voice keyboard</string>
+    <string name="btn_ime_switch">Switch keyboard</string>
     
     <string name="section_subs">Live Subtitles</string>
     <string name="desc_subs">Display subtitles for any audio playing on your device. After starting, select \'Share entire screen\' for best results.</string>
@@ -23,6 +31,8 @@
     <string name="status_error">Error</string>
     
     <string name="section_settings">Settings</string>
+    <string name="home_more_settings">Settings, benchmark &amp; privacy</string>
+    <string name="home_less_settings">Hide settings</string>
     <string name="setting_auto_record">Auto-start recording</string>
     <string name="setting_auto_record_desc">Automatically begin recording when the keyboard opens</string>
 
@@ -38,11 +48,34 @@
     <string name="setting_auto_stop">Auto-stop after silence</string>
     <string name="setting_auto_stop_desc">End the voice input popup automatically ~2 seconds after you stop speaking</string>
 
+    <string name="setting_recognize_panel_position">Voice panel position</string>
+    <string name="setting_recognize_panel_position_desc">Bottom is roomier. A side uses less of the current app and is easier to reach one-handed.</string>
+    <string-array name="recognize_panel_positions">
+        <item>Bottom</item>
+        <item>Right side</item>
+        <item>Left side</item>
+    </string-array>
+    <string name="recognize_listening_short">Listening… Tap outside to stop</string>
+    <string name="recognize_cancel">Cancel recording</string>
+
+    <string name="ime_pause_recording">Pause recording</string>
+    <string name="ime_resume_recording">Resume recording</string>
+    <string name="ime_cancel_recording">Cancel recording</string>
+    <string name="ime_transcribe_keep">Transcribe and insert · keep voice keyboard</string>
+    <string name="ime_transcribe_switch">Transcribe and insert · switch keyboard</string>
+    <string name="ime_switch_keyboard">Switch keyboard</string>
+    <string name="ime_sensitive_field">Voice recording is unavailable in password fields</string>
+    <string name="ime_recording_discarded">Recording discarded</string>
+    <string name="ime_editor_changed">Original text field changed · transcription not inserted</string>
+
     <string name="setting_subtitle_lines">Subtitle length</string>
     <string name="setting_subtitle_lines_desc">How many lines the live subtitles show; older text scrolls away</string>
     <string name="subtitle_lines_2">2 lines</string>
     <string name="subtitle_lines_4">4 lines</string>
     <string name="subtitle_lines_all">All</string>
+
+    <string name="section_history">History</string>
+    <string name="history_not_stored">No transcription history is stored by this release. Speech results remain only in the app where you insert them or in the clipboard when you explicitly copy them.</string>
 
     <string name="recognition_service_label">Offline Speech to Text</string>
 
@@ -50,8 +83,16 @@
     <string name="models_title">Speech models</string>
     <string name="models_section">Speech model</string>
     <string name="models_active_section">Active model</string>
-    <string name="models_desc">The included default Parakeet TDT 0.6B v3 Q4 model supports 25 European languages. You can also import another transcribe.cpp GGUF model. The app stays fully offline; downloads happen in your browser. The voice keyboard picks up a model change after it restarts.</string>
-    <string name="models_desc_import_required">Download the default Parakeet TDT 0.6B v3 Q4 model from “Where to get models,” then import it. It supports 25 European languages, and its exact size and SHA-256 are verified before activation. The app stays fully offline; downloads happen in your browser.</string>
+    <string name="models_active_none">No model is active. Import a model to enable offline speech.</string>
+    <string name="models_active_summary">%1$s · %2$s · %3$s · %4$s · %5$s</string>
+    <string name="models_provenance_bundled">Included</string>
+    <string name="models_provenance_imported">Private import</string>
+    <string name="models_provenance_verified">Verified download</string>
+    <string name="models_language_parakeet">25 European languages</string>
+    <string name="models_language_unknown">Language support unlisted</string>
+    <string name="models_integrity_verified">Verified</string>
+    <string name="models_integrity_loaded">Readiness below</string>
+    <string name="models_retry">Retry model load</string>
     <string name="models_builtin">Parakeet TDT 0.6B v3 Q4</string>
     <string name="models_builtin_sub">Included in app · 25 European languages</string>
     <string name="models_loading">Loading model…</string>
@@ -62,29 +103,90 @@
     <string name="models_import_default_mismatch">Import rejected: the default model did not match its pinned size and SHA-256.</string>
     <string name="models_import_no_space">Not enough free storage to import this model.</string>
     <string name="models_import_bad_title">Not a GGUF model</string>
-    <string name="models_import_bad_body">Please select a .gguf model file for transcribe.cpp. Tap “Where to get models” for download links.</string>
-    <string name="models_links">Where to get models</string>
-    <string name="models_links_title">Model downloads (open in browser)</string>
+    <string name="models_import_bad_body">Please select a .gguf model file for transcribe.cpp. Use “Browse model websites” only when you want a manual download.</string>
+    <string name="models_links">Browse model websites</string>
+    <string name="models_links_title">Model websites</string>
     <string name="model_desc_parakeet_default">Recommended default; 25 European languages; exact file verified on import</string>
     <string name="model_desc_sensevoice">English, Chinese, Cantonese, Japanese, Korean; fast</string>
     <string name="model_desc_whisper_small">99 languages, compact; translates to English</string>
     <string name="model_desc_nemotron">40 languages incl. Chinese, Japanese, Korean, Arabic, Hindi; with punctuation</string>
     <string name="model_desc_parakeet_v3_q8">Higher-precision Q8 version of the default Parakeet model</string>
     <string name="model_desc_whisper_turbo">99 languages, most accurate in this list; can\'t translate</string>
+    <string name="model_desc_manual_unverified">Manual option · check compatibility and license before importing</string>
     <string name="model_desc_browse">Browse all transcribe.cpp models</string>
+    <string name="model_desc_source">Open model source page</string>
     <string name="models_no_browser">No browser found to open the link.</string>
     <string name="models_delete">Delete model</string>
+    <string name="models_delete_named">Delete %1$s</string>
     <string name="models_delete_confirm">Delete %1$s from the app\'s storage?</string>
+    <string name="models_select_failed">Could not change the active model</string>
+    <string name="models_busy">Wait for the current model operation to finish</string>
     <string name="models_language_section">Language</string>
-    <string name="models_language_desc">The language passed to the model. “Automatic” lets the model decide. If speech is transcribed in the wrong language or script, pick your language explicitly. Languages the active model doesn\'t support are ignored.</string>
+    <string name="models_language_desc">Use “Automatic” unless language or script is wrong; unsupported choices are ignored.</string>
     <string name="models_language_auto">Automatic</string>
     <string name="models_language_saved">Language saved</string>
+    <string name="models_language_requires_model">The active model may ignore this language. The recommendation above shows a compatible model.</string>
     <string name="models_translate">Translate to English</string>
     <string name="models_translate_desc">For models that support it (e.g. Whisper): speech in any language becomes English text, including in live subtitles. Ignored by other models.</string>
     <string name="btn_models">Manage speech models</string>
     <string name="models_threads_section">CPU threads</string>
-    <string name="models_threads_desc">Threads used for transcription. “Automatic” picks a value based on this device\'s CPU. If transcription is slow, try different values; more threads is not always faster.</string>
+    <string name="models_threads_desc">“Automatic” is recommended. Try another value only if transcription is slow.</string>
     <string name="models_threads_auto">Automatic</string>
+    <string name="models_recommended_section">Recommended for this device</string>
+    <string name="models_catalog_section">All compatible models</string>
+    <string name="models_catalog_desc">Exact GGUF downloads supported by this app version. Filter by family; larger models need more memory and storage.</string>
+    <string name="models_catalog_all">All families</string>
+    <string name="models_catalog_meta">%1$s · %2$s · SHA-256 verified</string>
+    <string name="models_catalog_guidance">%1$s · about %2$s RAM · %3$s</string>
+    <string name="models_size_compact">Compact</string>
+    <string name="models_size_phone">Phone-friendly</string>
+    <string name="models_size_large">Large</string>
+    <string name="models_size_very_large">Very large</string>
+    <string name="models_fit_good">good fit for this phone</string>
+    <string name="models_fit_demanding">may be slow or warm the phone</string>
+    <string name="models_fit_unsupported">CPU not supported by this build</string>
+    <string name="models_fit_memory">not enough device memory</string>
+    <string name="models_fit_storage">not enough free storage</string>
+    <string name="models_goal_balanced">Recommended balance</string>
+    <string name="models_goal_compact">Smallest and fastest</string>
+    <string name="models_goal_multilingual">Broad language coverage</string>
+    <string name="models_goal_translate">Translate speech to English</string>
+    <string name="models_goal_quality">Higher accuracy, slower</string>
+    <string name="models_guide_section">How to choose</string>
+    <string name="models_guide_body">Parakeet is the fast default for 25 European languages. Whisper covers more languages and can translate to English; larger Whisper models usually improve accuracy but use more memory and run slower. Streaming-labelled models help streaming apps, but this keyboard records then transcribes. Specialist families may target particular languages or domains—check their source page. Size guide: under 128 MB is compact; 128–768 MB is phone-friendly; 768 MB–2 GB is demanding; over 2 GB is mainly for high-memory devices.</string>
+    <string name="models_recommendation_checking">Checking compatibility…</string>
+    <string name="models_recommendation_ready">%1$s · %2$s · verified</string>
+    <string name="models_recommendation_ready_details">%1$s · %2$s · %3$s · about %4$s RAM</string>
+    <string name="models_recommendation_included">Parakeet TDT 0.6B v3 Q4 · included and active · works offline</string>
+    <string name="models_recommendation_included_available">Parakeet TDT 0.6B v3 Q4 · included · no download needed</string>
+    <string name="models_recommendation_installed">%1$s · installed and active</string>
+    <string name="models_recommendation_none">No verified automatic match: %1$s. Manual import and model links remain available.</string>
+    <string name="models_reason_language">the selected language is not supported</string>
+    <string name="models_reason_storage">more free storage is required</string>
+    <string name="models_reason_memory">more memory is required</string>
+    <string name="models_reason_device">this CPU is not supported by the current build</string>
+    <string name="models_download_and_use">Download and install</string>
+    <string name="models_download">Download</string>
+    <string name="models_device_unsupported">Unsupported</string>
+    <string name="models_needs_memory">Needs more memory</string>
+    <string name="models_needs_storage">Needs more storage</string>
+    <string name="models_installed">Installed</string>
+    <string name="models_included">Included</string>
+    <string name="models_use_included">Use included</string>
+    <string name="models_use_installed">Use installed</string>
+    <string name="models_downloading">Downloading and verifying…</string>
+    <string name="models_downloading_progress">%1$d%% · %2$s of %3$s</string>
+    <string name="models_cancel_download">Cancel download</string>
+    <string name="models_download_done">Model verified, installed, and selected</string>
+    <string name="models_download_failed">Download not installed: %1$s</string>
+    <string name="models_download_failed_unknown">Unknown download error.</string>
+    <string name="models_network_title">Network access unavailable</string>
+    <string name="models_network_body">Connect this device to the internet. If you disabled this app’s Network permission, allow it in Android App settings, then retry. Android does not provide apps with a runtime prompt for the install-time INTERNET permission.</string>
+    <string name="models_open_app_settings">Open app settings</string>
+    <string name="models_retry_download">Retry</string>
+    <string name="models_remove_network_title">Model ready offline</string>
+    <string name="models_remove_network_body">The installed model works without a network. If your Android system provides a per-app Network permission, you can remove it now in App settings. The app cannot revoke that permission itself.</string>
+    <string name="models_remove_network_action">Review network access</string>
 
     <string name="section_benchmark">Benchmark</string>
     <string name="desc_benchmark">Measures how fast the active model transcribes on this device, using a built-in English test recording (11 s).</string>
@@ -100,11 +202,16 @@
 
     <!-- Primary voice-input flow: apps fire RECOGNIZE_SPEECH and RecognizeActivity handles it. -->
     <string name="section_voice">Voice input</string>
-    <string name="voice_status_ready">Ready. In any app, tap the microphone on a supported keyboard and your speech is typed into the text field.</string>
-    <string name="voice_status_need_mic">Microphone access is needed before voice input can work.</string>
-    <string name="voice_status_almost">Almost there. When you tap your keyboard\'s mic, pick “Offline Speech to Text” and choose “Always”. Tap “Try voice input” below to set it now.</string>
+    <string name="voice_status_ready">Microphone granted. Voice input is ready.</string>
+    <string name="voice_status_not_requested">Microphone access has not been requested.</string>
+    <string name="voice_status_denied">Microphone access was denied. Try again.</string>
+    <string name="voice_status_denied_permanently">Microphone access is blocked. Open Android app settings and allow it.</string>
+    <string name="voice_status_almost">Microphone granted. Tap “Try voice input,” then choose Offline Speech to Text → Always.</string>
     <string name="btn_voice_try">Try voice input</string>
+    <string name="btn_foreground_record">Record while using other apps</string>
     <string name="btn_voice_grant">Grant microphone access</string>
+    <string name="btn_voice_try_again">Request microphone again</string>
+    <string name="btn_open_app_settings">Open app settings</string>
     <string name="btn_voice_help">Setup help</string>
 
     <string name="voice_test_ok">It works! Heard: %1$s</string>
@@ -112,5 +219,17 @@
     <string name="voice_test_failed">Couldn\'t start voice input on this device.</string>
 
     <string name="voice_help_title">Voice input setup</string>
-    <string name="voice_help_body">How to use it\n• Open any app and tap the microphone on a supported keyboard/app. A small panel slides up, you speak, tap to stop, and the text is inserted. (Enable “Auto-stop after silence” in the settings to have it stop by itself.)\n\nWhich keyboards open the voice panel\n• Microsoft SwiftKey (not open source) and website voice search open the panel directly.\n• AnySoftKeyboard is the open-source way to get the panel: its mic key opens it as long as no voice keyboard is enabled on your system.\n\nOther open-source keyboards\n• HeliBoard, FlorisBoard, OpenBoard, Fossify Keyboard and Unexpected Keyboard don\'t open the panel: their mic key switches to the “Offline Speech to Text” keyboard instead. Enable it once (see “Alternative: Voice keyboard”), speak there, and use its keyboard-switch key to go back. FUTO Keyboard ships its own voice input.\n• Gboard only uses Google\'s own voice typing and can\'t use this app at all.\n\nIf SwiftKey\'s own voice typing opens instead\n• Settings → Rich input → turn off “Multi-modal voice typing”.\n• Then tap the mic again and pick “Offline Speech to Text”.\n\nIf Android asks which app to use\n• Choose “Offline Speech to Text” and tap “Always”.\n\nIf another app always opens instead\n• Open Settings → Apps → that app → “Open by default” → Clear defaults, then try again.</string>
+    <string name="voice_help_body">How to use it\n• Open any app and tap the microphone on a supported keyboard/app. A small panel slides up, you speak, tap to stop, and the text is inserted. (Enable “Auto-stop after silence” in the settings to have it stop by itself.)\n\nWhich keyboards open the voice panel\n• Microsoft SwiftKey (not open source) and website voice search open the panel directly.\n• AnySoftKeyboard is the open-source way to get the panel: its mic key opens it as long as no voice keyboard is enabled on your system.\n\nOther open-source keyboards\n• HeliBoard, FlorisBoard, OpenBoard, Fossify Keyboard and Unexpected Keyboard don\'t open the panel: their mic key switches to the “Offline Speech to Text” keyboard instead. Enable it once under Setup → Voice keyboard, speak there, and use its keyboard-switch key to go back. FUTO Keyboard ships its own voice input.\n• Gboard only uses Google\'s own voice typing and can\'t use this app at all.\n\nIf SwiftKey\'s own voice typing opens instead\n• Settings → Rich input → turn off “Multi-modal voice typing”.\n• Then tap the mic again and pick “Offline Speech to Text”.\n\nIf Android asks which app to use\n• Choose “Offline Speech to Text” and tap “Always”.\n\nIf another app always opens instead\n• Open Settings → Apps → that app → “Open by default” → Clear defaults, then try again.</string>
+
+    <string name="section_privacy_about">Privacy &amp; About</string>
+    <string name="privacy_about_body">Audio and transcription stay on this device. No transcription history is kept and no analytics is used. Network access begins only after you choose a model download or open a source link.</string>
+    <string name="setting_diagnostic_logging">Diagnostic logging</string>
+    <string name="setting_diagnostic_logging_desc">Off by default. When enabled, stores only app, model, timing, resource, error-code, lifecycle, keyboard, and notification metadata in private app storage, capped at 64 KB. It never includes audio, recognized text, editor text, prompts, or dictionary content.</string>
+    <string name="diagnostic_log_clear">Clear diagnostic log</string>
+    <string name="diagnostic_log_clear_desc">Deletes all retained diagnostic metadata immediately.</string>
+    <string name="diagnostic_log_cleared">Diagnostic log deleted</string>
+    <string name="diagnostic_log_error">Could not update diagnostic logging</string>
+    <string name="source_link">Source</string>
+    <string name="license_link">Licenses</string>
+    <string name="about_version">Version %1$s (%2$d) · App source MIT · Default model CC BY 4.0</string>
 </resources>

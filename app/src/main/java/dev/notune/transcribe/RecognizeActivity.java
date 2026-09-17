@@ -5,9 +5,10 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.speech.RecognizerIntent;
 import android.util.Log;
+import android.view.Gravity;
+import android.view.View;
 import android.view.WindowManager;
-import android.widget.Button;
-import android.widget.LinearLayout;
+import android.widget.FrameLayout;
 import android.widget.TextView;
 import android.content.pm.PackageManager;
 
@@ -21,8 +22,7 @@ public class RecognizeActivity extends AppCompatActivity {
 
     static {
         try {
-            System.loadLibrary("c++_shared");
-            System.loadLibrary("android_transcribe_app");
+            NativeLibraries.load();
         } catch (UnsatisfiedLinkError e) {
             Log.e(TAG, "Failed to load native libraries", e);
         }
@@ -37,7 +37,19 @@ public class RecognizeActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.recognize_activity);
+        int panelPosition = RecognizePanelPrefs.get(this);
+        if (panelPosition == RecognizePanelPrefs.BOTTOM) {
+            setContentView(R.layout.recognize_activity);
+        } else {
+            setContentView(R.layout.recognize_activity_side);
+            if (panelPosition == RecognizePanelPrefs.LEFT) {
+                View panel = findViewById(R.id.panel);
+                FrameLayout.LayoutParams params =
+                        (FrameLayout.LayoutParams) panel.getLayoutParams();
+                params.gravity = Gravity.START | Gravity.CENTER_VERTICAL;
+                panel.setLayoutParams(params);
+            }
+        }
 
         // Keep the screen awake for the lifetime of this recording screen so it
         // never sleeps mid-capture and cuts the recording short.

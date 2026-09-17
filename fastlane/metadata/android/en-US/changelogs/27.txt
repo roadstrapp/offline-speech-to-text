@@ -1,0 +1,8 @@
+Offline-first model setup and a faster, denser voice workflow.
+
+- Includes the recommended Parakeet model so transcription works without a download.
+- Adds guided model recommendations, verified in-app downloads, and practical device-fit estimates.
+- Keeps download progress and cancellation on the model card that started the download.
+- Adds compact pause, cancel, insert, and insert-and-switch keyboard controls.
+- Improves hold-drag Backspace selection and release-to-delete behavior.
+- Adds foreground recording controls and opt-in, content-free diagnostic logging.

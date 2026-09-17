@@ -22,7 +22,9 @@ use jni::JNIEnv;
 use once_cell::sync::Lazy;
 
 use crate::engine;
-use crate::voice_session::SendStream;
+use crate::voice_session::{
+    claim_session_owner, release_session_owner, SendStream, OWNER_RECOGNITION_SERVICE,
+};
 
 // --- Endpointing / VAD tuning -------------------------------------------------
 // These are deliberately simple heuristics on the smoothed mic level. Mic gain
@@ -72,6 +74,7 @@ struct Endpoint {
     speech_started: AtomicBool,
     finalized: AtomicBool,
     cancelled: AtomicBool,
+    inference_running: AtomicBool,
     started_at: Instant,
     /// A caller streaming its own audio owns the endpoint: the session runs until the audio is
     /// closed or `stopListening` arrives, so trailing-silence auto-stop must not cut it short.
@@ -103,12 +106,7 @@ fn call_error(env: &mut JNIEnv, obj: &JObject, code: i32) {
 
 fn call_results(env: &mut JNIEnv, obj: &JObject, text: &str) {
     if let Ok(jtxt) = env.new_string(text) {
-        let _ = env.call_method(
-            obj,
-            "onResults",
-            "(Ljava/lang/String;)V",
-            &[(&jtxt).into()],
-        );
+        let _ = env.call_method(obj, "onResults", "(Ljava/lang/String;)V", &[(&jtxt).into()]);
     }
 }
 
@@ -123,7 +121,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
     service: JObject,
 ) {
     android_logger::init_once(
-        android_logger::Config::default().with_max_level(log::LevelFilter::Info),
+        android_logger::Config::default().with_max_level(log::LevelFilter::Off),
     );
 
     let jvm = match env.get_java_vm() {
@@ -169,6 +167,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
         None => {
             let mut env2 = jvm.attach_current_thread().unwrap();
             call_error(&mut env2, shared.target.as_obj(), ERROR_AUDIO);
+            clear_session(&shared);
             return;
         }
     };
@@ -188,13 +187,27 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
 
     match stream {
         Ok(s) => {
-            s.play().ok();
+            if shared.cancelled.load(Ordering::SeqCst) {
+                return;
+            }
+            if let Err(e) = s.play() {
+                log::error!("Failed to start microphone: {}", e);
+                let mut env2 = jvm.attach_current_thread().unwrap();
+                call_error(&mut env2, shared.target.as_obj(), ERROR_AUDIO);
+                clear_session(&shared);
+                return;
+            }
+            if shared.cancelled.load(Ordering::SeqCst) {
+                drop(s);
+                return;
+            }
             *stream_holder.lock().unwrap() = Some(SendStream(s));
         }
         Err(e) => {
             log::error!("Failed to open microphone: {}", e);
             let mut env2 = jvm.attach_current_thread().unwrap();
             call_error(&mut env2, shared.target.as_obj(), ERROR_AUDIO);
+            clear_session(&shared);
             return;
         }
     }
@@ -203,11 +216,6 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
     let mon_shared = shared.clone();
     let mon_stream = stream_holder.clone();
     std::thread::spawn(move || endpoint_monitor(mon_shared, mon_stream));
-
-    *SESSION.lock().unwrap() = Some(Session {
-        shared,
-        stream: stream_holder,
-    });
 }
 
 /// Called from `onStartListening` when the caller passed
@@ -265,11 +273,6 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
     let mon_shared = shared.clone();
     let mon_stream = stream_holder.clone();
     std::thread::spawn(move || endpoint_monitor(mon_shared, mon_stream));
-
-    *SESSION.lock().unwrap() = Some(Session {
-        shared,
-        stream: stream_holder,
-    });
 }
 
 /// Called from `onStopListening`: the keyboard asked us to finish now. Finalise
@@ -279,7 +282,11 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
     _env: JNIEnv,
     _class: JClass,
 ) {
-    let session = SESSION.lock().unwrap().as_ref().map(|s| (s.shared.clone(), s.stream.clone()));
+    let session = SESSION
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|s| (s.shared.clone(), s.stream.clone()));
     if let Some((shared, stream)) = session {
         std::thread::spawn(move || finalize(shared, stream));
     }
@@ -292,12 +299,17 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
     _class: JClass,
 ) {
     let mut guard = SESSION.lock().unwrap();
+    let mut release = true;
     if let Some(session) = guard.as_ref() {
         session.shared.cancelled.store(true, Ordering::SeqCst);
         session.shared.finalized.store(true, Ordering::SeqCst);
         *session.stream.lock().unwrap() = None;
+        release = !session.shared.inference_running.load(Ordering::SeqCst);
     }
-    *guard = None;
+    if release {
+        *guard = None;
+        release_session_owner(OWNER_RECOGNITION_SERVICE);
+    }
 }
 
 /// Called from `onDestroy`.
@@ -311,23 +323,26 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
 
 // --- Session lifecycle --------------------------------------------------------
 
-/// Replaces any leftover session with fresh shared state and tells the caller we are ready.
-/// Returns `None` when the JVM cannot be attached, in which case no session was installed.
+/// Claims the sole process-wide capture/model owner and tells the caller we are ready.
+/// Returns `None` when another surface owns it or the JVM cannot be attached.
 fn begin_session(
     jvm: &Arc<jni::JavaVM>,
     target: GlobalRef,
     caller_endpointed: bool,
 ) -> Option<(Arc<Endpoint>, Arc<Mutex<Option<SendStream>>>)> {
-    // Tear down any session that is still around (e.g. the keyboard called
-    // startListening twice without cancel) so its monitor/finaliser can never
-    // deliver stale results to this new session.
-    {
-        let mut guard = SESSION.lock().unwrap();
-        if let Some(old) = guard.take() {
-            old.shared.cancelled.store(true, Ordering::SeqCst);
-            old.shared.finalized.store(true, Ordering::SeqCst);
-            *old.stream.lock().unwrap() = None;
+    // A second wrapper start must never replace the process-global owner.
+    if SESSION.lock().unwrap().is_some() {
+        if let Ok(mut env) = jvm.attach_current_thread() {
+            call_error(&mut env, target.as_obj(), ERROR_AUDIO);
         }
+        return None;
+    }
+
+    if !claim_session_owner(OWNER_RECOGNITION_SERVICE) {
+        if let Ok(mut env) = jvm.attach_current_thread() {
+            call_error(&mut env, target.as_obj(), ERROR_AUDIO);
+        }
+        return None;
     }
 
     let now = Instant::now();
@@ -339,17 +354,30 @@ fn begin_session(
         speech_started: AtomicBool::new(false),
         finalized: AtomicBool::new(false),
         cancelled: AtomicBool::new(false),
+        inference_running: AtomicBool::new(false),
         started_at: now,
         caller_endpointed,
         jvm: jvm.clone(),
         target,
     });
 
+    let mut env = match jvm.attach_current_thread() {
+        Ok(env) => env,
+        Err(_) => {
+            release_session_owner(OWNER_RECOGNITION_SERVICE);
+            return None;
+        }
+    };
+    let stream = Arc::new(Mutex::new(None));
+    *SESSION.lock().unwrap() = Some(Session {
+        shared: shared.clone(),
+        stream: stream.clone(),
+    });
+
     // Tell the caller we're ready to receive speech.
-    let mut env = jvm.attach_current_thread().ok()?;
     call_void(&mut env, shared.target.as_obj(), "onReadyForSpeech");
 
-    Some((shared, Arc::new(Mutex::new(None))))
+    Some((shared, stream))
 }
 
 // --- Caller-supplied audio ----------------------------------------------------
@@ -741,33 +769,45 @@ fn finalize(shared: Arc<Endpoint>, stream: Arc<Mutex<Option<SendStream>>>) {
     {
         return; // already finalised/cancelled
     }
+    shared.inference_running.store(true, Ordering::SeqCst);
 
     // Stop the microphone (also drops the audio callback's Arc<Endpoint>).
     *stream.lock().unwrap() = None;
 
-    let buffer = shared.audio_buffer.lock().unwrap().clone();
+    // Transfer ownership to inference without a full audio-buffer copy.
+    let buffer = std::mem::take(&mut *shared.audio_buffer.lock().unwrap());
     let speech = shared.speech_started.load(Ordering::SeqCst);
 
     let mut env = match shared.jvm.attach_current_thread() {
         Ok(e) => e,
-        Err(_) => return,
+        Err(_) => {
+            shared.inference_running.store(false, Ordering::SeqCst);
+            clear_session(&shared);
+            return;
+        }
     };
     let target = shared.target.as_obj();
 
-    if speech {
+    if speech && !shared.cancelled.load(Ordering::SeqCst) {
         call_void(&mut env, target, "onEndOfSpeech");
     }
 
     // ~0.2s minimum of audio to bother transcribing.
     if buffer.len() < 3200 {
-        call_error(&mut env, target, ERROR_NO_MATCH);
+        if !shared.cancelled.load(Ordering::SeqCst) {
+            call_error(&mut env, target, ERROR_NO_MATCH);
+        }
+        shared.inference_running.store(false, Ordering::SeqCst);
         clear_session(&shared);
         return;
     }
 
     if engine::get_engine().is_none() {
         if engine::ensure_loaded(&mut env, target).is_err() {
-            call_error(&mut env, target, ERROR_SERVER);
+            if !shared.cancelled.load(Ordering::SeqCst) {
+                call_error(&mut env, target, ERROR_SERVER);
+            }
+            shared.inference_running.store(false, Ordering::SeqCst);
             clear_session(&shared);
             return;
         }
@@ -777,6 +817,7 @@ fn finalize(shared: Arc<Endpoint>, stream: Arc<Mutex<Option<SendStream>>>) {
         Some(eng_arc) => {
             let res = engine::transcribe_shared(&eng_arc, buffer);
             match res {
+                _ if shared.cancelled.load(Ordering::SeqCst) => {}
                 Ok(text) if !text.trim().is_empty() => call_results(&mut env, target, &text),
                 Ok(_) => call_error(&mut env, target, ERROR_NO_MATCH),
                 Err(e) => {
@@ -785,9 +826,13 @@ fn finalize(shared: Arc<Endpoint>, stream: Arc<Mutex<Option<SendStream>>>) {
                 }
             }
         }
-        None => call_error(&mut env, target, ERROR_SERVER),
+        None if !shared.cancelled.load(Ordering::SeqCst) => {
+            call_error(&mut env, target, ERROR_SERVER)
+        }
+        None => {}
     }
 
+    shared.inference_running.store(false, Ordering::SeqCst);
     clear_session(&shared);
 }
 
@@ -798,6 +843,7 @@ fn clear_session(shared: &Arc<Endpoint>) {
     if let Some(s) = guard.as_ref() {
         if Arc::ptr_eq(&s.shared, shared) {
             *guard = None;
+            release_session_owner(OWNER_RECOGNITION_SERVICE);
         }
     }
 }

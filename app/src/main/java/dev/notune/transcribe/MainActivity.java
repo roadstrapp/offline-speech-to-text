@@ -1,24 +1,36 @@
 package dev.notune.transcribe;
 
+import android.content.ActivityNotFoundException;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.res.ColorStateList;
+import android.net.Uri;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.speech.RecognizerIntent;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.inputmethod.InputMethodInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
+import android.widget.Checkable;
 import android.widget.CompoundButton;
 import android.widget.ImageView;
+import android.widget.ArrayAdapter;
+import android.widget.AdapterView;
+
 import android.widget.RadioGroup;
+import android.widget.Spinner;
 import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.app.AppCompatDelegate;
 import androidx.core.content.ContextCompat;
+import androidx.core.view.ViewCompat;
 import androidx.core.widget.ImageViewCompat;
 
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
@@ -32,14 +44,10 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG = "MainActivity";
     private static final int PERM_REQ_CODE = 101;
     private static final int REQ_VOICE_TEST = 202;
+    private static final int MIN_TOUCH_TARGET_DP = 48;
 
     static {
-        try {
-            System.loadLibrary("c++_shared");
-        } catch (UnsatisfiedLinkError e) {
-            Log.w(TAG, "Failed to load c++_shared", e);
-        }
-        System.loadLibrary("android_transcribe_app");
+        NativeLibraries.load();
     }
 
     private TextView statusText;
@@ -47,9 +55,13 @@ public class MainActivity extends AppCompatActivity {
     private ImageView voiceStatusIcon;
     private Button voiceGrantButton;
     private Button voiceTryButton;
+    private TextView imeStatusText;
+    private Button imePickerButton;
+    private Button imeSettingsButton;
     private Button startSubsButton;
     private Button benchButton;
     private TextView benchResultText;
+    private volatile boolean micRequestedThisSession;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -61,22 +73,20 @@ public class MainActivity extends AppCompatActivity {
         voiceStatusIcon = findViewById(R.id.img_voice_status);
         voiceGrantButton = findViewById(R.id.btn_voice_grant);
         voiceTryButton = findViewById(R.id.btn_voice_try);
+        imeStatusText = findViewById(R.id.text_ime_status);
+        imePickerButton = findViewById(R.id.btn_ime_picker);
         startSubsButton = findViewById(R.id.btn_subs_start);
-        Button imeSettingsButton = findViewById(R.id.btn_ime_settings);
+        imeSettingsButton = findViewById(R.id.btn_ime_settings);
         Button voiceHelpButton = findViewById(R.id.btn_voice_help);
-        if (!BuildConfig.HAS_BUNDLED_MODEL) {
-            ((TextView) findViewById(R.id.text_models_desc))
-                    .setText(R.string.models_desc_import_required);
-        }
-
-        voiceGrantButton.setOnClickListener(v -> checkAndRequestPermissions());
+        voiceGrantButton.setOnClickListener(v -> handleMicrophoneAction());
         voiceTryButton.setOnClickListener(v -> launchVoiceTest());
+        findViewById(R.id.btn_foreground_record).setOnClickListener(v ->
+                startActivity(new Intent(this, ForegroundRecordingActivity.class)));
         voiceHelpButton.setOnClickListener(v -> showHelpDialog());
 
-        imeSettingsButton.setOnClickListener(v -> {
-             Intent intent = new Intent(Settings.ACTION_INPUT_METHOD_SETTINGS);
-             startActivity(intent);
-        });
+        imeSettingsButton.setOnClickListener(v ->
+                startActivity(new Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)));
+        imePickerButton.setOnClickListener(v -> handleImeAction());
 
         startSubsButton.setOnClickListener(v -> {
             Intent intent = new Intent(this, LiveSubtitleActivity.class);
@@ -88,9 +98,22 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.btn_models).setOnClickListener(v ->
                 startActivity(new Intent(this, ModelsActivity.class)));
 
+        Button moreSettingsButton = findViewById(R.id.btn_more_settings);
+        View advancedSections = findViewById(R.id.advanced_home_sections);
+        moreSettingsButton.setOnClickListener(v -> {
+            boolean expand = advancedSections.getVisibility() != View.VISIBLE;
+            advancedSections.setVisibility(expand ? View.VISIBLE : View.GONE);
+            moreSettingsButton.setText(expand
+                    ? R.string.home_less_settings : R.string.home_more_settings);
+            if (expand) advancedSections.requestFocus();
+        });
+
         benchButton = findViewById(R.id.btn_benchmark);
         benchResultText = findViewById(R.id.text_bench_result);
         benchButton.setOnClickListener(v -> runBenchmark());
+        ((TextView) findViewById(R.id.text_version)).setText(
+                getString(R.string.about_version, BuildConfig.VERSION_NAME,
+                        BuildConfig.VERSION_CODE));
 
         // Settings stored as marker files in filesDir (readable from the :ime
         // process and native code without a content provider).
@@ -100,6 +123,32 @@ public class MainActivity extends AppCompatActivity {
         // Record-in-background defaults to ON; its marker file is the opt-out.
         bindMarkerSwitch(R.id.switch_record_background, "stop_on_hide", true);
         bindMarkerSwitch(R.id.switch_auto_stop, "auto_stop", false);
+        setupRecognizePanelPosition();
+
+        CompoundButton diagnosticSwitch = findViewById(R.id.switch_diagnostic_logging);
+        diagnosticSwitch.setChecked(DiagnosticLog.isEnabled(getFilesDir()));
+        diagnosticSwitch.setOnCheckedChangeListener((buttonView, enabled) -> {
+            try {
+                DiagnosticLog.setEnabled(getFilesDir(), enabled);
+                if (enabled) {
+                    DiagnosticLog.event(getFilesDir(), "app_start", "process=app");
+                }
+            } catch (IOException e) {
+                snackbar(getString(R.string.diagnostic_log_error));
+            }
+        });
+        findViewById(R.id.btn_clear_diagnostic_log).setOnClickListener(v -> {
+            try {
+                DiagnosticLog.clear(getFilesDir());
+                snackbar(getString(R.string.diagnostic_log_cleared));
+            } catch (IOException e) {
+                snackbar(getString(R.string.diagnostic_log_error));
+            }
+        });
+        findViewById(R.id.btn_source).setOnClickListener(v -> openLink(
+                "https://gitworkshop.dev/npub1jg2qmt3rxjksq65v3nk7dq6yaz2c4uf3qt9epdhxwms2xwd47j2s38a228/relay.ngit.dev/offline-speech-to-text"));
+        findViewById(R.id.btn_license).setOnClickListener(v -> openLink(
+                "https://github.com/notune/android_transcribe_app/blob/master/LICENSE"));
 
         // Live subtitle line limit: 2 (default), 4, or 0 = unlimited.
         RadioGroup subsLinesGroup = findViewById(R.id.rg_subtitle_lines);
@@ -145,9 +194,65 @@ public class MainActivity extends AppCompatActivity {
 
         // Initial check
         updateVoiceInputStatus();
+        updateImeStatus();
+
+        configureAccessibility();
 
         // Start init
         initNative(this);
+    }
+
+    private void setupRecognizePanelPosition() {
+        Spinner spinner = findViewById(R.id.spinner_recognize_panel_position);
+        ArrayAdapter<CharSequence> adapter = ArrayAdapter.createFromResource(
+                this, R.array.recognize_panel_positions,
+                android.R.layout.simple_spinner_item);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinner.setAdapter(adapter);
+        spinner.setSelection(RecognizePanelPrefs.get(this), false);
+        spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                RecognizePanelPrefs.set(MainActivity.this, position);
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) { }
+        });
+    }
+
+    private void configureAccessibility() {
+        int[] headingIds = {
+                R.id.heading_models,
+                R.id.heading_setup,
+                R.id.heading_subtitles,
+                R.id.heading_appearance,
+                R.id.heading_settings,
+                R.id.heading_benchmark,
+                R.id.heading_privacy
+        };
+        for (int headingId : headingIds) {
+            ViewCompat.setAccessibilityHeading(findViewById(headingId), true);
+        }
+
+        int minimumPixels = Math.round(TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP,
+                MIN_TOUCH_TARGET_DP,
+                getResources().getDisplayMetrics()));
+        applyMinimumTouchTarget(findViewById(R.id.home_content), minimumPixels);
+    }
+
+    private static void applyMinimumTouchTarget(View view, int minimumPixels) {
+        if (view.isClickable() || view instanceof Checkable) {
+            view.setMinimumWidth(minimumPixels);
+            view.setMinimumHeight(minimumPixels);
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int index = 0; index < group.getChildCount(); index++) {
+                applyMinimumTouchTarget(group.getChildAt(index), minimumPixels);
+            }
+        }
     }
 
     @Override
@@ -155,6 +260,7 @@ public class MainActivity extends AppCompatActivity {
         super.onResume();
         // Re-check on return from the keyboard chooser, settings, or a test run.
         updateVoiceInputStatus();
+        updateImeStatus();
     }
 
     /**
@@ -169,22 +275,93 @@ public class MainActivity extends AppCompatActivity {
     private void updateVoiceInputStatus() {
         boolean micGranted = checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
                 == PackageManager.PERMISSION_GRANTED;
-
-        if (!micGranted) {
-            setVoiceStatus(false, getString(R.string.voice_status_need_mic));
-            voiceGrantButton.setVisibility(View.VISIBLE);
-            voiceTryButton.setEnabled(false);
-            return;
+        File requestedMarker = new File(getFilesDir(), "mic_permission_requested");
+        boolean requestedBefore = micRequestedThisSession || requestedMarker.exists() || micGranted;
+        if (micGranted && !requestedMarker.exists()) {
+            persistMicrophoneRequested();
         }
+        SetupState.Microphone state = SetupState.microphone(
+                micGranted, requestedBefore,
+                shouldShowRequestPermissionRationale(android.Manifest.permission.RECORD_AUDIO));
 
-        voiceGrantButton.setVisibility(View.GONE);
-        voiceTryButton.setEnabled(true);
-
-        if (isOurAppDefaultRecognizer()) {
-            setVoiceStatus(true, getString(R.string.voice_status_ready));
-        } else {
-            setVoiceStatus(false, getString(R.string.voice_status_almost));
+        voiceTryButton.setEnabled(state == SetupState.Microphone.GRANTED);
+        switch (state) {
+            case NOT_REQUESTED:
+                setVoiceStatus(false, getString(R.string.voice_status_not_requested));
+                voiceGrantButton.setText(R.string.btn_voice_grant);
+                voiceGrantButton.setVisibility(View.VISIBLE);
+                break;
+            case DENIED:
+                setVoiceStatus(false, getString(R.string.voice_status_denied));
+                voiceGrantButton.setText(R.string.btn_voice_try_again);
+                voiceGrantButton.setVisibility(View.VISIBLE);
+                break;
+            case DENIED_PERMANENTLY:
+                setVoiceStatus(false, getString(R.string.voice_status_denied_permanently));
+                voiceGrantButton.setText(R.string.btn_open_app_settings);
+                voiceGrantButton.setVisibility(View.VISIBLE);
+                break;
+            case GRANTED:
+                voiceGrantButton.setVisibility(View.GONE);
+                if (isOurAppDefaultRecognizer()) {
+                    setVoiceStatus(true, getString(R.string.voice_status_ready));
+                } else {
+                    setVoiceStatus(false, getString(R.string.voice_status_almost));
+                }
+                break;
         }
+    }
+
+    private void updateImeStatus() {
+        InputMethodManager manager = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        ComponentName ours = new ComponentName(this, RustInputMethodService.class);
+        boolean enabled = isOurImeEnabled(manager);
+        String selectedId = Settings.Secure.getString(
+                getContentResolver(), Settings.Secure.DEFAULT_INPUT_METHOD);
+        ComponentName selected = ComponentName.unflattenFromString(
+                selectedId == null ? "" : selectedId);
+        boolean isSelected = selected != null
+                && getPackageName().equals(selected.getPackageName())
+                && ours.getClassName().equals(selected.getClassName());
+
+        switch (SetupState.ime(enabled, isSelected)) {
+            case DISABLED:
+                imeStatusText.setText(R.string.ime_status_disabled);
+                imePickerButton.setText(R.string.btn_ime_enable);
+                imeSettingsButton.setVisibility(View.GONE);
+                break;
+            case ENABLED:
+                imeStatusText.setText(R.string.ime_status_enabled);
+                imePickerButton.setText(R.string.btn_ime_choose);
+                imeSettingsButton.setVisibility(View.VISIBLE);
+                break;
+            case SELECTED:
+                imeStatusText.setText(R.string.ime_status_selected);
+                imePickerButton.setText(R.string.btn_ime_switch);
+                imeSettingsButton.setVisibility(View.VISIBLE);
+                break;
+        }
+    }
+
+    private void handleImeAction() {
+        InputMethodManager manager = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        boolean enabled = isOurImeEnabled(manager);
+        if (!enabled) {
+            startActivity(new Intent(Settings.ACTION_INPUT_METHOD_SETTINGS));
+        } else if (manager != null) {
+            manager.showInputMethodPicker();
+        }
+    }
+
+    private boolean isOurImeEnabled(InputMethodManager manager) {
+        if (manager == null) return false;
+        for (InputMethodInfo info : manager.getEnabledInputMethodList()) {
+            if (getPackageName().equals(info.getPackageName())
+                    && RustInputMethodService.class.getName().equals(info.getServiceName())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** True if our RecognizeActivity is what RECOGNIZE_SPEECH resolves to. */
@@ -203,7 +380,6 @@ public class MainActivity extends AppCompatActivity {
                 ? ContextCompat.getColor(this, R.color.status_ok)
                 : themeColor(com.google.android.material.R.attr.colorError);
         ImageViewCompat.setImageTintList(voiceStatusIcon, ColorStateList.valueOf(tint));
-        voiceStatusIcon.setContentDescription(message);
     }
 
     private int themeColor(int attrRes) {
@@ -282,6 +458,14 @@ public class MainActivity extends AppCompatActivity {
         Snackbar.make(findViewById(android.R.id.content), message, Snackbar.LENGTH_LONG).show();
     }
 
+    private void openLink(String url) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (ActivityNotFoundException exception) {
+            snackbar(getString(R.string.models_no_browser));
+        }
+    }
+
     /**
      * Binds a switch to a marker file in filesDir. With {@code inverted}, the
      * file's presence means the switch is OFF (used for default-on settings).
@@ -304,14 +488,38 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    private void checkAndRequestPermissions() {
-        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, PERM_REQ_CODE);
+    private void handleMicrophoneAction() {
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED) return;
+        File requested = new File(getFilesDir(), "mic_permission_requested");
+        if ((micRequestedThisSession || requested.exists())
+                && !shouldShowRequestPermissionRationale(
+                android.Manifest.permission.RECORD_AUDIO)) {
+            Intent settings = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + getPackageName()));
+            startActivity(settings);
+            return;
         }
+        micRequestedThisSession = true;
+        persistMicrophoneRequested();
+        requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, PERM_REQ_CODE);
+    }
+
+    private void persistMicrophoneRequested() {
+        micRequestedThisSession = true;
+        new Thread(() -> {
+            File requested = new File(getFilesDir(), "mic_permission_requested");
+            try {
+                requested.createNewFile();
+            } catch (IOException e) {
+                Log.w(TAG, "Could not persist microphone request state", e);
+            }
+        }, "mic-permission-state").start();
     }
 
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == PERM_REQ_CODE) {
             updateVoiceInputStatus();
         }
@@ -333,7 +541,7 @@ public class MainActivity extends AppCompatActivity {
         new Thread(() -> {
             float[] samples;
             try {
-                samples = readWavAsset("bench.wav");
+                samples = BenchmarkClip.read(this);
             } catch (IOException e) {
                 Log.e(TAG, "Failed to read benchmark clip", e);
                 runOnUiThread(() -> {
@@ -361,44 +569,6 @@ public class MainActivity extends AppCompatActivity {
                                 computeSecs > 0 ? audioSecs / computeSecs : 0)));
             }
         });
-    }
-
-    /**
-     * Reads a 16 kHz mono 16-bit PCM WAV from assets into float samples. Only
-     * handles the format the bundled clip is stored in; no general WAV support.
-     */
-    private float[] readWavAsset(String name) throws IOException {
-        byte[] bytes;
-        try (java.io.InputStream in = getAssets().open(name);
-             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
-            byte[] buf = new byte[64 * 1024];
-            int read;
-            while ((read = in.read(buf)) != -1) {
-                out.write(buf, 0, read);
-            }
-            bytes = out.toByteArray();
-        }
-
-        // Find the "data" chunk instead of assuming a 44-byte header.
-        int offset = 12;
-        while (offset + 8 <= bytes.length) {
-            int chunkSize = (bytes[offset + 4] & 0xff) | ((bytes[offset + 5] & 0xff) << 8)
-                    | ((bytes[offset + 6] & 0xff) << 16) | ((bytes[offset + 7] & 0xff) << 24);
-            if (bytes[offset] == 'd' && bytes[offset + 1] == 'a'
-                    && bytes[offset + 2] == 't' && bytes[offset + 3] == 'a') {
-                int start = offset + 8;
-                int count = Math.min(chunkSize, bytes.length - start) / 2;
-                float[] samples = new float[count];
-                for (int i = 0; i < count; i++) {
-                    int lo = bytes[start + 2 * i] & 0xff;
-                    int hi = bytes[start + 2 * i + 1];
-                    samples[i] = ((hi << 8) | lo) / 32768.0f;
-                }
-                return samples;
-            }
-            offset += 8 + chunkSize + (chunkSize & 1);
-        }
-        throw new IOException("no data chunk in " + name);
     }
 
     // Called from Rust

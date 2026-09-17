@@ -5,10 +5,12 @@ plugins {
     id("com.android.application")
 }
 
-// Private APK candidates keep the 485 MB default model out of the package.
-// Developers may opt into a bundled build explicitly when another delivery
-// channel can carry it.
-val includeBundledModel = providers.gradleProperty("includeBundledModel").orNull == "true"
+// Normal APKs include the verified default model so first launch and speech
+// recognition work without a network connection. Developers may explicitly
+// opt out for small local compile-only artifacts with
+// -PincludeBundledModel=false; those artifacts are not user-test candidates.
+val includeBundledModel = providers.gradleProperty("includeBundledModel")
+    .orNull?.toBooleanStrictOrNull() ?: true
 
 android {
     namespace = "dev.notune.transcribe"
@@ -18,8 +20,8 @@ android {
         applicationId = "app.offlinespeechtotext"
         minSdk = 26
         targetSdk = 35
-        versionCode = 21
-        versionName = "0.1.20"
+        versionCode = 27
+        versionName = "0.3.0"
         buildConfigField("boolean", "HAS_BUNDLED_MODEL", includeBundledModel.toString())
         ndk {
             abiFilters += "arm64-v8a"
@@ -28,12 +30,17 @@ android {
 
     signingConfigs {
         create("release") {
-            val ksFile = rootProject.file("release.keystore")
+            val configuredKeystore = System.getenv("OSTT_KEYSTORE_FILE")
+            val ksFile = configuredKeystore?.let { file(it) }
+                ?: rootProject.file("release.keystore")
             if (ksFile.exists()) {
                 storeFile = ksFile
-                storePassword = System.getenv("STORE_PASS") ?: "password"
-                keyAlias = System.getenv("KEY_ALIAS") ?: "release"
-                keyPassword = System.getenv("KEY_PASS") ?: "password"
+                // Keep credential validation lazy: a checkout that happens to
+                // contain a release key must still configure debug/test tasks
+                // without production-signing environment variables.
+                storePassword = System.getenv("STORE_PASS")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASS")
             }
         }
     }
@@ -47,6 +54,7 @@ android {
 
     buildFeatures {
         buildConfig = true
+        aidl = true
     }
 
     compileOptions {
@@ -94,6 +102,7 @@ if (!isBundle && includeBundledModel) {
 dependencies {
     // Material Components (Material 3 / Material You). Pulls in AppCompat.
     implementation("com.google.android.material:material:1.12.0")
+    implementation("androidx.core:core:1.15.0")
 
     // Material/AppCompat transitively pull the legacy kotlin-stdlib-jdk7/jdk8:1.6.21
     // (via kotlinx-coroutines-android), whose classes were folded into
@@ -110,59 +119,71 @@ dependencies {
 // Rust / cargo-ndk build task
 // ---------------------------------------------------------------------------
 
-val cargoNdkBuild by tasks.registering(Exec::class) {
-    description = "Build Rust native code via cargo-ndk"
+val ndkDir = project.findProperty("ndk.dir")?.toString()
+    ?: System.getenv("ANDROID_NDK_HOME")
+    ?: System.getenv("ANDROID_NDK")
+    ?: android.ndkDirectory.absolutePath
+
+fun nativeVariant(name: String, armArch: String) = tasks.register<Exec>("cargoNdkBuild$name") {
+    description = "Build the $name Rust native backend via cargo-ndk"
     group = "build"
-
-    workingDir = rootProject.projectDir   // Cargo.toml lives at project root
-
-    // Detect NDK path from local.properties or env
-    val ndkDir = project.findProperty("ndk.dir")?.toString()
-        ?: System.getenv("ANDROID_NDK_HOME")
-        ?: System.getenv("ANDROID_NDK")
-        ?: android.ndkDirectory.absolutePath
-
+    workingDir = rootProject.projectDir
     environment("ANDROID_NDK_HOME", ndkDir)
-    // transcribe-cpp-sys builds its C++ core through CMake, whose Android
-    // platform detection needs one of these (ANDROID_NDK_HOME is not enough).
     environment("ANDROID_NDK_ROOT", ndkDir)
     environment("ANDROID_NDK", ndkDir)
-    // ggml cannot autodetect the CPU when cross-compiling and falls back to
-    // baseline armv8-a, losing the dotprod/fp16 kernels its quantized matmuls
-    // rely on (several times slower). armv8.2-a+dotprod+fp16 is supported by
-    // arm64 phones from ~2018 on; the engine refuses older CPUs with a clear
-    // error at load (see check_cpu_features in src/engine.rs) instead of
-    // crashing mid-inference.
-    environment("TRANSCRIBE_CMAKE_ARGS", "-DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16")
+    environment("CARGO_TARGET_DIR", layout.buildDirectory.dir("rust-$name").get().asFile)
+    environment("TRANSCRIBE_CMAKE_ARGS", "-DGGML_CPU_ARM_ARCH=$armArch")
+    val packagedName = if (name == "Armv8") {
+        "libandroid_transcribe_app_armv8.so"
+    } else {
+        "libandroid_transcribe_app_dotprod.so"
+    }
+    environment("RUSTFLAGS", "-C link-arg=-Wl,-soname,$packagedName")
+    val output = layout.buildDirectory.dir("jni-$name").get().asFile
+    commandLine("cargo", "ndk", "-t", "arm64-v8a", "-o", output.absolutePath,
+        "build", "--release")
+    outputs.dir(output)
+    outputs.upToDateWhen { false }
+}
 
-    val jniLibsDir = project.file("src/main/jniLibs")
+val cargoNdkBuildArmv8 = nativeVariant("Armv8", "armv8-a")
+val cargoNdkBuildDotprod = nativeVariant("Dotprod", "armv8.2-a+dotprod+fp16")
 
-    commandLine(
-        "cargo", "ndk",
-        "-t", "arm64-v8a",
-        "-o", jniLibsDir.absolutePath,
-        "build", "--release"
-    )
-
-    // Copy libc++_shared.so from NDK (needed because Rust links against it dynamically)
+val cargoNdkBuild by tasks.registering {
+    description = "Build and package baseline and optimized native backends"
+    group = "build"
+    dependsOn(cargoNdkBuildArmv8, cargoNdkBuildDotprod)
     doLast {
-        val ndkPath = environment["ANDROID_NDK_HOME"] as String
-        val libcpp = file("$ndkPath/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so")
-        if (libcpp.exists()) {
-            val destDir = File(jniLibsDir, "arm64-v8a")
-            destDir.mkdirs()
-            libcpp.copyTo(File(destDir, "libc++_shared.so"), overwrite = true)
-            println("Copied libc++_shared.so from NDK")
-        } else {
+        val destDir = project.file("src/main/jniLibs/arm64-v8a")
+        destDir.mkdirs()
+        File(destDir, "libandroid_transcribe_app.so").delete()
+        val armv8Source = layout.buildDirectory.file(
+            "jni-Armv8/arm64-v8a/libandroid_transcribe_app.so").get().asFile
+        val dotprodSource = layout.buildDirectory.file(
+            "jni-Dotprod/arm64-v8a/libandroid_transcribe_app.so").get().asFile
+        if (!armv8Source.isFile) {
+            throw GradleException("Baseline native backend missing: ${armv8Source.absolutePath}")
+        }
+        if (!dotprodSource.isFile) {
+            throw GradleException("Optimized native backend missing: ${dotprodSource.absolutePath}")
+        }
+        copy {
+            from(armv8Source)
+            into(destDir)
+            rename { "libandroid_transcribe_app_armv8.so" }
+        }
+        copy {
+            from(dotprodSource)
+            into(destDir)
+            rename { "libandroid_transcribe_app_dotprod.so" }
+        }
+        val libcpp = file("$ndkDir/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so")
+        if (!libcpp.exists()) {
             throw GradleException("libc++_shared.so not found in NDK at: ${libcpp.absolutePath}")
         }
+        libcpp.copyTo(File(destDir, "libc++_shared.so"), overwrite = true)
+        println("Packaged baseline and optimized native backends")
     }
-
-    outputs.dir(jniLibsDir)
-    // No input tracking — always run and let cargo's own incremental build
-    // decide what to recompile (a no-op cargo invocation is fast). Without
-    // this, Gradle sees unchanged outputs and skips Rust rebuilds entirely.
-    outputs.upToDateWhen { false }
 }
 
 // Wire the cargo-ndk build into the Android build lifecycle

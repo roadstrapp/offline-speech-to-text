@@ -4,9 +4,14 @@
     <uses-feature android:glEsVersion="0x00030002" android:required="true" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Install-time capability only. The app opens no connection until the user
+         confirms an exact model download in ModelsActivity. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!-- Package visibility (Android 11+): lets resolveActivity()/queryIntentActivities()
          for the speech intent see other handlers, so MainActivity can tell whether this
@@ -19,8 +24,10 @@
 
     <application
         android:name=".App"
+        android:allowBackup="false"
         android:label="@string/app_name"
-        android:icon="@drawable/icon"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:theme="@style/AppTheme"
         android:hasCode="true">
 
@@ -90,6 +97,22 @@
                 <data android:mimeType="audio/*" />
             </intent-filter>
         </activity>
+
+        <!-- Long-form recording: one non-exported foreground owner. -->
+        <activity
+            android:name=".ForegroundRecordingActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ForegroundResultActivity"
+            android:exported="false" />
+        <receiver
+            android:name=".ForegroundRecordingActionReceiver"
+            android:exported="false" />
+        <service
+            android:name=".ForegroundRecordingService"
+            android:foregroundServiceType="microphone|shortService"
+            android:stopWithTask="false"
+            android:exported="false" />
 
         <!-- Live Subtitles Service -->
         <service

@@ -1,5 +1,5 @@
 use crate::engine;
-use jni::objects::{JClass, JObject};
+use jni::objects::JObject;
 use jni::JNIEnv;
 use std::sync::Arc;
 
@@ -9,11 +9,11 @@ use std::sync::Arc;
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_notune_transcribe_ModelsActivity_reloadModelNative(
     env: JNIEnv,
-    _class: JClass,
+    _this: JObject,
     activity: JObject,
 ) {
     android_logger::init_once(
-        android_logger::Config::default().with_max_level(log::LevelFilter::Info),
+        android_logger::Config::default().with_max_level(log::LevelFilter::Off),
     );
     let vm = match env.get_java_vm() {
         Ok(vm) => Arc::new(vm),

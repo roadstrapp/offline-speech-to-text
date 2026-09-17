@@ -62,21 +62,21 @@
     <string name="models_import_failed">Échec de l\'importation : le fichier n\'a pas pu être copié.</string>
     <string name="models_import_no_space">Espace de stockage insuffisant pour importer ce modèle.</string>
     <string name="models_import_bad_title">Pas un modèle GGUF</string>
-    <string name="models_import_bad_body">Veuillez sélectionner un fichier de modèle .gguf pour transcribe.cpp. Touchez « Où trouver des modèles » pour les liens de téléchargement.</string>
-    <string name="models_links">Où trouver des modèles</string>
-    <string name="models_links_title">Téléchargements de modèles (dans le navigateur)</string>
+    <string name="models_import_bad_body">Veuillez sélectionner un fichier de modèle .gguf pour transcribe.cpp. Utilisez « Parcourir les sites de modèles » uniquement pour un téléchargement manuel.</string>
+    <string name="models_links">Parcourir les sites de modèles</string>
+    <string name="models_links_title">Sites de modèles</string>
     <string name="models_no_browser">Aucun navigateur trouvé pour ouvrir le lien.</string>
     <string name="models_delete">Supprimer le modèle</string>
     <string name="models_delete_confirm">Supprimer %1$s du stockage de l\'application ?</string>
     <string name="models_language_section">Langue</string>
-    <string name="models_language_desc">La langue transmise au modèle. « Automatique » laisse le modèle décider. Si la parole est transcrite dans la mauvaise langue ou le mauvais alphabet, choisissez votre langue explicitement. Les langues non prises en charge par le modèle actif sont ignorées.</string>
+    <string name="models_language_desc">Utilisez « Automatique », sauf si la langue ou l\'alphabet est incorrect ; les choix incompatibles sont ignorés.</string>
     <string name="models_language_auto">Automatique</string>
     <string name="models_language_saved">Langue enregistrée</string>
     <string name="models_translate">Traduire en anglais</string>
     <string name="models_translate_desc">Pour les modèles qui le prennent en charge (p. ex. Whisper) : la parole dans n\'importe quelle langue devient du texte anglais, y compris dans les sous-titres en direct. Ignoré par les autres modèles.</string>
     <string name="btn_models">Gérer les modèles vocaux</string>
     <string name="models_threads_section">Threads CPU</string>
-    <string name="models_threads_desc">Threads utilisés pour la transcription. « Automatique » choisit une valeur adaptée au processeur de cet appareil. Si la transcription est lente, essayez d\'autres valeurs ; plus de threads n\'est pas toujours plus rapide.</string>
+    <string name="models_threads_desc">« Automatique » est recommandé. Essayez une autre valeur seulement si la transcription est lente.</string>
     <string name="models_threads_auto">Automatique</string>
 
     <string name="section_benchmark">Test de performance</string>
@@ -93,7 +93,6 @@
 
     <string name="section_voice">Saisie vocale</string>
     <string name="voice_status_ready">Prêt. Dans n\'importe quelle app, touchez le micro d\'un clavier pris en charge et votre parole est saisie dans le champ de texte.</string>
-    <string name="voice_status_need_mic">L\'accès au microphone est nécessaire pour la saisie vocale.</string>
     <string name="voice_status_almost">Presque terminé. Quand vous touchez le micro de votre clavier, choisissez « Offline Speech to Text » puis « Toujours ». Touchez « Essayer la saisie vocale » ci-dessous pour le configurer maintenant.</string>
     <string name="btn_voice_try">Essayer la saisie vocale</string>
     <string name="btn_voice_grant">Autoriser le microphone</string>

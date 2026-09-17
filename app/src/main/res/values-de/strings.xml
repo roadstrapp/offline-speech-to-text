@@ -62,21 +62,21 @@
     <string name="models_import_failed">Import fehlgeschlagen: Die Datei konnte nicht kopiert werden.</string>
     <string name="models_import_no_space">Nicht genug freier Speicher, um dieses Modell zu importieren.</string>
     <string name="models_import_bad_title">Kein GGUF-Modell</string>
-    <string name="models_import_bad_body">Bitte wähle eine .gguf-Modelldatei für transcribe.cpp. Tippe auf „Wo gibt es Modelle?“ für Download-Links.</string>
-    <string name="models_links">Wo gibt es Modelle?</string>
-    <string name="models_links_title">Modell-Downloads (öffnen im Browser)</string>
+    <string name="models_import_bad_body">Bitte wähle eine .gguf-Modelldatei für transcribe.cpp. Verwende „Modell-Websites durchsuchen“ nur für einen manuellen Download.</string>
+    <string name="models_links">Modell-Websites durchsuchen</string>
+    <string name="models_links_title">Modell-Websites</string>
     <string name="models_no_browser">Kein Browser gefunden, um den Link zu öffnen.</string>
     <string name="models_delete">Modell löschen</string>
     <string name="models_delete_confirm">%1$s aus dem Speicher der App löschen?</string>
     <string name="models_language_section">Sprache</string>
-    <string name="models_language_desc">Die an das Modell übergebene Sprache. „Automatisch“ lässt das Modell entscheiden. Wird Sprache in der falschen Sprache oder Schrift transkribiert, wähle deine Sprache explizit. Sprachen, die das aktive Modell nicht unterstützt, werden ignoriert.</string>
+    <string name="models_language_desc">Nutze „Automatisch“, außer Sprache oder Schrift ist falsch; nicht unterstützte Optionen werden ignoriert.</string>
     <string name="models_language_auto">Automatisch</string>
     <string name="models_language_saved">Sprache gespeichert</string>
     <string name="models_translate">In Englisch übersetzen</string>
     <string name="models_translate_desc">Für Modelle, die es unterstützen (z. B. Whisper): Sprache in beliebiger Sprache wird zu englischem Text, auch bei Live-Untertiteln. Andere Modelle ignorieren dies.</string>
     <string name="btn_models">Sprachmodelle verwalten</string>
     <string name="models_threads_section">CPU-Threads</string>
-    <string name="models_threads_desc">Threads für die Transkription. „Automatisch“ wählt einen Wert passend zur CPU dieses Geräts. Ist die Transkription langsam, probiere andere Werte; mehr Threads sind nicht immer schneller.</string>
+    <string name="models_threads_desc">„Automatisch“ wird empfohlen. Probiere nur bei langsamer Transkription einen anderen Wert.</string>
     <string name="models_threads_auto">Automatisch</string>
 
     <string name="section_benchmark">Benchmark</string>
@@ -93,7 +93,6 @@
 
     <string name="section_voice">Spracheingabe</string>
     <string name="voice_status_ready">Bereit. Tippe in einer beliebigen App auf das Mikrofon einer unterstützten Tastatur, und deine Sprache wird ins Textfeld getippt.</string>
-    <string name="voice_status_need_mic">Für die Spracheingabe wird Mikrofonzugriff benötigt.</string>
     <string name="voice_status_almost">Fast geschafft. Wenn du auf das Mikrofon deiner Tastatur tippst, wähle „Offline Speech to Text“ und dann „Immer“. Tippe unten auf „Spracheingabe testen“, um das jetzt einzurichten.</string>
     <string name="btn_voice_try">Spracheingabe testen</string>
     <string name="btn_voice_grant">Mikrofonzugriff erteilen</string>

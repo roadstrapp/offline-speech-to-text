@@ -1,4 +1,5 @@
 use jni::objects::{JClass, JObject};
+use jni::sys::{jboolean, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
@@ -13,7 +14,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_RustInputMethodService_
     _class: JClass,
     service: JObject,
 ) {
-    let state = voice_session::init_session(env, service);
+    let state = voice_session::init_session(env, service, voice_session::OWNER_IME);
     *IME_STATE.lock().unwrap() = Some(state);
 }
 
@@ -22,7 +23,9 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_RustInputMethodService_
     _env: JNIEnv,
     _class: JClass,
 ) {
-    *IME_STATE.lock().unwrap() = None;
+    if let Some(mut state) = IME_STATE.lock().unwrap().take() {
+        voice_session::cleanup_session(&mut state);
+    }
 }
 
 #[no_mangle]
@@ -56,5 +59,23 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_RustInputMethodService_
     let mut guard = IME_STATE.lock().unwrap();
     if let Some(state) = guard.as_mut() {
         voice_session::cancel_recording(env, state);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_notune_transcribe_RustInputMethodService_setRecordingPaused(
+    _env: JNIEnv,
+    _class: JClass,
+    paused: jboolean,
+) -> jboolean {
+    let mut guard = IME_STATE.lock().unwrap();
+    let success = guard
+        .as_mut()
+        .map(|state| voice_session::set_recording_paused(state, paused != JNI_FALSE))
+        .unwrap_or(false);
+    if success {
+        JNI_TRUE
+    } else {
+        JNI_FALSE
     }
 }

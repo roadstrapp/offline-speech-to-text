@@ -14,7 +14,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_RecognizeActivity_initN
     _class: JClass,
     activity: JObject,
 ) {
-    let state = voice_session::init_session(env, activity);
+    let state = voice_session::init_session(env, activity, voice_session::OWNER_ACTIVITY);
     *RECOG_STATE.lock().unwrap() = Some(state);
 }
 
@@ -23,7 +23,9 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_RecognizeActivity_clean
     _env: JNIEnv,
     _class: JClass,
 ) {
-    *RECOG_STATE.lock().unwrap() = None;
+    if let Some(mut state) = RECOG_STATE.lock().unwrap().take() {
+        voice_session::cleanup_session(&mut state);
+    }
 }
 
 #[no_mangle]

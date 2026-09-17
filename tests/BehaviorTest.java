@@ -1,0 +1,754 @@
+package dev.notune.transcribe;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.net.URL;
+import java.security.MessageDigest;
+import java.util.Collections;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
+
+public final class BehaviorTest {
+    public static void main(String[] args) throws Exception {
+        if (args.length == 3 && "diagnostic-writer".equals(args[0])) {
+            Path filesDir = Path.of(args[1]);
+            for (int index = 0; index < Integer.parseInt(args[2]); index++) {
+                DiagnosticLog.event(filesDir.toFile(), "timing", "elapsed_ms=" + index);
+            }
+            if (!DiagnosticLog.awaitIdleForTest(10_000)) System.exit(2);
+            return;
+        }
+        themeDefaultsToDarkButPreservesExplicitChoices();
+        successfulImportBecomesActiveModel();
+        exactDefaultModelContractAcceptsOnlyThePinnedArtifact();
+        modelCatalogIsCapabilityHonest();
+        recommendationFiltersBeforeRanking();
+        modelGuidanceUsesConservativeSizeAndDeviceTiers();
+        downloadPolicyIsStrictAboutResumeAndIntegrity();
+        configurationChangesKeepDownloadOwnershipAlive();
+        downloadTrustBoundaryRejectsUntrustedHostsAndDiscardsCancelledStaging();
+        importedModelNamesStayInsidePrivateModelStorage();
+        verifiedInstallerRechecksStagedBytesAndDestinationPath();
+        verifiedModelLabelsRequirePersistedProvenance();
+        setupStatesAreExplicit();
+        imeEditorSafetyIsFailClosed();
+        recordingSessionCommitsOnlyToItsOriginalSafeEditor();
+        deletePreviewMovesByWholeGraphemeClusters();
+        deletePreviewExtendsAnExistingSelectionByCluster();
+        settingsMigrationPreservesUnknownAndFutureState();
+        diagnosticLoggingIsFailClosedAndBounded();
+    }
+
+    private static void themeDefaultsToDarkButPreservesExplicitChoices() {
+        assertEquals(2, StoredThemeMode.resolve(null), "missing theme defaults to dark");
+        assertEquals(2, StoredThemeMode.resolve(""), "empty theme defaults to dark");
+        assertEquals(2, StoredThemeMode.resolve("garbage"), "invalid theme defaults to dark");
+        assertEquals(-1, StoredThemeMode.resolve("-1"), "explicit system choice is preserved");
+        assertEquals(1, StoredThemeMode.resolve("1"), "explicit light choice is preserved");
+        assertEquals(2, StoredThemeMode.resolve("2"), "explicit dark choice is preserved");
+    }
+
+    private static void successfulImportBecomesActiveModel() throws Exception {
+        Path filesDir = Files.createTempDirectory("offline-stt-model-test");
+        ImportedModelSelection.activate(filesDir.toFile(), "custom.gguf");
+        String active = Files.readString(filesDir.resolve("active_model"), StandardCharsets.UTF_8);
+        assertEquals("custom.gguf", active, "successful import selects the imported model");
+        assertThrows(IllegalArgumentException.class,
+                () -> ImportedModelSelection.activate(filesDir.toFile(), "../outside.gguf"),
+                "active model selection rejects names outside private model storage");
+        assertThrows(IllegalArgumentException.class,
+                () -> ImportedModelSelection.activate(filesDir.toFile(), "not-a-model.txt"),
+                "active model selection accepts only model filenames");
+    }
+
+    private static void exactDefaultModelContractAcceptsOnlyThePinnedArtifact() {
+        assertEquals(true, DefaultModelContract.matches(
+                        DefaultModelContract.FILE_NAME,
+                        DefaultModelContract.BYTE_SIZE,
+                        DefaultModelContract.SHA256),
+                "the exact default model is accepted");
+        assertEquals(false, DefaultModelContract.matches(
+                        DefaultModelContract.FILE_NAME,
+                        DefaultModelContract.BYTE_SIZE - 1,
+                        DefaultModelContract.SHA256),
+                "a size mismatch is rejected");
+        assertEquals(false, DefaultModelContract.matches(
+                        DefaultModelContract.FILE_NAME,
+                        DefaultModelContract.BYTE_SIZE,
+                        "0000000000000000000000000000000000000000000000000000000000000000"),
+                "a digest mismatch is rejected");
+    }
+
+    private static void modelCatalogIsCapabilityHonest() {
+        ModelDescriptor model = ModelCatalog.verifiedDefault();
+        assertEquals(DefaultModelContract.FILE_NAME, model.fileName,
+                "catalog and exact artifact contract share one filename");
+        assertEquals(DefaultModelContract.SHA256, model.sha256,
+                "catalog and exact artifact contract share one digest");
+        assertEquals(true, model.supportsLanguage("de-DE"),
+                "the verified Parakeet language set accepts regional tags");
+        assertEquals(false, model.supportsLanguage("zh-CN"),
+                "the catalog does not invent language coverage");
+        assertEquals(ModelDescriptor.Capability.SUPPORTED, model.languageDetection,
+                "automatic language detection is explicit");
+        assertEquals(ModelDescriptor.Capability.UNSUPPORTED, model.translation,
+                "translation is not advertised for Parakeet");
+        assertEquals(ModelDescriptor.Capability.UNKNOWN, model.prompt,
+                "unproven backend features stay unknown");
+        assertEquals(true, model.abis.contains("arm64-v8a")
+                        && !model.requiresDotProduct && !model.requiresFp16,
+                "the baseline backend keeps every arm64 model installable");
+        assertEquals(52, ModelCatalog.verifiedDownloads().size(),
+                "every model variant supported by the pinned runtime is downloadable");
+        assertEquals(true, ModelCatalog.verifiedDownloads().stream().allMatch(
+                        ModelDescriptor::isVerifiedDownload),
+                "every catalog download has an exact size, digest, and HTTPS source");
+        Set<String> modelIds = new HashSet<>();
+        Set<String> modelFiles = new HashSet<>();
+        for (ModelDescriptor candidate : ModelCatalog.verifiedDownloads()) {
+            assertEquals(true, modelIds.add(candidate.id), "catalog model IDs are unique");
+            assertEquals(true, modelFiles.add(candidate.fileName),
+                    "catalog model filenames are unique");
+        }
+        assertEquals(true, ModelCatalog.verifiedDownloads().stream().anyMatch(
+                        candidate -> candidate.architecture.equals("Whisper")
+                                && candidate.fileName.contains("large-v3")),
+                "the catalog includes large Whisper variants");
+        ModelDescriptor whisper = ModelCatalog.findByFileName("whisper-small-Q4_K_M.gguf");
+        assertEquals(true, whisper.supportsLanguage("ta-IN"),
+                "multilingual Whisper guidance includes its broad language set");
+        assertEquals(false, whisper.supportsLanguage("yue-HK"),
+                "pre-v3 Whisper is not advertised for Cantonese");
+        ModelDescriptor turbo = ModelCatalog.findByFileName(
+                "whisper-large-v3-turbo-Q4_K_M.gguf");
+        assertEquals(true, turbo.supportsLanguage("yue-HK"),
+                "Whisper v3 guidance includes Cantonese");
+        assertEquals(ModelDescriptor.Capability.UNSUPPORTED, turbo.translation,
+                "Whisper Turbo is not advertised as a translating model");
+        assertEquals(true, ModelCatalog.verifiedDownloads().stream().anyMatch(
+                        candidate -> candidate.architecture.equals("Parakeet")
+                                && candidate.fileName.contains("1.1b")),
+                "the catalog includes larger Parakeet variants");
+    }
+
+    private static void recommendationFiltersBeforeRanking() {
+        ModelRecommendation.DeviceProfile capable = new ModelRecommendation.DeviceProfile(
+                true, true, true, 4L << 30, 2L << 30, null);
+        ModelRecommendation.Result accepted = ModelRecommendation.recommend(
+                capable, new ModelRecommendation.Request("fr-FR", false));
+        assertEquals(ModelRecommendation.Status.RECOMMENDED, accepted.status,
+                "a compatible device and supported language get the verified model");
+
+        ModelRecommendation.Result language = ModelRecommendation.recommend(
+                capable, new ModelRecommendation.Request("zh-CN", false));
+        assertEquals(ModelRecommendation.Status.RECOMMENDED, language.status,
+                "balanced guidance chooses a multilingual fallback when Parakeet lacks the language");
+        assertEquals("whisper-small-Q4_K_M.gguf", language.model.fileName,
+                "the multilingual fallback remains practical on a capable phone");
+
+        ModelRecommendation.Result translation = ModelRecommendation.recommend(
+                capable, new ModelRecommendation.Request("fr-FR", true));
+        assertEquals(ModelRecommendation.Status.RECOMMENDED, translation.status,
+                "translation selects a model family that supports translation");
+        assertEquals("whisper-small-Q4_K_M.gguf", translation.model.fileName,
+                "translation does not suggest the non-translating default");
+        ModelRecommendation.Result automaticTranslation = ModelRecommendation.recommend(
+                capable, new ModelRecommendation.Request(
+                        "", true, ModelRecommendation.Goal.BALANCED));
+        assertEquals("whisper-small-Q4_K_M.gguf", automaticTranslation.model.fileName,
+                "balanced translation with automatic language still chooses Whisper");
+
+        ModelRecommendation.Result storage = ModelRecommendation.recommend(
+                new ModelRecommendation.DeviceProfile(true, true, true, 4L << 30,
+                        DefaultModelContract.BYTE_SIZE, null),
+                new ModelRecommendation.Request("en-US", false));
+        assertEquals(true, storage.reasons.contains(ModelRecommendation.Reason.INSUFFICIENT_STORAGE),
+                "storage headroom is required before any download");
+
+        ModelRecommendation.Result compact = ModelRecommendation.recommend(
+                capable, new ModelRecommendation.Request(
+                        "en-US", false, ModelRecommendation.Goal.COMPACT));
+        assertEquals("whisper-tiny.en-Q4_K_M.gguf", compact.model.fileName,
+                "compact English chooses the smallest English Whisper variant");
+        ModelRecommendation.Result multilingual = ModelRecommendation.recommend(
+                capable, new ModelRecommendation.Request(
+                        "zh-CN", false, ModelRecommendation.Goal.MULTILINGUAL));
+        assertEquals("whisper-small-Q4_K_M.gguf", multilingual.model.fileName,
+                "broad-language choice falls back to a phone-sized multilingual model");
+        ModelRecommendation.Result cantonese = ModelRecommendation.recommend(
+                new ModelRecommendation.DeviceProfile(
+                        true, true, true, 8L << 30, 4L << 30, null),
+                new ModelRecommendation.Request(
+                        "yue-HK", false, ModelRecommendation.Goal.MULTILINGUAL));
+        assertEquals("whisper-large-v3-turbo-Q4_K_M.gguf", cantonese.model.fileName,
+                "Cantonese routes to the smallest compatible Whisper v3 model");
+        ModelRecommendation.Result translating = ModelRecommendation.recommend(
+                capable, new ModelRecommendation.Request(
+                        "de-DE", true, ModelRecommendation.Goal.TRANSLATE));
+        assertEquals("whisper-small-Q4_K_M.gguf", translating.model.fileName,
+                "translation chooses a proven non-Turbo multilingual Whisper model");
+    }
+
+    private static void downloadPolicyIsStrictAboutResumeAndIntegrity() {
+        assertEquals(ModelDownloadPolicy.ResumeAction.APPEND,
+                ModelDownloadPolicy.resumeAction(100, 206, "bytes 100-999/1000", "v1", "v1"),
+                "a matching ranged response resumes");
+        assertEquals(ModelDownloadPolicy.ResumeAction.RESTART,
+                ModelDownloadPolicy.resumeAction(100, 200, null, "v1", "v1"),
+                "a server ignoring Range restarts safely");
+        assertEquals(ModelDownloadPolicy.ResumeAction.RESTART,
+                ModelDownloadPolicy.resumeAction(100, 206, "bytes 100-999/1000", "v1", "v2"),
+                "a changed validator restarts safely");
+        assertEquals(false, ModelDownloadPolicy.acceptArtifact(
+                        DefaultModelContract.BYTE_SIZE - 1, DefaultModelContract.SHA256,
+                        ModelCatalog.verifiedDefault()),
+                "a truncated artifact never activates");
+        assertEquals(true, ModelDownloadPolicy.acceptArtifact(
+                        DefaultModelContract.BYTE_SIZE, DefaultModelContract.SHA256,
+                        ModelCatalog.verifiedDefault()),
+                "only exact bytes and digest activate");
+    }
+
+    private static void downloadTrustBoundaryRejectsUntrustedHostsAndDiscardsCancelledStaging()
+            throws Exception {
+        ModelDownloadTask.requireAllowedHttps(new URL(
+                "https://cdn-lfs.huggingface.co/model.gguf"));
+        assertThrows(java.io.IOException.class,
+                () -> ModelDownloadTask.requireAllowedHttps(new URL(
+                        "http://huggingface.co/model.gguf")),
+                "cleartext model downloads are rejected");
+        assertThrows(java.io.IOException.class,
+                () -> ModelDownloadTask.requireAllowedHttps(new URL(
+                        "https://huggingface.co.attacker.example/model.gguf")),
+                "lookalike model hosts are rejected");
+
+        byte[] expected = "complete model bytes".getBytes(StandardCharsets.UTF_8);
+        Path filesDir = Files.createTempDirectory("offline-stt-download-cancel-test");
+        ModelDescriptor descriptor = testDescriptor("cancel-model", "cancel.gguf", expected,
+                "https://example.invalid/model.gguf");
+        Path downloads = filesDir.resolve("models").resolve(".downloads");
+        Files.createDirectories(downloads);
+        Path part = downloads.resolve(descriptor.id + ".part");
+        Path validator = downloads.resolve(descriptor.id + ".validator");
+        Files.writeString(part, "partial model bytes", StandardCharsets.UTF_8);
+        Files.writeString(validator, "etag", StandardCharsets.UTF_8);
+
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicReference<String> outcome = new AtomicReference<>();
+        ModelDownloadTask.start(filesDir.toFile(), descriptor,
+                new ModelDownloadTask.Listener() {
+                    @Override public void onStarted(ModelDownloadTask.Handle handle) {
+                        handle.cancel();
+                    }
+                    @Override public void onProgress(long downloaded, long total) {}
+                    @Override public void onComplete(String installedName) {
+                        outcome.set("completed");
+                        finished.countDown();
+                    }
+                    @Override public void onFailure(String reason) {
+                        outcome.set(reason);
+                        finished.countDown();
+                    }
+                });
+
+        assertEquals(true, finished.await(5, java.util.concurrent.TimeUnit.SECONDS),
+                "cancelled download reaches a bounded terminal callback");
+        assertEquals("Download cancelled.", outcome.get(),
+                "cancelled download reports the safe cancellation reason");
+        assertEquals(false, Files.exists(part),
+                "cancel removes the hidden staged model bytes");
+        assertEquals(false, Files.exists(validator),
+                "cancel removes the stale resume validator");
+    }
+
+    private static void configurationChangesKeepDownloadOwnershipAlive() {
+        ModelDownloadLifecycle lifecycle = new ModelDownloadLifecycle();
+        AtomicBoolean cancelled = new AtomicBoolean();
+        AtomicReference<ModelDownloadTask.Listener> taskListener = new AtomicReference<>();
+        List<ModelDownloadLifecycle.Snapshot> firstUi = new ArrayList<>();
+        List<ModelDownloadLifecycle.Snapshot> recreatedUi = new ArrayList<>();
+        ModelDownloadLifecycle.Observer firstObserver = firstUi::add;
+        ModelDownloadLifecycle.Observer recreatedObserver = recreatedUi::add;
+
+        lifecycle.attach(firstObserver);
+        assertEquals(true, lifecycle.start("model-a", "catalog", listener -> {
+            taskListener.set(listener);
+            ModelDownloadTask.Handle handle = new ModelDownloadTask.Handle(cancelled);
+            listener.onStarted(handle);
+            return handle;
+        }), "the lifecycle owner starts one explicit download");
+        taskListener.get().onProgress(5, 10);
+        lifecycle.detach(firstObserver);
+        lifecycle.attach(recreatedObserver);
+
+        ModelDownloadLifecycle.Snapshot restored =
+                recreatedUi.get(recreatedUi.size() - 1);
+        assertEquals(ModelDownloadLifecycle.State.RUNNING, restored.state,
+                "recreated UI observes the existing download owner");
+        assertEquals(5L, restored.downloaded,
+                "recreated UI receives retained progress");
+        assertEquals("model-a", restored.modelId,
+                "recreated UI keeps the exact card that owns progress");
+        assertEquals("catalog", restored.origin,
+                "recreated UI keeps the surface that started the download");
+        lifecycle.cancel();
+        assertEquals(true, cancelled.get(),
+                "recreated UI can cancel the retained task handle");
+
+        ModelDownloadLifecycle completed = new ModelDownloadLifecycle();
+        AtomicReference<ModelDownloadTask.Listener> completingTask = new AtomicReference<>();
+        ModelDownloadLifecycle.Observer detached = snapshot -> {};
+        completed.attach(detached);
+        completed.start("model-b", "recommended", listener -> {
+            completingTask.set(listener);
+            ModelDownloadTask.Handle handle =
+                    new ModelDownloadTask.Handle(new AtomicBoolean());
+            listener.onStarted(handle);
+            return handle;
+        });
+        completed.detach(detached);
+        completingTask.get().onComplete("verified.gguf");
+        List<ModelDownloadLifecycle.Snapshot> restoredCompletion = new ArrayList<>();
+        completed.attach(restoredCompletion::add);
+        assertEquals(ModelDownloadLifecycle.State.COMPLETE,
+                restoredCompletion.get(restoredCompletion.size() - 1).state,
+                "terminal completion is delivered after recreation");
+
+        ModelDownloadLifecycle failed = new ModelDownloadLifecycle();
+        AtomicReference<ModelDownloadTask.Listener> failingTask = new AtomicReference<>();
+        failed.start("model-c", "catalog", listener -> {
+            failingTask.set(listener);
+            return new ModelDownloadTask.Handle(new AtomicBoolean());
+        });
+        failingTask.get().onFailure("Downloaded file failed integrity verification.");
+        List<ModelDownloadLifecycle.Snapshot> restoredFailure = new ArrayList<>();
+        AtomicBoolean firstFailureUiAnnounced = new AtomicBoolean();
+        ModelDownloadLifecycle.Observer firstFailureObserver = snapshot -> {
+            restoredFailure.add(snapshot);
+            if (snapshot.state == ModelDownloadLifecycle.State.FAILED) {
+                firstFailureUiAnnounced.set(failed.consumeFailureAnnouncement());
+            }
+        };
+        failed.attach(firstFailureObserver);
+        assertEquals(ModelDownloadLifecycle.State.FAILED,
+                restoredFailure.get(restoredFailure.size() - 1).state,
+                "failed model id remains available for the card-local Retry label");
+        assertEquals(true, firstFailureUiAnnounced.get(),
+                "the first visible UI consumes the failure announcement");
+        failed.detach(firstFailureObserver);
+        List<ModelDownloadLifecycle.Snapshot> secondFailureUi = new ArrayList<>();
+        failed.attach(snapshot -> {
+            secondFailureUi.add(snapshot);
+            assertEquals(false, failed.consumeFailureAnnouncement(),
+                    "recreated UI does not replay the failure snackbar or modal dialog");
+        });
+    }
+
+    private static void modelGuidanceUsesConservativeSizeAndDeviceTiers() {
+        ModelDescriptor compact = ModelCatalog.findByFileName("whisper-tiny-Q4_K_M.gguf");
+        ModelDescriptor phone = ModelCatalog.verifiedDefault();
+        ModelDescriptor huge = ModelCatalog.findByFileName(
+                "Voxtral-Small-24B-2507-Q4_K_M.gguf");
+        assertEquals(ModelDescriptor.SizeTier.COMPACT, compact.sizeTier(),
+                "sub-128 MiB models are called compact");
+        assertEquals(ModelDescriptor.SizeTier.PHONE_FRIENDLY, phone.sizeTier(),
+                "the bundled default stays in the phone-friendly tier");
+        assertEquals(ModelDescriptor.SizeTier.VERY_LARGE, huge.sizeTier(),
+                "multi-gigabyte models are not presented as ordinary phone downloads");
+        ModelRecommendation.DeviceProfile ordinaryPhone = new ModelRecommendation.DeviceProfile(
+                true, true, true, 4L << 30, 4L << 30, null);
+        assertEquals(ModelGuidance.DeviceFit.GOOD,
+                ModelGuidance.fit(phone, ordinaryPhone),
+                "a compatible phone gets a non-promissory good-fit label");
+        assertEquals(ModelGuidance.DeviceFit.NOT_ENOUGH_RAM,
+                ModelGuidance.fit(huge, ordinaryPhone),
+                "large models are rejected before download when estimated RAM is insufficient");
+    }
+
+    private static void importedModelNamesStayInsidePrivateModelStorage() {
+        assertEquals(true, ModelInstaller.isSafeModelName("local-model.gguf"),
+                "ordinary GGUF names are accepted");
+        assertEquals(false, ModelInstaller.isSafeModelName("../outside.gguf"),
+                "parent traversal is rejected before creating a part file");
+        assertEquals(false, ModelInstaller.isSafeModelName("folder/model.gguf"),
+                "nested paths are rejected before creating a part file");
+        assertEquals(false, ModelInstaller.isSafeModelName(" model.gguf"),
+                "ambiguous padded names are rejected");
+    }
+
+    private static void verifiedInstallerRechecksStagedBytesAndDestinationPath()
+            throws Exception {
+        byte[] approved = "approved model bytes".getBytes(StandardCharsets.UTF_8);
+        ModelDescriptor descriptor = testDescriptor("verified.gguf", approved);
+        Path tamperedFiles = Files.createTempDirectory("offline-stt-installer-tampered-test");
+        Path tamperedStage = tamperedFiles.resolve("staged.part");
+        Files.writeString(tamperedStage, "tampered model bytes", StandardCharsets.UTF_8);
+
+        assertThrows(java.io.IOException.class,
+                () -> ModelInstaller.installVerified(
+                        tamperedFiles.toFile(), tamperedStage.toFile(), descriptor),
+                "installer rechecks staged bytes at the final trust boundary");
+        assertEquals(false, Files.exists(tamperedFiles.resolve("models").resolve("verified.gguf")),
+                "tampered staged bytes never reach model storage");
+        assertEquals(true, Files.exists(tamperedStage),
+                "rejected staged bytes remain available to the caller for cleanup");
+
+        Path unsafeFiles = Files.createTempDirectory("offline-stt-installer-path-test");
+        Path unsafeStage = unsafeFiles.resolve("staged.part");
+        Files.write(unsafeStage, approved);
+        ModelDescriptor unsafe = testDescriptor("../outside.gguf", approved);
+        assertThrows(java.io.IOException.class,
+                () -> ModelInstaller.installVerified(
+                        unsafeFiles.toFile(), unsafeStage.toFile(), unsafe),
+                "verified installation rejects a destination outside model storage");
+        assertEquals(false, Files.exists(unsafeFiles.resolve("outside.gguf")),
+                "unsafe descriptor paths never create files outside model storage");
+
+        Path cancelledFiles = Files.createTempDirectory("offline-stt-installer-cancel-test");
+        Path cancelledStage = cancelledFiles.resolve("staged.part");
+        Files.write(cancelledStage, approved);
+        assertThrows(java.io.IOException.class,
+                () -> ModelInstaller.installVerified(cancelledFiles.toFile(),
+                        cancelledStage.toFile(), descriptor, () -> true),
+                "cancellation is rechecked at the final install boundary");
+        assertEquals(false,
+                Files.exists(cancelledFiles.resolve("models").resolve("verified.gguf")),
+                "a cancelled download never activates after hashing");
+        assertEquals(true, Files.exists(cancelledStage),
+                "cancelled staged bytes remain available for bounded cleanup");
+
+        Path validFiles = Files.createTempDirectory("offline-stt-installer-valid-test");
+        Path validStage = validFiles.resolve("staged.part");
+        Files.write(validStage, approved);
+        assertEquals("verified.gguf", ModelInstaller.installVerified(
+                        validFiles.toFile(), validStage.toFile(), descriptor),
+                "exact staged bytes install successfully");
+        assertEquals("verified.gguf", Files.readString(validFiles.resolve("active_model")),
+                "verified installation atomically activates the accepted model");
+        assertEquals(true, VerifiedModelProvenance.isVerified(
+                        validFiles.toFile(),
+                        validFiles.resolve("models/verified.gguf").toFile(), descriptor),
+                "verified installation persists provenance for capability labels");
+    }
+
+    private static void verifiedModelLabelsRequirePersistedProvenance() throws Exception {
+        byte[] bytes = "verified provenance".getBytes(StandardCharsets.UTF_8);
+        ModelDescriptor descriptor = testDescriptor(
+                "verified-provenance", "recommended.gguf", bytes,
+                "https://huggingface.co/example/repo/resolve/commit/recommended.gguf");
+        Path filesDir = Files.createTempDirectory("offline-stt-provenance-test");
+        Path modelsDir = Files.createDirectories(filesDir.resolve("models"));
+        Path model = modelsDir.resolve(descriptor.fileName);
+        Files.write(model, bytes);
+
+        assertEquals(false, VerifiedModelProvenance.isVerified(
+                        filesDir.toFile(), model.toFile(), descriptor),
+                "filename and size alone do not claim verified model provenance");
+        VerifiedModelProvenance.markVerified(
+                filesDir.toFile(), model.toFile(), descriptor);
+        assertEquals(true, VerifiedModelProvenance.isVerified(
+                        filesDir.toFile(), model.toFile(), descriptor),
+                "installer-owned provenance enables verified model metadata");
+        VerifiedModelProvenance.forget(filesDir.toFile(), descriptor.fileName);
+        assertEquals(false, VerifiedModelProvenance.isVerified(
+                        filesDir.toFile(), model.toFile(), descriptor),
+                "deletion clears verified provenance before a same-name import");
+    }
+
+    private static ModelDescriptor testDescriptor(String fileName, byte[] bytes) throws Exception {
+        return testDescriptor("test-model", fileName, bytes,
+                "https://huggingface.co/example/model.gguf");
+    }
+
+    private static ModelDescriptor testDescriptor(String id, String fileName, byte[] bytes,
+                                                  String downloadUrl) throws Exception {
+        String digest = hex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        return new ModelDescriptor(id, "Test model", "test", "test", fileName,
+                bytes.length, digest, downloadUrl,
+                "https://huggingface.co/example", "test-license",
+                "https://example.invalid/license", Collections.singleton("arm64-v8a"),
+                false, false, Collections.singleton("en"),
+                ModelDescriptor.Capability.SUPPORTED, ModelDescriptor.Capability.UNSUPPORTED,
+                ModelDescriptor.Capability.UNKNOWN, ModelDescriptor.Capability.UNKNOWN,
+                1, 1, ModelDescriptor.Provenance.EXACT_PINNED);
+    }
+
+    private static String hex(byte[] bytes) {
+        StringBuilder result = new StringBuilder(bytes.length * 2);
+        for (byte value : bytes) result.append(String.format("%02x", value & 0xff));
+        return result.toString();
+    }
+
+    private static void setupStatesAreExplicit() {
+        assertEquals(SetupState.Microphone.NOT_REQUESTED,
+                SetupState.microphone(false, false, false), "mic not requested");
+        assertEquals(SetupState.Microphone.DENIED,
+                SetupState.microphone(false, true, true), "mic denied with retry");
+        assertEquals(SetupState.Microphone.DENIED_PERMANENTLY,
+                SetupState.microphone(false, true, false), "mic denied permanently");
+        assertEquals(SetupState.Microphone.GRANTED,
+                SetupState.microphone(true, true, false), "mic granted");
+        assertEquals(SetupState.Ime.DISABLED,
+                SetupState.ime(false, false), "IME disabled");
+        assertEquals(SetupState.Ime.ENABLED,
+                SetupState.ime(true, false), "IME enabled");
+        assertEquals(SetupState.Ime.SELECTED,
+                SetupState.ime(true, true), "IME selected");
+    }
+
+    private static void imeEditorSafetyIsFailClosed() {
+        assertEquals(false, ImeTextEdit.isSensitiveEditor(0x00000001, 0),
+                "ordinary text fields allow local dictation");
+        assertEquals(true, ImeTextEdit.isSensitiveEditor(0x00000081, 0),
+                "text passwords reject dictation");
+        assertEquals(true, ImeTextEdit.isSensitiveEditor(0x00000091, 0),
+                "visible text passwords reject dictation");
+        assertEquals(true, ImeTextEdit.isSensitiveEditor(0x000000e1, 0),
+                "web passwords reject dictation");
+        assertEquals(true, ImeTextEdit.isSensitiveEditor(0x00000012, 0),
+                "numeric passwords reject dictation");
+        assertEquals(false, ImeTextEdit.isSensitiveEditor(0x00000001, 0x01000000),
+                "private no-learning fields allow content-free local dictation");
+    }
+
+    private static void recordingSessionCommitsOnlyToItsOriginalSafeEditor() {
+        Object originalEditor = new Object();
+        Object replacementEditor = new Object();
+        ImeRecordingSession session = new ImeRecordingSession();
+
+        session.begin(originalEditor);
+        assertEquals(true, session.canCommitTo(originalEditor, true, true),
+                "a transcription may commit to its original active safe editor");
+        assertEquals(false, session.canCommitTo(replacementEditor, true, true),
+                "a transcription never commits to a different editor");
+        assertEquals(false, session.canCommitTo(originalEditor, false, true),
+                "a transcription never commits to a sensitive editor");
+        assertEquals(false, session.canCommitTo(originalEditor, true, false),
+                "a transcription never commits without active input");
+
+        ImeRecordingSession failedSession = new ImeRecordingSession();
+        failedSession.begin(originalEditor);
+        failedSession.onError();
+        assertEquals(false, failedSession.canCommitTo(originalEditor, true, true),
+                "an error fail-closes an otherwise active recording");
+
+        session.discard();
+        session.onError();
+        assertEquals(false, session.canCommitTo(originalEditor, true, true),
+                "an error cannot clear the discard latch for a late transcription");
+
+        session.begin(originalEditor);
+        assertEquals(true, session.canCommitTo(originalEditor, true, true),
+                "only a new recording clears the discard latch");
+        session.finish();
+        assertEquals(false, session.canCommitTo(originalEditor, true, true),
+                "a completed session cannot replay into an editor");
+    }
+
+    private static void deletePreviewMovesByWholeGraphemeClusters() {
+        String text = "A👩‍💻e\u0301אב";
+        int cursor = "A👩‍💻e\u0301".length();
+
+        ImeTextEdit.Range previous = ImeTextEdit.selectionForClusterDelta(text, cursor, -1);
+        assertEquals("e\u0301", text.substring(previous.start, previous.end),
+                "combining sequence remains one deletion unit");
+
+        ImeTextEdit.Range emoji = ImeTextEdit.selectionForClusterDelta(text, cursor, -2);
+        assertEquals("👩‍💻e\u0301", text.substring(emoji.start, emoji.end),
+                "ZWJ emoji remains one deletion unit");
+
+        ImeTextEdit.Range rtl = ImeTextEdit.selectionForClusterDelta(text, cursor, 2);
+        assertEquals("אב", text.substring(rtl.start, rtl.end),
+                "forward preview supports RTL text without reordering it");
+
+        ImeTextEdit.Range oddRegionalRun = ImeTextEdit.selectionForClusterDelta("🇦🇧🇨", "🇦🇧🇨".length(), -1);
+        assertEquals("🇨", "🇦🇧🇨".substring(oddRegionalRun.start, oddRegionalRun.end),
+                "an odd regional-indicator run leaves its final indicator unpaired");
+        ImeTextEdit.Range crlf = ImeTextEdit.selectionForClusterDelta("\r\n", 2, -1);
+        assertEquals("\r\n", "\r\n".substring(crlf.start, crlf.end),
+                "CRLF remains one grapheme cluster");
+        ImeTextEdit.Range internalCombining = ImeTextEdit.selectionForClusterDelta("e\u0301", 1, 1);
+        assertEquals("e\u0301", "e\u0301".substring(internalCombining.start, internalCombining.end),
+                "a cursor inside a grapheme snaps to a safe cluster boundary");
+
+        for (String cluster : new String[]{"각", "क्‍ष", "🏴󠁧󠁢󠁥󠁮󠁧󠁿"}) {
+            ImeTextEdit.Range complex = ImeTextEdit.selectionForClusterDelta(cluster, cluster.length(), -1);
+            assertEquals(cluster, cluster.substring(complex.start, complex.end),
+                    "complex Unicode sequence remains one deletion unit");
+        }
+
+        ImeTextEdit.Range leftBoundary = ImeTextEdit.selectionForClusterDelta(text, 0, -20);
+        assertEquals(new ImeTextEdit.Range(0, 0), leftBoundary,
+                "preview clamps at the start of the editor");
+        ImeTextEdit.Range rightBoundary = ImeTextEdit.selectionForClusterDelta(text, text.length(), 20);
+        assertEquals(new ImeTextEdit.Range(text.length(), text.length()), rightBoundary,
+                "preview clamps at the end of the editor");
+
+        String conjunctAndPunctuation = "क्ष,";
+        assertEquals(new ImeTextEdit.Range(0, 3),
+                ImeTextEdit.selectionForClusterDelta(conjunctAndPunctuation, 0, 1),
+                "virama conjuncts stay whole before punctuation");
+        assertEquals(new ImeTextEdit.Range(3, 4),
+                ImeTextEdit.selectionForClusterDelta(conjunctAndPunctuation, 3, 1),
+                "punctuation after a virama conjunct remains its own cluster");
+        assertEquals(new ImeTextEdit.Range(2, 3),
+                ImeTextEdit.selectionForClusterDelta("क्,", 2, 1),
+                "punctuation after a terminal virama is not absorbed");
+        assertEquals(new ImeTextEdit.Range(2, 3),
+                ImeTextEdit.selectionForClusterDelta("a‍ ", 2, 1),
+                "whitespace after a dangling ZWJ is not absorbed");
+    }
+
+    private static void deletePreviewExtendsAnExistingSelectionByCluster() {
+        String family = "ab👨‍👩‍👧‍👦cd";
+        int familyEnd = family.offsetByCodePoints(2, 7);
+        assertEquals(new ImeTextEdit.Range(1, familyEnd),
+                ImeTextEdit.selectionForClusterDelta(family, 2, familyEnd, -1),
+                "dragging left extends the existing selection without dropping it");
+        assertEquals(new ImeTextEdit.Range(2, familyEnd + 1),
+                ImeTextEdit.selectionForClusterDelta(family, 2, familyEnd, 1),
+                "dragging right extends the existing selection without dropping it");
+    }
+
+    private static void settingsMigrationPreservesUnknownAndFutureState() throws Exception {
+        Path filesDir = Files.createTempDirectory("offline-stt-settings-test");
+        Path model = filesDir.resolve("models").resolve("custom.gguf");
+        Files.createDirectories(model.getParent());
+        Files.writeString(model, "model-bytes", StandardCharsets.UTF_8);
+        Path unknown = filesDir.resolve("future_setting");
+        Files.writeString(unknown, "keep", StandardCharsets.UTF_8);
+        Files.writeString(filesDir.resolve(".settings_schema.tmp"), "interrupted",
+                StandardCharsets.UTF_8);
+
+        assertEquals(SettingsSchema.CURRENT, SettingsSchema.migrate(filesDir.toFile()),
+                "legacy settings migrate to current schema");
+        assertEquals("model-bytes", Files.readString(model, StandardCharsets.UTF_8),
+                "migration preserves imported models");
+        assertEquals("keep", Files.readString(unknown, StandardCharsets.UTF_8),
+                "migration preserves unknown settings");
+
+        Files.writeString(filesDir.resolve(".settings_schema"), "99", StandardCharsets.UTF_8);
+        assertEquals(99, SettingsSchema.migrate(filesDir.toFile()),
+                "future schema is not downgraded");
+        assertEquals("99", Files.readString(filesDir.resolve(".settings_schema"),
+                StandardCharsets.UTF_8), "future schema marker is unchanged");
+    }
+
+    private static void diagnosticLoggingIsFailClosedAndBounded() throws Exception {
+        Path filesDir = Files.createTempDirectory("offline-stt-diagnostic-log-test");
+        Path disabledDir = filesDir.resolve("disabled");
+        DiagnosticLog.event(disabledDir.toFile(), "app_start", "process=app");
+        assertEquals(false, Files.exists(disabledDir),
+                "disabled logging returns before touching the file system");
+        DiagnosticLog.event(filesDir.toFile(), "app_start", "process=app");
+        assertEquals(false, Files.exists(filesDir.resolve("diagnostic.log")),
+                "diagnostic logging defaults off");
+
+        DiagnosticLog.setEnabled(filesDir.toFile(), true);
+        DiagnosticLog.event(filesDir.toFile(), "app_start", "process=app");
+        assertEquals(true, DiagnosticLog.awaitIdleForTest(5_000), "diagnostic writer drains");
+        String first = Files.readString(filesDir.resolve("diagnostic.log"), StandardCharsets.UTF_8);
+        assertEquals(true, first.contains("app_start process=app"),
+                "allowlisted metadata is recorded while enabled");
+
+        DiagnosticLog.event(filesDir.toFile(), "transcript", "secret words");
+        DiagnosticLog.event(filesDir.toFile(), "ime_state", "editor=secret words");
+        DiagnosticLog.event(filesDir.toFile(), "ime_state", "state=secret");
+        assertEquals(true, DiagnosticLog.awaitIdleForTest(5_000), "rejected events do not stall writer");
+        String safe = Files.readString(filesDir.resolve("diagnostic.log"), StandardCharsets.UTF_8);
+        assertEquals(false, safe.contains("secret"),
+                "speech and editor content are structurally rejected");
+
+        CountDownLatch start = new CountDownLatch(1);
+        AtomicReference<Throwable> concurrentFailure = new AtomicReference<>();
+        Thread[] writers = new Thread[8];
+        for (int thread = 0; thread < writers.length; thread++) {
+            final int writer = thread;
+            writers[thread] = new Thread(() -> {
+                try {
+                    start.await();
+                    for (int i = 0; i < 200; i++) {
+                        DiagnosticLog.event(filesDir.toFile(), "timing",
+                                "elapsed_ms=" + (writer * 200 + i));
+                    }
+                } catch (Throwable error) {
+                    concurrentFailure.compareAndSet(null, error);
+                }
+            });
+            writers[thread].start();
+        }
+        start.countDown();
+        for (Thread writer : writers) writer.join();
+        assertEquals(true, DiagnosticLog.awaitIdleForTest(5_000), "concurrent events drain");
+        assertEquals(false, concurrentFailure.get() != null,
+                "same-process concurrent diagnostics never throw");
+
+        String java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
+        String classPath = System.getProperty("java.class.path");
+        Process firstWriter = new ProcessBuilder(java, "-cp", classPath,
+                BehaviorTest.class.getName(), "diagnostic-writer", filesDir.toString(), "400").start();
+        Process secondWriter = new ProcessBuilder(java, "-cp", classPath,
+                BehaviorTest.class.getName(), "diagnostic-writer", filesDir.toString(), "400").start();
+        assertEquals(0, firstWriter.waitFor(), "first diagnostic process exits cleanly");
+        assertEquals(0, secondWriter.waitFor(), "second diagnostic process exits cleanly");
+        String crossProcessLog = Files.readString(filesDir.resolve("diagnostic.log"));
+        assertEquals(true, crossProcessLog.endsWith("\n"),
+                "cross-process log ends at a record boundary");
+        Pattern record = Pattern.compile(
+                "^\\d+ (?:app_start|state|error|model|timing|resource)(?: [a-z_]+=[a-z0-9_.-]+(?:,[a-z_]+=[a-z0-9_.-]+)*)?$");
+        for (String line : crossProcessLog.split("\\R")) {
+            assertEquals(true, record.matcher(line).matches(),
+                    "cross-process log record is intact");
+        }
+
+        for (int i = 0; i < 5000; i++) {
+            DiagnosticLog.event(filesDir.toFile(), "timing", "elapsed_ms=" + i);
+            if (i % 200 == 199) {
+                assertEquals(true, DiagnosticLog.awaitIdleForTest(5_000),
+                        "retention batch drains");
+            }
+        }
+        assertEquals(true, DiagnosticLog.awaitIdleForTest(5_000), "retention events drain");
+        long retainedSize = Files.size(filesDir.resolve("diagnostic.log"));
+        assertEquals(true, retainedSize > 0 && retainedSize <= DiagnosticLog.MAX_BYTES,
+                "diagnostic log retention is bounded");
+
+        DiagnosticLog.setEnabled(filesDir.toFile(), false);
+        long disabledSize = Files.size(filesDir.resolve("diagnostic.log"));
+        DiagnosticLog.event(filesDir.toFile(), "app_start", "process=ime");
+        assertEquals(disabledSize, Files.size(filesDir.resolve("diagnostic.log")),
+                "disabling is immediate for every process");
+        DiagnosticLog.clear(filesDir.toFile());
+        assertEquals(false, Files.exists(filesDir.resolve("diagnostic.log")),
+                "clear removes retained diagnostics");
+    }
+
+    private static void assertEquals(Object expected, Object actual, String message) {
+        if (!expected.equals(actual)) {
+            throw new AssertionError(message + ": expected " + expected + ", got " + actual);
+        }
+    }
+
+    private static void assertThrows(Class<? extends Throwable> expected,
+                                     ThrowingRunnable action, String message) {
+        try {
+            action.run();
+        } catch (Throwable error) {
+            if (expected.isInstance(error)) return;
+            throw new AssertionError(message + ": expected " + expected.getName()
+                    + ", got " + error.getClass().getName(), error);
+        }
+        throw new AssertionError(message + ": expected " + expected.getName());
+    }
+
+    private interface ThrowingRunnable {
+        void run() throws Exception;
+    }
+}

@@ -45,9 +45,14 @@ pub fn extract_builtin_model(env: &mut JNIEnv, context: &JObject) -> anyhow::Res
     let model_dir = base_path.join(BUILTIN_MODEL_DIR);
     let marker_file = model_dir.join(EXTRACTION_COMPLETE_MARKER);
 
-    // Only skip extraction if the marker file exists (proves prior extraction completed)
+    // Older non-bundled builds could leave a marker after AssetManager.open
+    // found no model. Never trust the marker without the actual GGUF; upgrades
+    // to a bundled build must repair that state automatically.
     if marker_file.exists() {
-        return find_gguf(&model_dir);
+        if let Ok(model) = find_gguf(&model_dir) {
+            return Ok(model);
+        }
+        log::warn!("Bundled-model marker exists without a GGUF; re-extracting");
     }
 
     // Incomplete or missing — wipe and re-extract
@@ -69,11 +74,13 @@ pub fn extract_builtin_model(env: &mut JNIEnv, context: &JObject) -> anyhow::Res
 
     copy_assets_recursively(env, &asset_manager_obj, BUILTIN_MODEL_DIR, &base_path)?;
 
-    // Write the marker file to indicate successful completion
+    // Prove the model exists before recording completion. This also prevents a
+    // missing/non-bundled asset directory from poisoning a later app upgrade.
+    let model_path = find_gguf(&model_dir)?;
     std::fs::write(&marker_file, "ok")?;
     log::info!("Asset extraction complete, marker written");
 
-    find_gguf(&model_dir)
+    Ok(model_path)
 }
 
 /// Removes the extraction marker so the next load re-extracts the bundled

@@ -44,7 +44,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_TranscribeFileActivity_
     activity: JObject,
 ) {
     android_logger::init_once(
-        android_logger::Config::default().with_max_level(log::LevelFilter::Info),
+        android_logger::Config::default().with_max_level(log::LevelFilter::Off),
     );
 
     let vm = env.get_java_vm().expect("Failed to get JavaVM");

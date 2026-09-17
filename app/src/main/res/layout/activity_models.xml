@@ -33,13 +33,154 @@
             android:layout_height="wrap_content"
             android:orientation="vertical">
 
-            <!-- Model selection card -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:layout_marginBottom="16dp"
-                app:contentPadding="16dp">
+                android:layout_marginBottom="8dp"
+                app:contentPadding="12dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/models_recommended_section"
+                        android:textAppearance="?attr/textAppearanceTitleMedium" />
+
+                    <TextView
+                        android:id="@+id/text_model_recommendation"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="@string/models_recommendation_checking"
+                        android:textAppearance="?attr/textAppearanceBodyMedium"
+                        android:textColor="?attr/colorOnSurfaceVariant" />
+
+                    <Spinner
+                        android:id="@+id/spinner_model_goal"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:minHeight="48dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_download_recommended"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:minHeight="48dp"
+                        android:text="@string/models_download_and_use" />
+
+                    <LinearLayout
+                        android:id="@+id/recommended_download_progress_area"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:orientation="vertical"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:id="@+id/txt_recommended_download_progress"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textAppearance="?attr/textAppearanceBodySmall" />
+
+                        <ProgressBar
+                            android:id="@+id/recommended_download_progress"
+                            style="?android:attr/progressBarStyleHorizontal"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:max="100" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btn_cancel_recommended_download"
+                            style="@style/Widget.Material3.Button.TextButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:minHeight="48dp"
+                            android:text="@string/models_cancel_download" />
+                    </LinearLayout>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                app:contentPadding="12dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/models_guide_section"
+                        android:textAppearance="?attr/textAppearanceTitleMedium" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="@string/models_guide_body"
+                        android:textAppearance="?attr/textAppearanceBodySmall"
+                        android:textColor="?attr/colorOnSurfaceVariant" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- Complete verified catalog for the pinned runtime. -->
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                app:contentPadding="12dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/models_catalog_section"
+                        android:textAppearance="?attr/textAppearanceTitleMedium" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/models_catalog_desc"
+                        android:textAppearance="?attr/textAppearanceBodySmall"
+                        android:textColor="?attr/colorOnSurfaceVariant" />
+
+                    <Spinner
+                        android:id="@+id/spinner_catalog_family"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:minHeight="48dp" />
+
+                    <LinearLayout
+                        android:id="@+id/download_catalog"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- Model selection card -->
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                app:contentPadding="12dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -50,17 +191,17 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:text="@string/models_active_section"
-                        android:textAppearance="?attr/textAppearanceTitleLarge"
-                        android:layout_marginBottom="8dp"/>
+                        android:textAppearance="?attr/textAppearanceTitleMedium"
+                        android:layout_marginBottom="4dp"/>
 
                     <TextView
-                        android:id="@+id/text_models_desc"
+                        android:id="@+id/text_active_model_summary"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="@string/models_desc"
+                        android:text="@string/models_active_none"
                         android:textAppearance="?attr/textAppearanceBodyMedium"
                         android:textColor="?attr/colorOnSurfaceVariant"
-                        android:layout_marginBottom="8dp"/>
+                        android:layout_marginBottom="4dp"/>
 
                     <LinearLayout
                         android:id="@+id/model_list"
@@ -76,6 +217,15 @@
                         android:textAppearance="?attr/textAppearanceBodyMedium"
                         android:textColor="?attr/colorOnSurfaceVariant"
                         android:layout_marginBottom="8dp"/>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_model_retry"
+                        style="@style/Widget.Material3.Button.OutlinedButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/models_retry"
+                        android:layout_marginBottom="8dp"/>
+
 
                     <LinearLayout
                         android:id="@+id/import_area"
@@ -96,6 +246,7 @@
                             style="?android:attr/progressBarStyleHorizontal"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"/>
+
                     </LinearLayout>
 
                     <Button
@@ -117,8 +268,8 @@
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                app:contentPadding="16dp">
+                android:layout_marginBottom="8dp"
+                app:contentPadding="12dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -129,8 +280,8 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:text="@string/models_language_section"
-                        android:textAppearance="?attr/textAppearanceTitleLarge"
-                        android:layout_marginBottom="8dp"/>
+                        android:textAppearance="?attr/textAppearanceTitleMedium"
+                        android:layout_marginBottom="4dp"/>
 
                     <TextView
                         android:layout_width="match_parent"
@@ -138,7 +289,7 @@
                         android:text="@string/models_language_desc"
                         android:textAppearance="?attr/textAppearanceBodyMedium"
                         android:textColor="?attr/colorOnSurfaceVariant"
-                        android:layout_marginBottom="8dp"/>
+                        android:layout_marginBottom="4dp"/>
 
                     <Spinner
                         android:id="@+id/spinner_language"
@@ -147,6 +298,7 @@
                         android:minHeight="48dp"/>
 
                     <LinearLayout
+                        android:id="@+id/translate_row"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="horizontal"
@@ -185,8 +337,8 @@
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                app:contentPadding="16dp">
+                android:layout_marginBottom="8dp"
+                app:contentPadding="12dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -197,8 +349,8 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:text="@string/models_threads_section"
-                        android:textAppearance="?attr/textAppearanceTitleLarge"
-                        android:layout_marginBottom="8dp"/>
+                        android:textAppearance="?attr/textAppearanceTitleMedium"
+                        android:layout_marginBottom="4dp"/>
 
                     <TextView
                         android:layout_width="match_parent"
@@ -206,7 +358,7 @@
                         android:text="@string/models_threads_desc"
                         android:textAppearance="?attr/textAppearanceBodyMedium"
                         android:textColor="?attr/colorOnSurfaceVariant"
-                        android:layout_marginBottom="8dp"/>
+                        android:layout_marginBottom="4dp"/>
 
                     <Spinner
                         android:id="@+id/spinner_threads"

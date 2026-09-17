@@ -105,7 +105,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_LiveSubtitleService_ini
     service: JObject,
 ) {
     android_logger::init_once(
-        android_logger::Config::default().with_max_level(log::LevelFilter::Info),
+        android_logger::Config::default().with_max_level(log::LevelFilter::Off),
     );
     let vm = match env.get_java_vm() {
         Ok(vm) => Arc::new(vm),

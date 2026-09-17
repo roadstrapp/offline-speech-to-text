@@ -30,15 +30,6 @@ const MODEL_TRANSLATE_FILE: &str = "model_translate";
 /// Absent/invalid/0 = default (all cores).
 const MODEL_THREADS_FILE: &str = "model_threads";
 
-/// Longest audio passed to the model in one run (60 s). Offline conformer
-/// models use full self-attention, whose cost grows quadratically with input
-/// length — an unbounded shared audio file would exhaust memory on a phone.
-/// Longer input is split at quiet points and the texts joined.
-const MAX_RUN_SAMPLES: usize = 60 * 16_000;
-/// When splitting, search this far back from the hard boundary for the
-/// quietest point so words aren't cut mid-syllable.
-const SPLIT_SEARCH_SAMPLES: usize = 10 * 16_000;
-
 /// A loaded transcribe.cpp session plus the options applied to every run.
 pub struct Engine {
     session: transcribe_cpp::Session,
@@ -47,6 +38,7 @@ pub struct Engine {
     /// Family-specific decode options attached to every run; `None` for
     /// models that don't take the whisper run extension.
     run_ext: Option<transcribe_cpp::RunExtension>,
+    chunk_plan: crate::long_audio_chunking::Plan,
     /// Status reported once loading succeeded; carries a warning when the
     /// translate setting can't do what the user expects with this model.
     ready_status: &'static str,
@@ -62,7 +54,11 @@ impl Engine {
         if !model_path.is_file() {
             return Err(format!("model file not found: {}", model_path.display()));
         }
-        let model = transcribe_cpp::Model::load(model_path).map_err(|e| e.to_string())?;
+        let model = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            transcribe_cpp::Model::load(model_path)
+        }))
+        .map_err(|_| "model loader rejected this file".to_string())?
+        .map_err(|e| e.to_string())?;
         // Translation is gated on the model's capabilities: models without it
         // (e.g. Parakeet) silently keep transcribing, so the setting can stay
         // on while switching models.
@@ -92,10 +88,11 @@ impl Engine {
         // pass is the better trade: worst case is a worse line of text, not
         // a multiplied wait. temperature_inc = 0 turns the retry ladder off;
         // models that don't take the whisper run extension are unaffected.
-        let run_ext = if model.accepts_ext(
+        let is_whisper = model.accepts_ext(
             transcribe_cpp::ExtSlot::Run,
             transcribe_cpp::sys::TRANSCRIBE_EXT_KIND_WHISPER_RUN,
-        ) {
+        );
+        let run_ext = if is_whisper {
             Some(transcribe_cpp::RunExtension::Whisper(
                 transcribe_cpp::WhisperRunOptions {
                     temperature_inc: Some(0.0),
@@ -122,29 +119,25 @@ impl Engine {
             language,
             task,
             run_ext,
+            chunk_plan: if is_whisper {
+                crate::long_audio_chunking::Plan::for_whisper()
+            } else {
+                crate::long_audio_chunking::Plan::for_conformer()
+            },
             ready_status,
         })
     }
 
-    /// Transcribes 16 kHz mono f32 samples to text. Input longer than
-    /// [`MAX_RUN_SAMPLES`] is transcribed in quiet-point chunks.
+    /// Transcribes 16 kHz mono f32 samples to text. Long input is transcribed
+    /// in short quiet-point chunks so full-attention models remain bounded.
     pub fn transcribe(&mut self, samples: Vec<f32>) -> Result<String, String> {
-        if samples.len() <= MAX_RUN_SAMPLES {
+        if samples.len() <= self.chunk_plan.max_run_samples() {
             return self.run(&samples);
         }
-
         let mut text = String::new();
         let mut rest: &[f32] = &samples;
         while !rest.is_empty() {
-            let take = if rest.len() <= MAX_RUN_SAMPLES {
-                rest.len()
-            } else {
-                crate::audio::find_quietest_split(
-                    rest,
-                    MAX_RUN_SAMPLES - SPLIT_SEARCH_SAMPLES,
-                    MAX_RUN_SAMPLES,
-                )
-            };
+            let take = self.chunk_plan.next_chunk_len(rest);
             let piece = self.run(&rest[..take])?;
             let piece = piece.trim();
             if !piece.is_empty() {
@@ -190,8 +183,7 @@ impl Engine {
 }
 
 /// Holds the loaded engine singleton.
-static GLOBAL_ENGINE: Lazy<Mutex<Option<Arc<Mutex<Engine>>>>> =
-    Lazy::new(|| Mutex::new(None));
+static GLOBAL_ENGINE: Lazy<Mutex<Option<Arc<Mutex<Engine>>>>> = Lazy::new(|| Mutex::new(None));
 
 /// Loading coordination state + condvar for waiters.
 static LOAD_STATE: Lazy<(Mutex<LoadState>, Condvar)> =
@@ -223,7 +215,9 @@ pub fn transcribe_shared(engine: &Arc<Mutex<Engine>>, samples: Vec<f32>) -> Resu
     let audio_secs = samples.len() as f64 / 16_000.0;
     let started = std::time::Instant::now();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut guard = engine.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut guard = engine
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         guard.transcribe(samples)
     }))
     .unwrap_or_else(|_| {
@@ -400,30 +394,6 @@ fn performance_core_count() -> i32 {
     }
 }
 
-/// CPU features this build's ggml kernels require (see GGML_CPU_ARM_ARCH in
-/// the gradle build): dot-product and half-precision SIMD, present on arm64
-/// cores since ~2018. Without this check, an older CPU would crash with an
-/// illegal instruction mid-inference instead of showing an error.
-#[cfg(target_arch = "aarch64")]
-fn check_cpu_features() -> Result<(), String> {
-    const HWCAP_ASIMHP: libc::c_ulong = 1 << 10; // FEAT_FP16 (asimdhp)
-    const HWCAP_ASIMDDP: libc::c_ulong = 1 << 20; // FEAT_DotProd (asimddp)
-    let hwcap = unsafe { libc::getauxval(libc::AT_HWCAP) };
-    if hwcap & HWCAP_ASIMDDP == 0 || hwcap & HWCAP_ASIMHP == 0 {
-        return Err(
-            "this device's CPU is too old for this app version (needs arm64 \
-             dotprod/fp16, available on phones from ~2018 on)"
-                .to_string(),
-        );
-    }
-    Ok(())
-}
-
-#[cfg(not(target_arch = "aarch64"))]
-fn check_cpu_features() -> Result<(), String> {
-    Ok(())
-}
-
 /// Reads a single-value config file (trimmed); `None` if absent or empty.
 fn read_config(path: &Path) -> Option<String> {
     let s = std::fs::read_to_string(path).ok()?;
@@ -438,11 +408,6 @@ fn read_config(path: &Path) -> Option<String> {
 /// Performs the model load: the selected imported GGUF if any (falling back
 /// to the bundled model on failure), otherwise the bundled model.
 fn do_load(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
-    if let Err(msg) = check_cpu_features() {
-        notify_status(env, context, &format!("Error: {}", msg));
-        return Err(msg);
-    }
-
     let files_dir = assets::files_dir(env, context).map_err(|e| {
         let msg = format!("Failed to resolve filesDir: {}", e);
         notify_status(env, context, &format!("Error: {}", msg));
