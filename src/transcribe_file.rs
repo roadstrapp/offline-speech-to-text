@@ -5,7 +5,6 @@ use jni::sys::jint;
 use jni::JNIEnv;
 use once_cell::sync::Lazy;
 
-
 use crate::engine;
 
 struct TranscribeFileState {

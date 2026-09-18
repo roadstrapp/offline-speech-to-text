@@ -45,7 +45,8 @@
 
     <string name="models_title">Modelli vocali</string>
     <string name="models_section">Modello vocale</string>
-    <string name="models_active_section">Modello attivo</string>
+    <string name="models_active_section">Modelli installati</string>
+    <string name="models_manual_section">Opzioni manuali</string>
 
 
     <string name="model_desc_sensevoice">Inglese, cinese, cantonese, giapponese, coreano; veloce</string>

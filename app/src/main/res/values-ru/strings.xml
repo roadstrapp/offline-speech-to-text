@@ -45,7 +45,8 @@
 
     <string name="models_title">Речевые модели</string>
     <string name="models_section">Речевая модель</string>
-    <string name="models_active_section">Активная модель</string>
+    <string name="models_active_section">Установленные модели</string>
+    <string name="models_manual_section">Ручные варианты</string>
 
 
     <string name="model_desc_sensevoice">Английский, китайский, кантонский, японский, корейский; быстрая</string>

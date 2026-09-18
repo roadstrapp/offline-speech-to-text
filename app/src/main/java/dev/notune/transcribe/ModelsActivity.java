@@ -191,7 +191,7 @@ public class ModelsActivity extends AppCompatActivity {
         retryButton.setOnClickListener(v -> {
             if (!manualReloadInFlight.compareAndSet(false, true)) return;
             retryButton.setEnabled(false);
-            statusText.setText(getString(R.string.models_loading));
+            showModelStatus(getString(R.string.models_loading));
             // JNI captures the activity reference and performs model reset/load
             // on its own Rust worker thread; this call itself returns promptly.
             reloadModelNative(this);
@@ -206,7 +206,7 @@ public class ModelsActivity extends AppCompatActivity {
         translateSwitch.setOnCheckedChangeListener((btn, checked) -> {
             writeConfig("model_translate", checked ? "1" : "");
             updateRecommendation();
-            statusText.setText(getString(R.string.models_loading));
+            showModelStatus(getString(R.string.models_loading));
             reloadModelNative(this);
         });
         refreshList();
@@ -428,7 +428,7 @@ public class ModelsActivity extends AppCompatActivity {
                         && !activeModel.supportsLanguage(tag)
                         ? R.string.models_language_requires_model
                         : R.string.models_language_saved));
-                statusText.setText(getString(R.string.models_loading));
+                showModelStatus(getString(R.string.models_loading));
                 reloadModelNative(ModelsActivity.this);
             }
 
@@ -472,7 +472,7 @@ public class ModelsActivity extends AppCompatActivity {
                 String value = values.get(position);
                 if (value.equals(readConfig("model_threads"))) return;
                 writeConfig("model_threads", value);
-                statusText.setText(getString(R.string.models_loading));
+                showModelStatus(getString(R.string.models_loading));
                 reloadModelNative(ModelsActivity.this);
             }
 
@@ -702,7 +702,7 @@ public class ModelsActivity extends AppCompatActivity {
                 snackbar(getString(R.string.models_download_done));
                 refreshList();
                 updateRecommendation();
-                statusText.setText(R.string.models_loading);
+                showModelStatus(getString(R.string.models_loading));
                 reloadModelNative(ModelsActivity.this);
                 showRemoveNetworkAccessDialog();
             } else {
@@ -896,7 +896,7 @@ public class ModelsActivity extends AppCompatActivity {
         }
         refreshList();
         updateRecommendation();
-        statusText.setText(getString(R.string.models_loading));
+        showModelStatus(getString(R.string.models_loading));
         reloadModelNative(this);
     }
 
@@ -1055,7 +1055,7 @@ public class ModelsActivity extends AppCompatActivity {
                 if (success) {
                     snackbar(getString(R.string.models_import_done, completedName));
                     refreshList();
-                    statusText.setText(getString(R.string.models_loading));
+                    showModelStatus(getString(R.string.models_loading));
                     reloadModelNative(this);
                 } else if (defaultMismatch) {
                     snackbar(getString(R.string.models_import_default_mismatch));
@@ -1105,11 +1105,19 @@ public class ModelsActivity extends AppCompatActivity {
     // Called from Rust with load progress ("Loading model...", "Ready", "Error: ...").
     public void onStatusUpdate(String status) {
         runOnUiThread(() -> {
-            statusText.setText(status);
+            showModelStatus(status);
             if (!status.startsWith("Loading") && manualReloadInFlight.getAndSet(false)) {
                 retryButton.setEnabled(true);
             }
         });
+    }
+
+    private void showModelStatus(String status) {
+        boolean ready = "Ready".equals(status);
+        boolean failed = status.startsWith("Error:");
+        statusText.setText(status);
+        statusText.setVisibility(ready ? View.GONE : View.VISIBLE);
+        retryButton.setVisibility(failed ? View.VISIBLE : View.GONE);
     }
 
     private native void reloadModelNative(ModelsActivity activity);

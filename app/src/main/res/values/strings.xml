@@ -82,7 +82,8 @@
     <!-- Speech model management (transcribe.cpp GGUF backend) -->
     <string name="models_title">Speech models</string>
     <string name="models_section">Speech model</string>
-    <string name="models_active_section">Active model</string>
+    <string name="models_active_section">Installed models</string>
+    <string name="models_manual_section">Manual options</string>
     <string name="models_active_none">No model is active. Import a model to enable offline speech.</string>
     <string name="models_active_summary">%1$s · %2$s · %3$s · %4$s · %5$s</string>
     <string name="models_provenance_bundled">Included</string>

@@ -19,8 +19,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
     def test_release_identity_and_default_model_contract_are_immutable(self):
         gradle = (ROOT / "app/build.gradle.kts").read_text()
         self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
-        self.assertIn("versionCode = 27", gradle)
-        self.assertIn('versionName = "0.3.0"', gradle)
+        self.assertIn("versionCode = 28", gradle)
+        self.assertIn('versionName = "0.3.1"', gradle)
         self.assertIn('providers.gradleProperty("includeBundledModel")', gradle)
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: true', gradle)
         self.assertIn('ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,', gradle)
@@ -601,6 +601,28 @@ class ReleaseConfigurationTest(unittest.TestCase):
         source = (ROOT / "app/src/main/java/dev/notune/transcribe/ModelsActivity.java").read_text()
         self.assertIn('@+id/text_active_model_summary', layout)
         self.assertIn('@+id/btn_model_retry', layout)
+        base_strings = ET.parse(ROOT / "app/src/main/res/values/strings.xml").getroot()
+        copy = {item.attrib["name"]: "".join(item.itertext())
+                for item in base_strings.findall("string")}
+        self.assertEqual("Installed models", copy["models_active_section"])
+        self.assertEqual("Manual options", copy["models_manual_section"])
+        tree = ET.parse(ROOT / "app/src/main/res/layout/activity_models.xml")
+        android = "{http://schemas.android.com/apk/res/android}"
+        by_id = {view.attrib.get(android + "id"): view for view in tree.iter()}
+        card_order = [view.attrib.get(android + "id") for view in tree.iter()
+                      if view.tag.endswith("MaterialCardView")]
+        expected_cards = [
+            "@+id/card_installed_models",
+            "@+id/card_recommendation",
+            "@+id/card_model_guide",
+            "@+id/card_download_catalog",
+            "@+id/card_manual_models",
+        ]
+        self.assertEqual(expected_cards, card_order[:len(expected_cards)])
+        self.assertEqual("gone", by_id["@+id/txt_model_status"].attrib[android + "visibility"])
+        self.assertEqual("gone", by_id["@+id/btn_model_retry"].attrib[android + "visibility"])
+        self.assertIn("private void showModelStatus", source)
+        self.assertIn('retryButton.setVisibility(failed ? View.VISIBLE : View.GONE)', source)
         self.assertIn("models_provenance_imported", source)
         self.assertIn("DefaultModelContract.BYTE_SIZE", source)
         self.assertIn("reloadModelNative(this)", source)

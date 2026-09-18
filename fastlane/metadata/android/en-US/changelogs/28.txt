@@ -1,0 +1,3 @@
+Model selection is now the first section on the Speech models screen.
+
+Recommendations and verified downloads follow underneath, with manual import and source links kept as secondary options. Normal ready-state status and retry controls stay hidden until they are needed.

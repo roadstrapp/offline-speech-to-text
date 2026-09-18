@@ -27,7 +27,7 @@ Private, on-device speech recognition for Android apps, keyboards, shared audio,
 
 1. Grant microphone access, then use **Try voice input**. The included default model works entirely offline from first launch.
 2. Tap a microphone in an app or keyboard that launches Android voice recognition. If Android asks, choose **Offline Speech to Text**.
-3. Optional: open **Manage speech models**, choose what matters, and use the recommendation. Download progress stays in the card you tapped. Every Download button verifies exact size and SHA-256 before installing and selecting a model. **Browse model websites** and manual GGUF import remain separate fallbacks.
+3. Optional: open **Manage speech models**. Installed-model selection is first, followed by the device recommendation and complete download catalog. Download progress stays in the card you tapped. Every Download button verifies exact size and SHA-256 before installing and selecting a model. **Browse model websites** and manual GGUF import remain separate fallbacks below the download choices.
 
 Optional paths:
 

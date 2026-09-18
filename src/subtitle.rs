@@ -226,7 +226,11 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_LiveSubtitleService_ini
                 // job costs; also reflects thermal throttling over time.
                 let sample = (elapsed / audio_secs * 1000.0) as u32;
                 let old = rtf_milli.load(Ordering::SeqCst);
-                let ema = if old == 0 { sample } else { (old * 7 + sample * 3) / 10 };
+                let ema = if old == 0 {
+                    sample
+                } else {
+                    (old * 7 + sample * 3) / 10
+                };
                 rtf_milli.store(ema, Ordering::SeqCst);
 
                 if let Ok(r) = res {

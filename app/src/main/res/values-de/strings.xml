@@ -45,7 +45,8 @@
 
     <string name="models_title">Sprachmodelle</string>
     <string name="models_section">Sprachmodell</string>
-    <string name="models_active_section">Aktives Modell</string>
+    <string name="models_active_section">Installierte Modelle</string>
+    <string name="models_manual_section">Manuelle Optionen</string>
 
 
     <string name="model_desc_sensevoice">Englisch, Chinesisch, Kantonesisch, Japanisch, Koreanisch; schnell</string>
