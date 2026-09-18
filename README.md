@@ -21,7 +21,7 @@ Private, on-device speech recognition for Android apps, keyboards, shared audio,
 
 ## Screenshots
 
-<p float="left"><img src=".screenshots/screenshot_home.png" alt="Home and setup screen" width="30%" /> <img src=".screenshots/screenshot_recording.png" alt="Voice-input recording panel" width="30%" /> <img src=".screenshots/screenshot_subtitles.png" alt="Live Subtitles overlay" width="30%" /></p>
+<p float="left"><img src=".screenshots/screenshot_home.png" alt="Compact home and setup screen" width="30%" /> <img src=".screenshots/screenshot_models.png" alt="Guided offline model selection" width="30%" /> <img src=".screenshots/screenshot_recording.png" alt="Active voice keyboard controls" width="30%" /></p>
 
 ## Set up
 
@@ -88,7 +88,7 @@ Build and test a debug APK:
 
 The APK is written to `app/build/outputs/apk/debug/app-debug.apk`. Native libraries are built automatically through `cargo-ndk`. Normal APK builds download, verify, and package the pinned default model for offline first launch. For a small compile-only developer artifact, pass `-PincludeBundledModel=false`; never use that reduced artifact as a test candidate. Release builds additionally require authorized signing; do not use a production key for routine development.
 
-Changes should preserve package identity, imported models, settings, privacy boundaries, accessibility, and update compatibility. Run the focused tests and `git diff --check` before requesting review. Published release notes are kept under `fastlane/metadata/android/en-US/changelogs/`.
+Changes should preserve package identity, imported models, settings, privacy boundaries, accessibility, and update compatibility. Run focused tests and `git diff --check` before requesting review. See [PRODUCT_ROADMAP.md](PRODUCT_ROADMAP.md) for accepted scope and [RELEASE_HANDOFF.md](RELEASE_HANDOFF.md) for immutable test-artifact evidence.
 
 ## Credits
 
