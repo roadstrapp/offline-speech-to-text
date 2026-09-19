@@ -10,7 +10,7 @@
     <string name="section_subs">Live-Untertitel</string>
     <string name="desc_subs">Untertitel für jede Audiowiedergabe auf deinem Gerät anzeigen. Wähle nach dem Start \'Gesamten Bildschirm teilen\' für beste Ergebnisse.</string>
     <string name="btn_subs_start">Live-Untertitel starten</string>
-    <string name="btn_subs_advanced">Berechtigungsdialog überspringen (fortgeschritten)</string>
+    <string name="btn_subs_advanced">Optionen für den Bildschirmaufnahme-Dialog</string>
     <string name="subs_advanced_title">Bildschirmaufnahme-Dialog überspringen</string>
     <string name="subs_advanced_body">Android zeigt normalerweise bei jedem Start der Untertitel einen „Aufnahme oder Übertragung starten?“-Dialog. Fortgeschrittene Nutzer können ihn einmalig per adb vorab genehmigen, danach starten die Untertitel sofort:\n\n1. Aktiviere die Entwickleroptionen und USB-Debugging und verbinde dein Gerät mit einem Computer mit adb.\n\n2. Führe aus:\n\n%1$s\n\nDas war\'s: Die Einstellung übersteht Neustarts, und USB-Debugging kann danach wieder deaktiviert werden. Die App selbst ändert sich nicht: Android genehmigt den Dialog nur automatisch.\n\nRückgängig machen:\n\n%2$s\n\nHinweis: Dies beruht auf undokumentiertem Android-Verhalten (dem PROJECT_MEDIA-App-Op). Auf manchen Geräten (z. B. bestimmten Xiaomi-/Samsung-Versionen) funktioniert es evtl. nicht oder wird vom System zurückgesetzt; der normale Dialog bleibt immer der Fallback.</string>
     <string name="subs_advanced_copy">Befehl kopieren</string>

@@ -1,0 +1,5 @@
+Add a private personal dictionary with Whisper hints and safe exact corrections for every model.
+
+Show an amber progress ring while transcription is processing, improve optimized ARM backend detection, and document custom voice UI integration.
+
+Keep keyboard switching and live subtitles safe on older Android versions.

@@ -25,15 +25,9 @@
             android:textAppearance="?attr/textAppearanceBodyMedium"
             android:paddingStart="4dp"/>
 
-        <ProgressBar
-            android:id="@+id/ime_progress"
-            style="?android:attr/progressBarStyleSmall"
-            android:layout_width="24dp"
-            android:layout_height="24dp"
-            android:visibility="gone"/>
     </LinearLayout>
 
-    <!-- Record area: pulsing mic-level glow behind a circular record button -->
+    <!-- Record area: pulsing mic-level glow behind a keyboard-key-shaped record button -->
     <FrameLayout
         android:id="@+id/ime_record_container"
         android:layout_width="match_parent"
@@ -48,11 +42,22 @@
             android:layout_gravity="center"/>
 
         <View
-            android:id="@+id/ime_record_circle"
-            android:layout_width="104dp"
-            android:layout_height="104dp"
+            android:id="@+id/ime_record_key"
+            android:layout_width="160dp"
+            android:layout_height="88dp"
             android:layout_gravity="center"
             android:background="@drawable/bg_ime_record"/>
+
+        <com.google.android.material.progressindicator.CircularProgressIndicator
+            android:id="@+id/ime_processing_ring"
+            android:layout_width="72dp"
+            android:layout_height="72dp"
+            android:layout_gravity="center"
+            android:indeterminate="true"
+            android:visibility="gone"
+            app:indicatorColor="?attr/colorPrimary"
+            app:indicatorSize="68dp"
+            app:trackThickness="3dp" />
 
         <ImageView
             android:id="@+id/ime_mic_icon"
@@ -107,7 +112,7 @@
                 android:padding="22dp"
                 android:scaleType="centerInside"
                 android:src="@drawable/ic_pause"
-                android:tint="?attr/colorOnSurfaceVariant" />
+                app:tint="?attr/colorOnSurfaceVariant" />
 
             <ImageButton
                 android:id="@+id/ime_transcribe_keep"
@@ -122,7 +127,7 @@
                 android:padding="22dp"
                 android:scaleType="centerInside"
                 android:src="@drawable/ic_paste"
-                android:tint="?attr/colorOnSurfaceVariant" />
+                app:tint="?attr/colorOnSurfaceVariant" />
         </LinearLayout>
 
         <LinearLayout
@@ -145,7 +150,7 @@
                 android:padding="22dp"
                 android:scaleType="centerInside"
                 android:src="@drawable/ic_close"
-                android:tint="?attr/colorOnSurfaceVariant" />
+                app:tint="?attr/colorOnSurfaceVariant" />
 
             <ImageButton
                 android:id="@+id/ime_transcribe_switch"
@@ -160,7 +165,7 @@
                 android:padding="22dp"
                 android:scaleType="centerInside"
                 android:src="@drawable/ic_keyboard_switch"
-                android:tint="?attr/colorOnSurfaceVariant" />
+                app:tint="?attr/colorOnSurfaceVariant" />
         </LinearLayout>
     </LinearLayout>
 
@@ -180,7 +185,7 @@
             android:src="@drawable/ic_space"
             android:scaleType="centerInside"
             android:background="@drawable/bg_ime_key"
-            android:tint="?attr/colorOnSurfaceVariant"
+            app:tint="?attr/colorOnSurfaceVariant"
             android:clickable="true"
             android:focusable="true"
             android:layout_marginEnd="8dp"
@@ -193,7 +198,7 @@
             android:src="@drawable/ic_enter"
             android:scaleType="centerInside"
             android:background="@drawable/bg_ime_key"
-            android:tint="?attr/colorOnSurfaceVariant"
+            app:tint="?attr/colorOnSurfaceVariant"
             android:clickable="true"
             android:focusable="true"
             android:layout_marginEnd="8dp"
@@ -206,7 +211,7 @@
             android:src="@drawable/ic_backspace"
             android:scaleType="centerInside"
             android:background="@drawable/bg_ime_key"
-            android:tint="?attr/colorOnSurfaceVariant"
+            app:tint="?attr/colorOnSurfaceVariant"
             android:clickable="true"
             android:focusable="true"
             android:layout_marginEnd="8dp"
@@ -219,7 +224,7 @@
             android:src="@drawable/ic_keyboard_switch"
             android:scaleType="centerInside"
             android:background="@drawable/bg_ime_key"
-            android:tint="?attr/colorOnSurfaceVariant"
+            app:tint="?attr/colorOnSurfaceVariant"
             android:clickable="true"
             android:focusable="true"
             android:contentDescription="@string/ime_switch_keyboard"/>

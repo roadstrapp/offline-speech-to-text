@@ -1,5 +1,6 @@
 package dev.notune.transcribe;
 
+import android.Manifest;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -7,6 +8,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.graphics.PixelFormat;
 import android.media.AudioAttributes;
@@ -28,6 +30,8 @@ import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.LinearLayout;
+
+import androidx.annotation.RequiresApi;
 
 public class LiveSubtitleService extends Service {
     private static final String TAG = "LiveSubtitleService";
@@ -102,6 +106,11 @@ public class LiveSubtitleService extends Service {
 
     private void startSubtitleSession(int code, Intent data) {
         if (isRecording) return;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            Log.w(TAG, "Playback capture requires Android 10 or newer");
+            stopSelf();
+            return;
+        }
 
         mMediaProjection = mProjectionManager.getMediaProjection(code, data);
         if (mMediaProjection == null) {
@@ -236,10 +245,18 @@ public class LiveSubtitleService extends Service {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.Q)
     private void startAudioCapture() {
         Log.d(TAG, "Starting audio capture. MediaProjection: " + mMediaProjection);
         if (mMediaProjection == null) {
             Log.e(TAG, "MediaProjection is null, cannot capture audio");
+            return;
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            Log.w(TAG, "Audio permission unavailable; stopping subtitles");
+            stopSubtitleSession();
+            stopSelf();
             return;
         }
 

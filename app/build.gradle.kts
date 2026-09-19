@@ -7,8 +7,9 @@ plugins {
 
 // Normal APKs include the verified default model so first launch and speech
 // recognition work without a network connection. Developers may explicitly
-// opt out for small local compile-only artifacts with
-// -PincludeBundledModel=false; those artifacts are not user-test candidates.
+// opt out for small local compile or update-testing artifacts with
+// -PincludeBundledModel=false. Those artifacts must be labeled clearly and
+// must not stand in for clean-install offline-first or publication candidates.
 val includeBundledModel = providers.gradleProperty("includeBundledModel")
     .orNull?.toBooleanStrictOrNull() ?: true
 
@@ -20,8 +21,8 @@ android {
         applicationId = "app.offlinespeechtotext"
         minSdk = 26
         targetSdk = 35
-        versionCode = 28
-        versionName = "0.3.1"
+        versionCode = 29
+        versionName = "0.4.0"
         buildConfigField("boolean", "HAS_BUNDLED_MODEL", includeBundledModel.toString())
         ndk {
             abiFilters += "arm64-v8a"
@@ -55,6 +56,12 @@ android {
     buildFeatures {
         buildConfig = true
         aidl = true
+    }
+
+    lint {
+        // The maintained locale sets are intentionally partial. Android falls
+        // back to the complete English resources for untranslated strings.
+        disable += "MissingTranslation"
     }
 
     compileOptions {
@@ -149,10 +156,29 @@ fun nativeVariant(name: String, armArch: String) = tasks.register<Exec>("cargoNd
 val cargoNdkBuildArmv8 = nativeVariant("Armv8", "armv8-a")
 val cargoNdkBuildDotprod = nativeVariant("Dotprod", "armv8.2-a+dotprod+fp16")
 
+val compileCpuProbe by tasks.registering(Exec::class) {
+    description = "Build the baseline CPU feature probe"
+    group = "build"
+    val source = project.file("src/main/cpp/cpu_features_probe.c")
+    val outputDir = layout.buildDirectory.dir("jni-Probe/arm64-v8a").get().asFile
+    val output = File(outputDir, "libostt_cpu_probe.so")
+    doFirst { outputDir.mkdirs() }
+    commandLine(
+        "$ndkDir/toolchains/llvm/prebuilt/linux-x86_64/bin/clang",
+        "--target=aarch64-linux-android26",
+        "-shared", "-fPIC", "-Oz",
+        "-Wl,-soname,libostt_cpu_probe.so",
+        source.absolutePath,
+        "-o", output.absolutePath
+    )
+    inputs.file(source)
+    outputs.file(output)
+}
+
 val cargoNdkBuild by tasks.registering {
     description = "Build and package baseline and optimized native backends"
     group = "build"
-    dependsOn(cargoNdkBuildArmv8, cargoNdkBuildDotprod)
+    dependsOn(cargoNdkBuildArmv8, cargoNdkBuildDotprod, compileCpuProbe)
     doLast {
         val destDir = project.file("src/main/jniLibs/arm64-v8a")
         destDir.mkdirs()
@@ -177,6 +203,12 @@ val cargoNdkBuild by tasks.registering {
             into(destDir)
             rename { "libandroid_transcribe_app_dotprod.so" }
         }
+        val probeSource = layout.buildDirectory.file(
+            "jni-Probe/arm64-v8a/libostt_cpu_probe.so").get().asFile
+        if (!probeSource.isFile) {
+            throw GradleException("CPU feature probe missing: ${probeSource.absolutePath}")
+        }
+        probeSource.copyTo(File(destDir, "libostt_cpu_probe.so"), overwrite = true)
         val libcpp = file("$ndkDir/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so")
         if (!libcpp.exists()) {
             throw GradleException("libc++_shared.so not found in NDK at: ${libcpp.absolutePath}")

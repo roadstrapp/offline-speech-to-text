@@ -8,7 +8,7 @@
 //! imported one fails to load.
 
 use once_cell::sync::Lazy;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 
 use jni::objects::{GlobalRef, JObject};
@@ -38,6 +38,9 @@ pub struct Engine {
     /// Family-specific decode options attached to every run; `None` for
     /// models that don't take the whisper run extension.
     run_ext: Option<transcribe_cpp::RunExtension>,
+    supports_initial_prompt: bool,
+    custom_terms_path: PathBuf,
+    files_dir: PathBuf,
     chunk_plan: crate::long_audio_chunking::Plan,
     /// Status reported once loading succeeded; carries a warning when the
     /// translate setting can't do what the user expects with this model.
@@ -50,6 +53,7 @@ impl Engine {
         language: Option<String>,
         translate: bool,
         threads: i32,
+        files_dir: PathBuf,
     ) -> Result<Engine, String> {
         if !model_path.is_file() {
             return Err(format!("model file not found: {}", model_path.display()));
@@ -92,6 +96,8 @@ impl Engine {
             transcribe_cpp::ExtSlot::Run,
             transcribe_cpp::sys::TRANSCRIBE_EXT_KIND_WHISPER_RUN,
         );
+        let supports_initial_prompt =
+            is_whisper && model.supports(transcribe_cpp::Feature::InitialPrompt);
         let run_ext = if is_whisper {
             Some(transcribe_cpp::RunExtension::Whisper(
                 transcribe_cpp::WhisperRunOptions {
@@ -119,6 +125,9 @@ impl Engine {
             language,
             task,
             run_ext,
+            supports_initial_prompt,
+            custom_terms_path: files_dir.join(crate::custom_terms::FILE_NAME),
+            files_dir,
             chunk_plan: if is_whisper {
                 crate::long_audio_chunking::Plan::for_whisper()
             } else {
@@ -131,24 +140,55 @@ impl Engine {
     /// Transcribes 16 kHz mono f32 samples to text. Long input is transcribed
     /// in short quiet-point chunks so full-attention models remain bounded.
     pub fn transcribe(&mut self, samples: Vec<f32>) -> Result<String, String> {
-        if samples.len() <= self.chunk_plan.max_run_samples() {
-            return self.run(&samples);
-        }
-        let mut text = String::new();
-        let mut rest: &[f32] = &samples;
-        while !rest.is_empty() {
-            let take = self.chunk_plan.next_chunk_len(rest);
-            let piece = self.run(&rest[..take])?;
-            let piece = piece.trim();
-            if !piece.is_empty() {
-                if !text.is_empty() {
-                    text.push(' ');
+        // Snapshot once per complete transcription. Editing the list while a
+        // long recording is being decoded therefore cannot change only the
+        // later chunks. Unsupported models never read or receive the prompt.
+        let prompt = if self.supports_initial_prompt {
+            crate::custom_terms::load_prompt(&self.custom_terms_path)
+        } else {
+            None
+        };
+        // Exact personal corrections are model-independent, including for
+        // Parakeet. Snapshot them beside the Whisper prompt so one long
+        // transcription cannot mix old and new settings across chunks.
+        let corrections = crate::personal_corrections::load(&self.files_dir);
+        let run_ext = self.run_extension(prompt);
+        let text = if samples.len() <= self.chunk_plan.max_run_samples() {
+            self.run(&samples, &run_ext)?
+        } else {
+            let mut text = String::new();
+            let mut rest: &[f32] = &samples;
+            while !rest.is_empty() {
+                let take = self.chunk_plan.next_chunk_len(rest);
+                let piece = self.run(&rest[..take], &run_ext)?;
+                let piece = piece.trim();
+                if !piece.is_empty() {
+                    if !text.is_empty() {
+                        text.push(' ');
+                    }
+                    text.push_str(piece);
                 }
-                text.push_str(piece);
+                rest = &rest[take..];
             }
-            rest = &rest[take..];
+            text
+        };
+        if let Some(rules) = corrections.as_deref() {
+            Ok(crate::personal_corrections::apply(&text, rules))
+        } else {
+            Ok(text)
         }
-        Ok(text)
+    }
+
+    fn run_extension(&self, prompt: Option<String>) -> Option<transcribe_cpp::RunExtension> {
+        self.run_ext.clone().map(|extension| match extension {
+            transcribe_cpp::RunExtension::Whisper(mut options) => {
+                if self.supports_initial_prompt {
+                    options.initial_prompt = prompt;
+                }
+                transcribe_cpp::RunExtension::Whisper(options)
+            }
+            other => other,
+        })
     }
 
     /// One model run. A rejected language hint is degraded instead of
@@ -156,12 +196,16 @@ impl Engine {
     /// (each model knows a different set of tags — e.g. Parakeet v3 takes
     /// locales/short codes, English-only models take none). The degraded
     /// value is kept so later runs skip the rejected attempts.
-    fn run(&mut self, samples: &[f32]) -> Result<String, String> {
+    fn run(
+        &mut self,
+        samples: &[f32],
+        run_ext: &Option<transcribe_cpp::RunExtension>,
+    ) -> Result<String, String> {
         loop {
             let opts = transcribe_cpp::RunOptions {
                 language: self.language.clone(),
                 task: self.task,
-                family: self.run_ext.clone(),
+                family: run_ext.clone(),
                 ..Default::default()
             };
             match self.session.run(samples, &opts) {
@@ -426,7 +470,13 @@ fn do_load(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
     if let Some(name) = read_config(&files_dir.join(ACTIVE_MODEL_FILE)) {
         let path = files_dir.join("models").join(&name);
         notify_status(env, context, &format!("Loading model {}...", name));
-        match Engine::load(&path, language.clone(), translate, threads) {
+        match Engine::load(
+            &path,
+            language.clone(),
+            translate,
+            threads,
+            files_dir.clone(),
+        ) {
             Ok(engine) => {
                 let status = engine.ready_status;
                 *GLOBAL_ENGINE.lock().unwrap() = Some(Arc::new(Mutex::new(engine)));
@@ -455,7 +505,7 @@ fn do_load(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
 
     notify_status(env, context, "Loading model...");
 
-    match Engine::load(&path, language, translate, threads) {
+    match Engine::load(&path, language, translate, threads, files_dir) {
         Ok(engine) => {
             let status = engine.ready_status;
             *GLOBAL_ENGINE.lock().unwrap() = Some(Arc::new(Mutex::new(engine)));

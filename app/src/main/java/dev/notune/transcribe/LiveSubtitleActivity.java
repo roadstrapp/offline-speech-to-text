@@ -1,8 +1,10 @@
 package dev.notune.transcribe;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.media.projection.MediaProjectionManager;
 import android.net.Uri;
 import android.os.Build;
@@ -14,6 +16,7 @@ import android.widget.Toast;
 public class LiveSubtitleActivity extends Activity {
     private static final String TAG = "LiveSubtitleActivity";
     private static final int PERMISSION_CODE = 1;
+    private static final int AUDIO_PERMISSION_CODE = 2;
     private MediaProjectionManager mProjectionManager;
     private boolean mWaitingForOverlayPermission = false;
     private boolean mProjectionStarted = false;
@@ -21,13 +24,43 @@ public class LiveSubtitleActivity extends Activity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            Toast.makeText(this, R.string.subs_requires_android_10, Toast.LENGTH_LONG).show();
+            finish();
+            return;
+        }
         mProjectionManager = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
 
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, AUDIO_PERMISSION_CODE);
+            return;
+        }
+
+        continueSetup();
+    }
+
+    private void continueSetup() {
         if (!Settings.canDrawOverlays(this)) {
             mWaitingForOverlayPermission = true;
             openOverlaySettings();
         } else {
             startProjection();
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions,
+                                           int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != AUDIO_PERMISSION_CODE) return;
+        if (grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            continueSetup();
+        } else {
+            Toast.makeText(this, R.string.subs_audio_permission_required,
+                    Toast.LENGTH_LONG).show();
+            finish();
         }
     }
 

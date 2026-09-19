@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Circular record button surface. Solid white so it can be recolored at runtime
-     via backgroundTint (primaryContainer idle, errorContainer while recording). -->
+<!-- Record key surface. Its 12dp corners match the other IME keys; solid white
+     lets runtime backgroundTint apply the active Material color. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
-    android:shape="oval">
+    android:shape="rectangle">
     <solid android:color="@android:color/white" />
+    <corners android:radius="12dp" />
 </shape>

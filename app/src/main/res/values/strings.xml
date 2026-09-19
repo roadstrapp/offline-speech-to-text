@@ -18,8 +18,10 @@
     
     <string name="section_subs">Live Subtitles</string>
     <string name="desc_subs">Display subtitles for any audio playing on your device. After starting, select \'Share entire screen\' for best results.</string>
+    <string name="subs_requires_android_10">Live subtitles require Android 10 or newer</string>
+    <string name="subs_audio_permission_required">Microphone permission is required for live subtitles</string>
     <string name="btn_subs_start">Start Live Subtitles</string>
-    <string name="btn_subs_advanced">Skip the permission dialog (advanced)</string>
+    <string name="btn_subs_advanced">Screen-capture prompt options</string>
     <string name="subs_advanced_title">Skip the screen-capture dialog</string>
     <string name="subs_advanced_body">Android normally shows a “Start recording or casting?” dialog every time subtitles start. Advanced users can pre-approve it once via adb, so subtitles start instantly from then on:\n\n1. Enable Developer options and USB debugging, connect your device to a computer with adb installed.\n\n2. Run:\n\n%1$s\n\nThat\'s it: the setting survives reboots, and you can turn USB debugging back off afterwards. The app itself doesn\'t change: Android just auto-grants the dialog.\n\nTo undo it:\n\n%2$s\n\nNote: this relies on undocumented Android behavior (the PROJECT_MEDIA app-op). On some devices (e.g. certain Xiaomi/Samsung builds) it may not work or may get reset by the system; the normal dialog is always the fallback.</string>
     <string name="subs_advanced_copy">Copy command</string>
@@ -31,21 +33,21 @@
     <string name="status_error">Error</string>
     
     <string name="section_settings">Settings</string>
-    <string name="home_more_settings">Settings, benchmark &amp; privacy</string>
+    <string name="home_more_settings">Settings &amp; privacy</string>
     <string name="home_less_settings">Hide settings</string>
-    <string name="setting_auto_record">Auto-start recording</string>
+    <string name="setting_auto_record">Start recording when keyboard opens</string>
     <string name="setting_auto_record_desc">Automatically begin recording when the keyboard opens</string>
 
-    <string name="setting_select_transcription">Select transcription</string>
+    <string name="setting_select_transcription">Select inserted text</string>
     <string name="setting_select_transcription_desc">Highlight transcribed text so it can be deleted with a single backspace</string>
 
-    <string name="setting_pause_audio">Pause audio</string>
+    <string name="setting_pause_audio">Pause other audio while recording</string>
     <string name="setting_pause_audio_desc">Pause audio while recording</string>
 
-    <string name="setting_record_background">Record in background</string>
+    <string name="setting_record_background">Keep recording when keyboard closes</string>
     <string name="setting_record_background_desc">Keep recording when the voice keyboard is hidden; the text is inserted when you return</string>
 
-    <string name="setting_auto_stop">Auto-stop after silence</string>
+    <string name="setting_auto_stop">Stop after silence</string>
     <string name="setting_auto_stop_desc">End the voice input popup automatically ~2 seconds after you stop speaking</string>
 
     <string name="setting_recognize_panel_position">Voice panel position</string>
@@ -188,6 +190,54 @@
     <string name="models_remove_network_title">Model ready offline</string>
     <string name="models_remove_network_body">The installed model works without a network. If your Android system provides a per-app Network permission, you can remove it now in App settings. The app cannot revoke that permission itself.</string>
     <string name="models_remove_network_action">Review network access</string>
+
+    <string name="custom_terms_title">Personal dictionary</string>
+    <string name="custom_terms_manage">Manage personal dictionary</string>
+    <string name="custom_terms_close">Close personal dictionary</string>
+    <string name="custom_terms_hints_title">Whisper recognition hints</string>
+    <string name="custom_terms_hint">One name or phrase per line</string>
+    <string name="custom_terms_support_whisper">Whisper uses these terms as recognition hints. Exact corrections below work after recognition with every model.</string>
+    <string name="custom_terms_support_unavailable">Parakeet and this runtime cannot use native recognition hints. Exact corrections below work after recognition with Parakeet and every other model.</string>
+    <string name="custom_terms_support_unknown">Recognition-hint support for this imported model is checked at runtime. Exact corrections below work with every model.</string>
+    <string name="custom_dictionary_summary">%1$d Whisper hints · %2$d exact corrections (%3$s)</string>
+    <string name="personal_corrections_on">on</string>
+    <string name="personal_corrections_off">off</string>
+    <string name="custom_terms_summary_unknown_empty">Support is checked against the active model.</string>
+    <string name="custom_terms_count">%1$d/%2$d terms · %3$d/%4$d prompt bytes</string>
+    <string name="custom_terms_save">Save</string>
+    <string name="custom_terms_clear">Clear</string>
+    <string name="custom_terms_clear_title">Clear custom terms?</string>
+    <string name="custom_terms_clear_body">This removes the local list from the app.</string>
+    <string name="custom_terms_saved">Saved %1$d custom terms</string>
+    <string name="custom_terms_cleared">Custom terms cleared</string>
+    <string name="custom_terms_save_failed">Could not save custom terms</string>
+    <string name="custom_terms_error_count">Use at most %1$d terms.</string>
+    <string name="custom_terms_error_length">Each term must be at most %1$d characters.</string>
+    <string name="custom_terms_error_special">Whisper special-token syntax is not allowed.</string>
+    <string name="custom_terms_error_control">Control characters are not allowed.</string>
+    <string name="custom_terms_error_budget">Shorten the list to at most %1$d UTF-8 bytes so every term fits the Whisper prompt.</string>
+    <string name="custom_terms_privacy">Stored only in this app. Terms are never added to diagnostic logs, and changing them does not reload the model.</string>
+    <string name="personal_corrections_title">Exact corrections for Parakeet and all models</string>
+    <string name="personal_corrections_desc">Use one explicit “heard =&gt; written” rule per line. Matches are case-insensitive whole words or phrases. Corrections never run inside quoted text, URLs, or email addresses, never change digits, and do not chain.</string>
+    <string name="personal_corrections_enable">Apply exact corrections</string>
+    <string name="personal_corrections_hint">marmot protocol =&gt; Marmot Protocol</string>
+    <string name="personal_corrections_count">%1$d/%2$d exact corrections</string>
+    <string name="personal_corrections_saved">Saved %1$d exact corrections</string>
+    <string name="personal_corrections_cleared">Exact corrections cleared</string>
+    <string name="personal_corrections_enabled_notice">Exact corrections enabled</string>
+    <string name="personal_corrections_disabled_notice">Exact corrections disabled</string>
+    <string name="personal_corrections_enable_empty">Add at least one valid correction before enabling.</string>
+    <string name="personal_corrections_clear_title">Clear exact corrections?</string>
+    <string name="personal_corrections_clear_body">This removes every heard-to-written rule. Whisper hints are kept.</string>
+    <string name="personal_corrections_save_failed">Could not update exact corrections</string>
+    <string name="personal_corrections_error_count">Use at most %1$d exact corrections.</string>
+    <string name="personal_corrections_error_separator">Use exactly one =&gt; separator on each line.</string>
+    <string name="personal_corrections_error_empty">Both sides of each correction are required.</string>
+    <string name="personal_corrections_error_length">Each side must be at most %1$d characters.</string>
+    <string name="personal_corrections_error_unsafe">Quotes and control characters are not allowed in correction rules.</string>
+    <string name="personal_corrections_error_duplicate">Each heard phrase can appear only once.</string>
+    <string name="personal_corrections_error_number">A correction must keep the same digits in the same order.</string>
+    <string name="personal_corrections_privacy">Stored only in this app and snapshotted once per transcription. Rules and corrected text are never added to diagnostic logs.</string>
 
     <string name="section_benchmark">Benchmark</string>
     <string name="desc_benchmark">Measures how fast the active model transcribes on this device, using a built-in English test recording (11 s).</string>

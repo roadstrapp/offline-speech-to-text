@@ -1,0 +1,221 @@
+package dev.notune.transcribe;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+import java.text.Normalizer;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+
+/** Bounded, app-private exact corrections applied after recognition. */
+final class PersonalCorrections {
+    static final String FILE_NAME = "personal_corrections";
+    static final String ENABLED_FILE_NAME = "personal_corrections_enabled";
+    static final int MAX_RULES = 32;
+    static final int MAX_SIDE_CODE_POINTS = 80;
+    private static final int MAX_FILE_BYTES = 8192;
+
+    enum Problem {
+        TOO_MANY_RULES,
+        MISSING_SEPARATOR,
+        EMPTY_SIDE,
+        SIDE_TOO_LONG,
+        INVALID_CONTROL,
+        AMBIGUOUS_SOURCE,
+        NUMBER_MISMATCH
+    }
+
+    static final class InvalidCorrectionsException extends Exception {
+        final Problem problem;
+
+        InvalidCorrectionsException(Problem problem) {
+            super(problem.name());
+            this.problem = problem;
+        }
+    }
+
+    static final class Rule {
+        final String heard;
+        final String written;
+
+        Rule(String heard, String written) {
+            this.heard = heard;
+            this.written = written;
+        }
+    }
+
+    static final class Parsed {
+        final List<Rule> rules;
+        final String storedText;
+
+        Parsed(List<Rule> rules, String storedText) {
+            this.rules = Collections.unmodifiableList(rules);
+            this.storedText = storedText;
+        }
+    }
+
+    private PersonalCorrections() {}
+
+    static Parsed parse(String raw) throws InvalidCorrectionsException {
+        String input = raw == null ? "" : raw;
+        List<Rule> rules = new ArrayList<>();
+        Set<String> sources = new HashSet<>();
+        for (String line : input.split("\\r\\n|\\n|\\r", -1)) {
+            if (containsUnsafeCharacter(line)) {
+                throw new InvalidCorrectionsException(Problem.INVALID_CONTROL);
+            }
+            String trimmed = line.trim();
+            if (trimmed.isEmpty()) continue;
+            int separator = trimmed.indexOf("=>");
+            if (separator < 0 || trimmed.indexOf("=>", separator + 2) >= 0) {
+                throw new InvalidCorrectionsException(Problem.MISSING_SEPARATOR);
+            }
+            String heard = normalize(trimmed.substring(0, separator));
+            String written = normalize(trimmed.substring(separator + 2));
+            if (heard.isEmpty() || written.isEmpty()) {
+                throw new InvalidCorrectionsException(Problem.EMPTY_SIDE);
+            }
+            if (heard.codePointCount(0, heard.length()) > MAX_SIDE_CODE_POINTS
+                    || written.codePointCount(0, written.length()) > MAX_SIDE_CODE_POINTS) {
+                throw new InvalidCorrectionsException(Problem.SIDE_TOO_LONG);
+            }
+            if (containsUnsafeCharacter(heard) || containsUnsafeCharacter(written)) {
+                throw new InvalidCorrectionsException(Problem.INVALID_CONTROL);
+            }
+            String sourceKey = heard.toLowerCase(Locale.ROOT);
+            if (!sources.add(sourceKey)) {
+                throw new InvalidCorrectionsException(Problem.AMBIGUOUS_SOURCE);
+            }
+            if (!digits(heard).equals(digits(written))) {
+                throw new InvalidCorrectionsException(Problem.NUMBER_MISMATCH);
+            }
+            rules.add(new Rule(heard, written));
+            if (rules.size() > MAX_RULES) {
+                throw new InvalidCorrectionsException(Problem.TOO_MANY_RULES);
+            }
+        }
+
+        StringBuilder stored = new StringBuilder();
+        for (Rule rule : rules) {
+            stored.append(rule.heard).append(" => ").append(rule.written).append('\n');
+        }
+        if (stored.toString().getBytes(StandardCharsets.UTF_8).length > MAX_FILE_BYTES) {
+            throw new InvalidCorrectionsException(Problem.SIDE_TOO_LONG);
+        }
+        return new Parsed(rules, stored.toString());
+    }
+
+    static Parsed read(File filesDir) throws IOException, InvalidCorrectionsException {
+        File file = new File(filesDir, FILE_NAME);
+        if (!file.isFile()) return parse("");
+        if (file.length() > MAX_FILE_BYTES) {
+            throw new InvalidCorrectionsException(Problem.SIDE_TOO_LONG);
+        }
+        return parse(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
+    }
+
+    static Parsed write(File filesDir, String raw)
+            throws IOException, InvalidCorrectionsException {
+        Parsed parsed = parse(raw);
+        writeAtomically(filesDir, FILE_NAME, parsed.storedText);
+        return parsed;
+    }
+
+    static boolean isEnabled(File filesDir) {
+        return new File(filesDir, ENABLED_FILE_NAME).isFile();
+    }
+
+    /** Removes stale opt-in state when no valid rule can actually run. */
+    static boolean reconcileEnabled(File filesDir) throws IOException {
+        if (!isEnabled(filesDir)) return false;
+        try {
+            if (!read(filesDir).rules.isEmpty()) return true;
+        } catch (InvalidCorrectionsException ignored) {
+            // Native parsing also rejects the complete file. Keep UI and
+            // runtime state aligned without exposing rule content.
+        }
+        setEnabled(filesDir, false);
+        return false;
+    }
+
+    static void setEnabled(File filesDir, boolean enabled) throws IOException {
+        if (enabled) {
+            writeAtomically(filesDir, ENABLED_FILE_NAME, "1\n");
+        } else {
+            Files.deleteIfExists(new File(filesDir, ENABLED_FILE_NAME).toPath());
+            Files.deleteIfExists(new File(filesDir, ENABLED_FILE_NAME + ".tmp").toPath());
+        }
+    }
+
+    private static void writeAtomically(File filesDir, String name, String value)
+            throws IOException {
+        File target = new File(filesDir, name);
+        File temporary = new File(filesDir, name + ".tmp");
+        if (value.isEmpty()) {
+            Files.deleteIfExists(temporary.toPath());
+            Files.deleteIfExists(target.toPath());
+            return;
+        }
+        try (FileOutputStream output = new FileOutputStream(temporary, false)) {
+            output.write(value.getBytes(StandardCharsets.UTF_8));
+            output.getFD().sync();
+        }
+        try {
+            Files.move(temporary.toPath(), target.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (AtomicMoveNotSupportedException error) {
+            Files.move(temporary.toPath(), target.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private static String normalize(String value) {
+        String normalized = Normalizer.normalize(value.trim(), Normalizer.Form.NFC);
+        StringBuilder result = new StringBuilder(normalized.length());
+        boolean pendingSpace = false;
+        for (int offset = 0; offset < normalized.length();) {
+            int codePoint = normalized.codePointAt(offset);
+            offset += Character.charCount(codePoint);
+            if (Character.isWhitespace(codePoint)) {
+                pendingSpace = result.length() > 0;
+            } else {
+                if (pendingSpace) result.append(' ');
+                result.appendCodePoint(codePoint);
+                pendingSpace = false;
+            }
+        }
+        return result.toString();
+    }
+
+    private static boolean containsUnsafeCharacter(String value) {
+        for (int offset = 0; offset < value.length();) {
+            int codePoint = value.codePointAt(offset);
+            offset += Character.charCount(codePoint);
+            if (Character.isISOControl(codePoint)
+                    || codePoint == '"' || codePoint == '\''
+                    || codePoint == 0x2018 || codePoint == 0x2019
+                    || codePoint == 0x201C || codePoint == 0x201D) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String digits(String value) {
+        StringBuilder result = new StringBuilder();
+        for (int offset = 0; offset < value.length();) {
+            int codePoint = value.codePointAt(offset);
+            offset += Character.charCount(codePoint);
+            if (Character.isDigit(codePoint)) result.appendCodePoint(codePoint);
+        }
+        return result.toString();
+    }
+}

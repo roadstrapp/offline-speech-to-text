@@ -173,6 +173,8 @@ public class ModelsActivity extends AppCompatActivity {
         });
 
         findViewById(R.id.btn_model_links).setOnClickListener(v -> showLinksDialog());
+        findViewById(R.id.btn_custom_terms).setOnClickListener(v ->
+                startActivity(new Intent(this, CustomTermsActivity.class)));
         // Bundled builds switch locally. Small developer builds use this tap
         // as explicit consent for a verified download; browsing websites stays
         // a separate, clearly secondary action below manual import.
@@ -217,6 +219,7 @@ public class ModelsActivity extends AppCompatActivity {
     protected void onStart() {
         super.onStart();
         DOWNLOAD_LIFECYCLE.attach(downloadObserver);
+        refreshList();
     }
 
     @Override
@@ -564,6 +567,31 @@ public class ModelsActivity extends AppCompatActivity {
                 || (active.isEmpty() && BuildConfig.HAS_BUNDLED_MODEL);
         findViewById(R.id.translate_row).setVisibility(
                 knownUnsupported ? View.GONE : View.VISIBLE);
+        updateCustomTermsSummary();
+    }
+
+    private void updateCustomTermsSummary() {
+        TextView summary = findViewById(R.id.text_custom_terms_summary);
+        int hintCount = 0;
+        try {
+            hintCount = CustomTerms.read(getFilesDir()).terms.size();
+        } catch (IOException | CustomTerms.InvalidTermsException ignored) {
+            // The editor exposes recovery for invalid data. Do not include
+            // custom-term content or validation detail in diagnostic logs.
+        }
+        int correctionCount = 0;
+        try {
+            correctionCount = PersonalCorrections.read(getFilesDir()).rules.size();
+        } catch (IOException | PersonalCorrections.InvalidCorrectionsException ignored) {
+            // Same fail-closed recovery contract as the editor and native reader.
+        }
+        boolean correctionsActive = correctionCount > 0
+                && PersonalCorrections.isEnabled(getFilesDir());
+        summary.setText(getString(R.string.custom_dictionary_summary,
+                hintCount, correctionCount,
+                getString(correctionsActive
+                        ? R.string.personal_corrections_on
+                        : R.string.personal_corrections_off)));
     }
 
     private void updateRecommendation() {

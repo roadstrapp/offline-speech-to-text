@@ -19,8 +19,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
     def test_release_identity_and_default_model_contract_are_immutable(self):
         gradle = (ROOT / "app/build.gradle.kts").read_text()
         self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
-        self.assertIn("versionCode = 28", gradle)
-        self.assertIn('versionName = "0.3.1"', gradle)
+        self.assertIn("versionCode = 29", gradle)
+        self.assertIn('versionName = "0.4.0"', gradle)
         self.assertIn('providers.gradleProperty("includeBundledModel")', gradle)
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: true', gradle)
         self.assertIn('ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,', gradle)
@@ -156,6 +156,23 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("recordingSession.onError();", source)
         self.assertNotIn("discardNextTranscription", source)
         self.assertNotIn("pendingCommitText", source)
+
+    def test_android_8_and_9_paths_guard_newer_platform_apis(self):
+        activity = (ROOT / "app/src/main/java/dev/notune/transcribe/LiveSubtitleActivity.java").read_text()
+        service = (ROOT / "app/src/main/java/dev/notune/transcribe/LiveSubtitleService.java").read_text()
+        ime = (ROOT / "app/src/main/java/dev/notune/transcribe/RustInputMethodService.java").read_text()
+        gradle = (ROOT / "app/build.gradle.kts").read_text()
+
+        self.assertIn("Build.VERSION.SDK_INT < Build.VERSION_CODES.Q", activity)
+        self.assertIn("requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}", activity)
+        self.assertIn("Build.VERSION.SDK_INT < Build.VERSION_CODES.Q", service)
+        self.assertIn("@RequiresApi(Build.VERSION_CODES.Q)", service)
+        self.assertIn("checkSelfPermission(Manifest.permission.RECORD_AUDIO)", service)
+        self.assertIn("private void switchToOtherInputMethod()", ime)
+        self.assertIn("Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P", ime)
+        self.assertIn("imm.showInputMethodPicker()", ime)
+        self.assertEqual(1, ime.count("switchToPreviousInputMethod()"))
+        self.assertIn('disable += "MissingTranslation"', gradle)
 
     def test_backspace_hold_drag_is_preview_only_until_release_and_restores_on_cancel(self):
         source = (ROOT / "app/src/main/java/dev/notune/transcribe/RustInputMethodService.java").read_text()
@@ -298,6 +315,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
 
         self.assertIn('@+id/btn_more_settings', layout_text)
         self.assertIn('@+id/advanced_home_sections', layout_text)
+        self.assertGreater(layout_text.index('@+id/btn_subs_advanced'),
+                           layout_text.index('@+id/advanced_home_sections'))
         self.assertIn('android:visibility="gone"', layout_text[
             layout_text.index('@+id/advanced_home_sections'):])
         main = (ROOT / "app/src/main/java/dev/notune/transcribe/MainActivity.java").read_text()
@@ -322,6 +341,47 @@ class ReleaseConfigurationTest(unittest.TestCase):
             if node.attrib.get(android + "accessibilityHeading") == "true"
         ]
         self.assertGreaterEqual(len(headings), 6)
+
+    def test_idle_ime_record_control_matches_keyboard_key_shape(self):
+        android = "{http://schemas.android.com/apk/res/android}"
+        layout = ET.parse(ROOT / "app/src/main/res/layout/ime_layout.xml").getroot()
+        record = next(
+            node for node in layout.iter()
+            if node.attrib.get(android + "id") == "@+id/ime_record_key"
+        )
+        self.assertEqual("160dp", record.attrib.get(android + "layout_width"))
+        self.assertEqual("88dp", record.attrib.get(android + "layout_height"))
+        self.assertEqual("@drawable/bg_ime_record", record.attrib.get(android + "background"))
+
+        record_background = ET.parse(
+            ROOT / "app/src/main/res/drawable/bg_ime_record.xml"
+        ).getroot()
+        self.assertEqual("rectangle", record_background.attrib.get(android + "shape"))
+        corners = next(
+            child for child in record_background
+            if child.tag.rsplit("}", 1)[-1] == "corners"
+        )
+        self.assertEqual("12dp", corners.attrib.get(android + "radius"))
+
+    def test_voice_surfaces_show_progress_around_microphone_while_processing(self):
+        ime_layout = (ROOT / "app/src/main/res/layout/ime_layout.xml").read_text()
+        popup = (ROOT / "app/src/main/res/layout/recognize_activity.xml").read_text()
+        side = (ROOT / "app/src/main/res/layout/recognize_activity_side.xml").read_text()
+        ime = (ROOT / "app/src/main/java/dev/notune/transcribe/RustInputMethodService.java").read_text()
+        activity = (ROOT / "app/src/main/java/dev/notune/transcribe/RecognizeActivity.java").read_text()
+        self.assertIn('@+id/ime_processing_ring', ime_layout)
+        self.assertIn('@+id/mic_processing_ring', popup)
+        self.assertIn('@+id/mic_processing_ring', side)
+        self.assertIn('processingResult = true', ime)
+        self.assertIn(
+            'processingRing.setVisibility(isProcessing ? View.VISIBLE : View.GONE)',
+            ime,
+        )
+        self.assertIn('awaitingResult = true', activity)
+        self.assertIn(
+            'showProcessing(awaitingResult || isProcessingStatus(s))',
+            activity,
+        )
 
     def test_fixed_amber_palette_and_launcher_icon_have_no_blue_fallback(self):
         color_files = [
@@ -564,13 +624,19 @@ class ReleaseConfigurationTest(unittest.TestCase):
         loader = (ROOT / "app/src/main/java/dev/notune/transcribe/NativeLibraries.java").read_text()
         activity = (ROOT / "app/src/main/java/dev/notune/transcribe/ModelsActivity.java").read_text()
         build = (ROOT / "app/build.gradle.kts").read_text()
+        probe = (ROOT / "app/src/main/cpp/cpu_features_probe.c").read_text()
         self.assertIn('"android_transcribe_app_dotprod"', loader)
         self.assertIn('"android_transcribe_app_armv8"', loader)
-        self.assertIn("HWCAP_ASIMDHP", loader)
-        self.assertIn("HWCAP_ASIMDDP", loader)
+        self.assertIn('"ostt_cpu_probe"', loader)
+        self.assertIn("supportsOptimizedBackendNative", loader)
+        self.assertNotIn("/proc/self/auxv", loader)
         self.assertIn("NativeLibraries.supportsOptimizedBackend()", activity)
         self.assertIn('nativeVariant("Armv8", "armv8-a")', build)
         self.assertIn('nativeVariant("Dotprod", "armv8.2-a+dotprod+fp16")', build)
+        self.assertIn("compileCpuProbe", build)
+        self.assertIn("libostt_cpu_probe.so", build)
+        self.assertIn("getauxval(AT_HWCAP)", probe)
+        self.assertIn("HWCAP_ASIMDHP | HWCAP_ASIMDDP", probe)
         for source in (
                 "MainActivity.java", "ModelsActivity.java", "RustInputMethodService.java",
                 "ForegroundRecordingService.java", "RecognizeActivity.java",
@@ -613,6 +679,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
                       if view.tag.endswith("MaterialCardView")]
         expected_cards = [
             "@+id/card_installed_models",
+            "@+id/card_custom_terms",
             "@+id/card_recommendation",
             "@+id/card_model_guide",
             "@+id/card_download_catalog",
@@ -626,6 +693,47 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("models_provenance_imported", source)
         self.assertIn("DefaultModelContract.BYTE_SIZE", source)
         self.assertIn("reloadModelNative(this)", source)
+
+    def test_custom_terms_are_bounded_private_and_model_gated(self):
+        manifest = (ROOT / "app/src/main/AndroidManifest.xml").read_text()
+        layout = (ROOT / "app/src/main/res/layout/activity_models.xml").read_text()
+        editor_layout = (ROOT / "app/src/main/res/layout/activity_custom_terms.xml").read_text()
+        store = (ROOT / "app/src/main/java/dev/notune/transcribe/CustomTerms.java").read_text()
+        activity = (ROOT / "app/src/main/java/dev/notune/transcribe/CustomTermsActivity.java").read_text()
+        catalog = (ROOT / "app/src/main/java/dev/notune/transcribe/ModelCatalog.java").read_text()
+        engine = (ROOT / "src/engine.rs").read_text()
+        native_terms = (ROOT / "src/custom_terms.rs").read_text()
+        corrections = (ROOT / "app/src/main/java/dev/notune/transcribe/PersonalCorrections.java").read_text()
+        native_corrections = (ROOT / "src/personal_corrections.rs").read_text()
+        self.assertIn('android:name=".CustomTermsActivity"', manifest)
+        self.assertIn('android:exported="false"', manifest)
+        self.assertIn('@+id/card_custom_terms', layout)
+        self.assertIn('@+id/custom_terms_editor', editor_layout)
+        self.assertIn("MAX_TERMS = 32", store)
+        self.assertIn("MAX_PROMPT_UTF8_BYTES = 200", store)
+        self.assertIn("StandardCopyOption.ATOMIC_MOVE", store)
+        self.assertIn("Normalizer.Form.NFC", store)
+        self.assertNotIn("DiagnosticLog", store + activity)
+        self.assertIn("VerifiedModelProvenance.isVerified", activity)
+        self.assertIn('? ModelDescriptor.Capability.SUPPORTED', catalog)
+        self.assertIn('model.supports(transcribe_cpp::Feature::InitialPrompt)', engine)
+        self.assertLess(engine.index("let prompt = if self.supports_initial_prompt"),
+                        engine.index("if samples.len() <= self.chunk_plan.max_run_samples()"))
+        self.assertIn("custom-term list", native_terms)
+        self.assertNotIn("log::", native_terms)
+        self.assertIn('@+id/personal_corrections_enabled', editor_layout)
+        self.assertIn('@+id/personal_corrections_editor', editor_layout)
+        self.assertIn('MAX_RULES = 32', corrections)
+        self.assertIn('StandardCopyOption.ATOMIC_MOVE', corrections)
+        self.assertIn('NUMBER_MISMATCH', corrections)
+        self.assertNotIn('DiagnosticLog', corrections)
+        self.assertIn('personal_corrections::load(&self.files_dir)', engine)
+        self.assertIn('personal_corrections::apply(&text, rules)', engine)
+        self.assertLess(engine.index('personal_corrections::load(&self.files_dir)'),
+                        engine.index('if samples.len() <= self.chunk_plan.max_run_samples()'))
+        self.assertIn('is_protected_token', native_corrections)
+        self.assertIn('inside_double_quote', native_corrections)
+        self.assertNotIn('log::', native_corrections)
 
     def test_settings_schema_migration_is_applied_before_theme(self):
         app = (ROOT / "app/src/main/java/dev/notune/transcribe/App.java").read_text()

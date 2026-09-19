@@ -100,8 +100,8 @@ public final class BehaviorTest {
                 "automatic language detection is explicit");
         assertEquals(ModelDescriptor.Capability.UNSUPPORTED, model.translation,
                 "translation is not advertised for Parakeet");
-        assertEquals(ModelDescriptor.Capability.UNKNOWN, model.prompt,
-                "unproven backend features stay unknown");
+        assertEquals(ModelDescriptor.Capability.UNSUPPORTED, model.prompt,
+                "the pinned Parakeet runtime does not advertise prompt support");
         assertEquals(true, model.abis.contains("arm64-v8a")
                         && !model.requiresDotProduct && !model.requiresFp16,
                 "the baseline backend keeps every arm64 model installable");
@@ -122,6 +122,8 @@ public final class BehaviorTest {
                                 && candidate.fileName.contains("large-v3")),
                 "the catalog includes large Whisper variants");
         ModelDescriptor whisper = ModelCatalog.findByFileName("whisper-small-Q4_K_M.gguf");
+        assertEquals(ModelDescriptor.Capability.SUPPORTED, whisper.prompt,
+                "the pinned Whisper runtime advertises initial-prompt support");
         assertEquals(true, whisper.supportsLanguage("ta-IN"),
                 "multilingual Whisper guidance includes its broad language set");
         assertEquals(false, whisper.supportsLanguage("yue-HK"),

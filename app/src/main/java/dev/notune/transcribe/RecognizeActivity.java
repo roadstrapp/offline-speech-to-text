@@ -30,7 +30,9 @@ public class RecognizeActivity extends AppCompatActivity {
 
     private TextView status;
     private boolean isRecording = false;
+    private boolean awaitingResult = false;
     private MicLevelView micLevel;
+    private View processingRing;
     private final AudioFocusPauser audioPauser = new AudioFocusPauser();
     private boolean pauseAudioActive = false;
 
@@ -56,10 +58,12 @@ public class RecognizeActivity extends AppCompatActivity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         micLevel = findViewById(R.id.mic_level);
+        processingRing = findViewById(R.id.mic_processing_ring);
         status = findViewById(R.id.txt_status);
 
         findViewById(R.id.btn_close).setOnClickListener(v -> {
             // discard current recording
+            awaitingResult = false;
             if (isRecording) {
                 isRecording = false;
                 cancelRecording();   // new native method
@@ -96,7 +100,9 @@ public class RecognizeActivity extends AppCompatActivity {
     private void finishRecording() {
         if (!isRecording) return;
         isRecording = false;
+        awaitingResult = true;
         status.setText("Processing...");
+        showProcessing(true);
         stopRecording();
         if (pauseAudioActive) {
             audioPauser.abandon(this);
@@ -142,8 +148,14 @@ public class RecognizeActivity extends AppCompatActivity {
     // Called from Rust
     public void onStatusUpdate(String s) {
         runOnUiThread(() -> {
+            boolean error = s != null && s.startsWith("Error");
+            if (error) awaitingResult = false;
             final String shown;
-            if ("Ready".equals(s)) {
+            if (awaitingResult && !error) {
+                // A late model-ready callback must not make an in-flight
+                // transcription look finished while its result is pending.
+                shown = "Processing...";
+            } else if ("Ready".equals(s)) {
                 // The model-ready status can arrive after recording started.
                 shown = isRecording ? "Listening... (Tap to stop)" : "Ready";
             } else if ("Listening...".equals(s)) {
@@ -151,6 +163,7 @@ public class RecognizeActivity extends AppCompatActivity {
             } else {
                 shown = s;
             }
+            showProcessing(awaitingResult || isProcessingStatus(s));
             status.setText(shown);
         });
     }
@@ -163,6 +176,8 @@ public class RecognizeActivity extends AppCompatActivity {
     // Called from Rust – keep same method name as IME for code reuse
     public void onTextTranscribed(String text) {
         runOnUiThread(() -> {
+            awaitingResult = false;
+            showProcessing(false);
             if (text == null || text.trim().isEmpty()) {
                 // Nothing was recognized (e.g. auto-stop after silence only).
                 setResult(Activity.RESULT_CANCELED);
@@ -179,6 +194,18 @@ public class RecognizeActivity extends AppCompatActivity {
             setResult(Activity.RESULT_OK, data);
             finish();
         });
+    }
+
+    private void showProcessing(boolean processing) {
+        if (processingRing != null) {
+            processingRing.setVisibility(processing ? View.VISIBLE : View.GONE);
+        }
+        if (processing && micLevel != null) micLevel.setLevel(0f);
+    }
+
+    private static boolean isProcessingStatus(String status) {
+        return status != null && (status.contains("Transcribing")
+                || status.contains("Processing") || status.contains("Waiting"));
     }
 
     private boolean isPauseAudioEnabled() {

@@ -99,6 +99,8 @@ There is no platform capability flag for caller audio. Before the first real cap
 
 Offline Speech to Text currently reports ready, beginning-of-speech, RMS, end-of-speech, final-result, and error callbacks. It does not emit partial-result callbacks. Set `EXTRA_PARTIAL_RESULTS` to `false` and design the UI around a final transcript.
 
+When the user enables exact personal-dictionary corrections, Offline Speech to Text applies them once to the final assembled transcript before returning it through any activity, recognition-service, file, subtitle, long-recording, or IME surface. Integrators do not need a separate correction pass. Whisper recognition hints affect only capable Whisper backends; exact corrections are post-processing and therefore also work with Parakeet. Neither mode exposes dictionary contents to callers or diagnostic logs.
+
 ### Scoped Kotlin session
 
 The following core is intentionally scoped to an API 33+ activity that is visible, already has `RECORD_AUDIO`, already resolved an eligible component, and already passed the capability preflight above. It uses only public Android APIs. The caller supplies `isOriginCurrent` so a late result cannot enter a different account, conversation, editor, or draft revision.

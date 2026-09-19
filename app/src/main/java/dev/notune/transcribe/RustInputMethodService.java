@@ -13,7 +13,6 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
-import android.widget.ProgressBar;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -49,14 +48,14 @@ public class RustInputMethodService extends InputMethodService {
     private TextView hintView;
     private View recordContainer;
     private android.widget.ImageView micIcon;
-    private ProgressBar progressBar;
+    private View processingRing;
     private View backspaceButton;
     private View spaceButton;
     private View enterButton;
     private View switchKeyboardButton;
     private View inputView;
     private MicLevelView micLevelView;
-    private View recordCircle;
+    private View recordKey;
     private View recordingActions;
     private android.widget.ImageButton pauseResumeButton;
     private View cancelRecordingButton;
@@ -68,6 +67,7 @@ public class RustInputMethodService extends InputMethodService {
     private Handler mainHandler;
     private boolean isRecording = false;
     private boolean recordingPaused = false;
+    private boolean processingResult = false;
     private boolean pendingSwitchBack = false;
     private String lastStatus = "Initializing...";
     private static final long DELETE_PREVIEW_DELAY = 180;
@@ -186,11 +186,11 @@ public class RustInputMethodService extends InputMethodService {
             });
 
             statusView = view.findViewById(R.id.ime_status_text);
-            progressBar = view.findViewById(R.id.ime_progress);
+            processingRing = view.findViewById(R.id.ime_processing_ring);
             recordContainer = view.findViewById(R.id.ime_record_container);
             micIcon = view.findViewById(R.id.ime_mic_icon);
             micLevelView = view.findViewById(R.id.ime_mic_level);
-            recordCircle = view.findViewById(R.id.ime_record_circle);
+            recordKey = view.findViewById(R.id.ime_record_key);
             hintView = view.findViewById(R.id.ime_hint);
             recordingActions = view.findViewById(R.id.ime_recording_actions);
             pauseResumeButton = view.findViewById(R.id.ime_pause_resume);
@@ -206,7 +206,7 @@ public class RustInputMethodService extends InputMethodService {
             cancelRecordingButton.setOnClickListener(v -> stopAndDiscard());
             transcribeKeepButton.setOnClickListener(v -> stopTranscribe(false));
             transcribeSwitchButton.setOnClickListener(v -> stopTranscribe(true));
-            switchKeyboardButton.setOnClickListener(v -> switchToPreviousInputMethod());
+            switchKeyboardButton.setOnClickListener(v -> switchToOtherInputMethod());
 
             // Key repeat runnable for space
             spaceRepeatRunnable = new Runnable() {
@@ -313,6 +313,7 @@ public class RustInputMethodService extends InputMethodService {
                 transcriptionTargetConnection = null;
                 recordingSession.begin(getCurrentInputConnection());
                 recordingPaused = false;
+                processingResult = false;
                 startRecording();
                 updateRecordButtonUI(true);
             });
@@ -492,6 +493,7 @@ public class RustInputMethodService extends InputMethodService {
 
     private void stopAndDiscard() {
         if (!isRecording) return;
+        processingResult = false;
         pendingSwitchBack = false;
         recordingSession.discard();
         transcriptionTargetConnection = null;
@@ -540,7 +542,7 @@ public class RustInputMethodService extends InputMethodService {
             updateRecordButtonUI(false);
             releasePauseAudio();
             pendingSwitchBack = false;
-            if (switchKeyboard) switchToPreviousInputMethod();
+            if (switchKeyboard) switchToOtherInputMethod();
             return;
         }
         try {
@@ -553,9 +555,11 @@ public class RustInputMethodService extends InputMethodService {
             pendingSwitchBack = false;
             updateRecordButtonUI(false);
             releasePauseAudio();
-            if (switchKeyboard) switchToPreviousInputMethod();
+            if (switchKeyboard) switchToOtherInputMethod();
             return;
         }
+        processingResult = true;
+        lastStatus = "Processing...";
         updateRecordButtonUI(false);
         releasePauseAudio();
     }
@@ -767,9 +771,8 @@ public class RustInputMethodService extends InputMethodService {
             }
             if (hintView != null) hintView.setText("Pause, cancel, or insert");
         } else {
-            if (statusView != null) statusView.setText("Processing...");
-            if (hintView != null) hintView.setText("Tap to Record");
             if (micLevelView != null) micLevelView.setLevel(0f);
+            updateUiState();
         }
     }
 
@@ -785,17 +788,17 @@ public class RustInputMethodService extends InputMethodService {
         }
     }
 
-    /** Tints the round record button + mic: idle = primary, recording = error. */
+    /** Tints the record key + mic: idle = primary, recording = error. */
     private void tintRecordButton(boolean recording) {
-        int circleAttr = recording
+        int keyAttr = recording
                 ? com.google.android.material.R.attr.colorPrimary
                 : com.google.android.material.R.attr.colorPrimaryContainer;
         int iconAttr = recording
                 ? com.google.android.material.R.attr.colorOnPrimary
                 : com.google.android.material.R.attr.colorOnPrimaryContainer;
-        if (recordCircle != null) {
-            recordCircle.setBackgroundTintList(ColorStateList.valueOf(
-                    MaterialColors.getColor(recordCircle, circleAttr)));
+        if (recordKey != null) {
+            recordKey.setBackgroundTintList(ColorStateList.valueOf(
+                    MaterialColors.getColor(recordKey, keyAttr)));
         }
         if (micIcon != null) {
             micIcon.setColorFilter(MaterialColors.getColor(micIcon, iconAttr));
@@ -829,6 +832,7 @@ public class RustInputMethodService extends InputMethodService {
             DiagnosticLog.event(getFilesDir(), "ime_state", "state=" + diagnosticState(status));
             lastStatus = status;
             if (status != null && status.startsWith("Error")) {
+                processingResult = false;
                 transcriptionTargetConnection = null;
                 recordingSession.onError();
                 if (isRecording) updateRecordButtonUI(false);
@@ -836,7 +840,7 @@ public class RustInputMethodService extends InputMethodService {
             updateUiState();
             if (pendingSwitchBack && status != null && status.startsWith("Error")) {
                 pendingSwitchBack = false;
-                switchToPreviousInputMethod();
+                switchToOtherInputMethod();
             }
             if (pauseAudioActive && status != null && status.startsWith("Error")) {
                 audioPauser.abandon(this);
@@ -860,39 +864,40 @@ public class RustInputMethodService extends InputMethodService {
         boolean isWaiting = lastStatus.contains("Waiting");
         boolean isTranscribing = lastStatus.contains("Transcribing") || lastStatus.contains("Processing");
         boolean isError = lastStatus.startsWith("Error");
-        boolean isReady = lastStatus.equals("Ready");
+        boolean isProcessing = processingResult || isTranscribing || isWaiting;
 
         // Don't show internal loading states to the user
         if (statusView != null && !isRecording) {
             if (isError) {
                 statusView.setText(lastStatus);
-            } else if (isTranscribing || isWaiting) {
+            } else if (isProcessing) {
                 statusView.setText("Processing...");
             } else {
                 statusView.setText("Tap to Record");
             }
         }
 
-        // Hide progress bar - don't expose model loading to user
-        if (progressBar != null) {
-            progressBar.setVisibility(View.GONE);
+        if (processingRing != null) {
+            processingRing.setVisibility(isProcessing ? View.VISIBLE : View.GONE);
         }
 
         // Disable button only during transcription/processing/waiting or fatal errors
         if (recordContainer != null) {
-            boolean disable = isTranscribing || isWaiting || isError;
+            boolean disable = isProcessing || isError;
             recordContainer.setEnabled(!disable);
             recordContainer.setAlpha(disable ? 0.5f : 1.0f);
         }
 
         if (hintView != null && !isRecording) {
-            hintView.setText("Tap to Record");
+            hintView.setText(isProcessing ? "Transcribing on device" : "Tap to Record");
         }
     }
 
     // Called from Rust
     public void onTextTranscribed(String text) {
         mainHandler.post(() -> {
+            processingResult = false;
+            lastStatus = "Ready";
             InputConnection requestedTarget = transcriptionTargetConnection;
             transcriptionTargetConnection = null;
             boolean safeTarget = editorSafeForDictation && inputActive
@@ -913,7 +918,7 @@ public class RustInputMethodService extends InputMethodService {
                 }
                 if (pendingSwitchBack) {
                     pendingSwitchBack = false;
-                    switchToPreviousInputMethod();
+                    switchToOtherInputMethod();
                 }
                 return;
             }
@@ -928,7 +933,7 @@ public class RustInputMethodService extends InputMethodService {
                 }
                 if (pendingSwitchBack) {
                     pendingSwitchBack = false;
-                    switchToPreviousInputMethod();
+                    switchToOtherInputMethod();
                 }
                 return;
             }
@@ -943,9 +948,18 @@ public class RustInputMethodService extends InputMethodService {
             if (statusView != null) statusView.setText("Tap to Record");
             if (pendingSwitchBack) {
                 pendingSwitchBack = false;
-                switchToPreviousInputMethod();
+                switchToOtherInputMethod();
             }
         });
+    }
+
+    private void switchToOtherInputMethod() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            switchToPreviousInputMethod();
+            return;
+        }
+        InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (imm != null) imm.showInputMethodPicker();
     }
 
     // Commits transcribed text into the active input connection, optionally

@@ -59,7 +59,7 @@ public final class ModelCatalog {
                     "el", "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "sk",
                     "sl", "es", "sv", "ru", "uk")),
             ModelDescriptor.Capability.SUPPORTED, ModelDescriptor.Capability.UNSUPPORTED,
-            ModelDescriptor.Capability.UNKNOWN, ModelDescriptor.Capability.UNKNOWN,
+            ModelDescriptor.Capability.UNKNOWN, ModelDescriptor.Capability.UNSUPPORTED,
             2L * 1024L * MIB, DefaultModelContract.BYTE_SIZE + 64L * MIB,
             ModelDescriptor.Provenance.EXACT_PINNED);
 
@@ -165,6 +165,9 @@ public final class ModelCatalog {
         ModelDescriptor.Capability detection = ModelDescriptor.Capability.UNKNOWN;
         ModelDescriptor.Capability translation = ModelDescriptor.Capability.UNKNOWN;
         ModelDescriptor.Capability streaming = ModelDescriptor.Capability.UNKNOWN;
+        ModelDescriptor.Capability prompt = "Whisper".equals(family)
+                ? ModelDescriptor.Capability.SUPPORTED
+                : ModelDescriptor.Capability.UNSUPPORTED;
         if (WHISPER_MULTILINGUAL_FILES.contains(fileName)) {
             languages.addAll(WHISPER_LANGUAGES);
             if (WHISPER_V3_FILES.contains(fileName)) languages.add("yue");
@@ -200,7 +203,7 @@ public final class ModelCatalog {
                 source + "/resolve/main/" + fileName + "?download=true", source,
                 "See source", source, Collections.singleton("arm64-v8a"), false, false,
                 languages, detection, translation, streaming,
-                ModelDescriptor.Capability.UNKNOWN,
+                prompt,
                 Math.max(1024L * MIB, bytes * 2L + 512L * MIB), bytes + 64L * MIB,
                 ModelDescriptor.Provenance.EXACT_PINNED);
     }

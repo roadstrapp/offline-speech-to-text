@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-feature android:glEsVersion="0x00030002" android:required="true" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -51,6 +52,11 @@
             android:configChanges="orientation|keyboardHidden|screenSize"
             android:exported="false" />
 
+        <activity
+            android:name=".CustomTermsActivity"
+            android:label="@string/custom_terms_title"
+            android:exported="false" />
+
         <!-- Live Subtitles Activity (for permissions) -->
         <activity
             android:name=".LiveSubtitleActivity"
@@ -91,9 +97,10 @@
             </intent-filter>
 
             <!-- Handle "Open with" for audio files -->
-            <intent-filter>
+            <intent-filter tools:ignore="AppLinkUrlError">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
+                <!-- MIME-only VIEW is intentional for Android's Open with flow. -->
                 <data android:mimeType="audio/*" />
             </intent-filter>
         </activity>

@@ -13,6 +13,8 @@ PYTHON=${PYTHON_BIN:-python3}
     tests.test_documentation_contract -v
 )
 javac -d "$OUT" \
+  "$ROOT/app/src/main/java/dev/notune/transcribe/CustomTerms.java" \
+  "$ROOT/app/src/main/java/dev/notune/transcribe/PersonalCorrections.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/StoredThemeMode.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/ImportedModelSelection.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/DefaultModelContract.java" \
@@ -31,9 +33,13 @@ javac -d "$OUT" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/SettingsSchema.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/DiagnosticLog.java" \
   "$ROOT/tests/BehaviorTest.java" \
-  "$ROOT/tests/ModelDownloadBoundaryTest.java"
+  "$ROOT/tests/ModelDownloadBoundaryTest.java" \
+  "$ROOT/tests/CustomTermsStoreTest.java" \
+  "$ROOT/tests/PersonalCorrectionsStoreTest.java"
 java -ea -cp "$OUT" dev.notune.transcribe.BehaviorTest
 java -ea -cp "$OUT" dev.notune.transcribe.ModelDownloadBoundaryTest
+java -ea -cp "$OUT" dev.notune.transcribe.CustomTermsStoreTest
+java -ea -cp "$OUT" dev.notune.transcribe.PersonalCorrectionsStoreTest
 
 javac -d "$OUT" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/ForegroundRecordingCoordinator.java" \
@@ -48,6 +54,14 @@ java -ea -cp "$OUT" dev.notune.transcribe.M4LifecycleTest
 rustc --edition 2021 --test "$ROOT/tests/LongAudioChunkingTest.rs" \
   -o "$OUT/long_audio_chunking_test"
 "$OUT/long_audio_chunking_test"
+
+rustc --edition 2021 --test "$ROOT/tests/CustomTermsTest.rs" \
+  -o "$OUT/custom_terms_test"
+"$OUT/custom_terms_test"
+
+rustc --edition 2021 --test "$ROOT/tests/PersonalCorrectionsTest.rs" \
+  -o "$OUT/personal_corrections_test"
+"$OUT/personal_corrections_test"
 
 javac -d "$OUT" \
   "$ROOT/docs/examples/CallerAudioSessionCore.java" \

@@ -6,11 +6,11 @@ Private, on-device speech recognition for Android apps, keyboards, shared audio,
 
 - Dictate through Android's standard voice-input panel or `SpeechRecognizer` service; optionally move the panel to either side for one-handed use.
 - Use the optional voice keyboard in ordinary and privacy/no-learning text fields. Password fields remain blocked.
-- Reach pause/resume, cancel, insert-and-stay, and insert-and-switch in a compact 2×2 recording grid; use the rightmost globe to switch keyboards while idle.
+- Reach pause/resume, cancel, insert-and-stay, and insert-and-switch in a compact 2×2 recording grid; use the rightmost globe to switch keyboards while idle, and watch the amber ring around the microphone while on-device transcription finishes.
 - Hold and drag Backspace to highlight from the first character, move left or right one character at a time, and release to delete the selected range.
 - Caption audio playing on the device with Live Subtitles.
 - Open or share an audio file to transcribe it.
-- Start immediately with the included Parakeet TDT 0.6B v3 Q4 model for 25 European languages—no connection or download required—or browse 52 exact optional downloads across every model family supported by the pinned runtime, including Whisper and 1.1B Parakeet variants.
+- Start immediately with the included Parakeet TDT 0.6B v3 Q4 model for 25 European languages—no connection or download required—or browse 52 exact optional downloads across every model family supported by the pinned runtime, including Whisper and 1.1B Parakeet variants. Keep a private personal dictionary with recognition hints for Whisper and opt-in `heard => written` corrections for every model; corrections are whole-word/phrase, longest-first, non-chaining, digit-safe, and skipped inside quotations, URLs, and email addresses.
 - Choose a goal—balanced, compact, multilingual, translation, or higher accuracy—and get a compatible recommendation based on language, memory, storage, and model size. Every catalog card shows a practical size/fit estimate.
 - Verify downloaded model size and SHA-256 before atomic activation; interrupted downloads resume safely and never replace the active model.
 - Choose automatic or manual stopping, pause other audio while listening, keep an IME recording active across app switches, select inserted text, and tune inference threads.
@@ -27,7 +27,7 @@ Private, on-device speech recognition for Android apps, keyboards, shared audio,
 
 1. Grant microphone access, then use **Try voice input**. The included default model works entirely offline from first launch.
 2. Tap a microphone in an app or keyboard that launches Android voice recognition. If Android asks, choose **Offline Speech to Text**.
-3. Optional: open **Manage speech models**. Installed-model selection is first, followed by the device recommendation and complete download catalog. Download progress stays in the card you tapped. Every Download button verifies exact size and SHA-256 before installing and selecting a model. **Browse model websites** and manual GGUF import remain separate fallbacks below the download choices.
+3. Optional: open **Manage speech models**. Installed-model selection is first, followed by **Personal dictionary**, the device recommendation, and the complete download catalog. Whisper hints use one name or phrase per line. For Parakeet or any model, add explicit corrections such as `marmot protocol => Marmot Protocol`, save them, then turn on **Apply exact corrections**. Download progress stays in the card you tapped. Every Download button verifies exact size and SHA-256 before installing and selecting a model. **Browse model websites** and manual GGUF import remain separate fallbacks below the download choices.
 
 Optional paths:
 
@@ -36,35 +36,39 @@ Optional paths:
 - **Live Subtitles:** Tap **Start Live Subtitles**, approve screen-audio capture, and play the audio you want captioned.
 - **Audio files:** Share or open an audio file with Offline Speech to Text.
 
+## Build a custom voice UI with OSTT
+
+OSTT is an exported Android `RecognitionService`, so another app can keep its own microphone button, waveform, pause/cancel controls, and editor while using OSTT for private inference. There is no OSTT SDK or compile-time dependency: the user installs OSTT, and your app discovers it through standard Android APIs.
+
+Declare recognition-service visibility in your manifest:
+
+```xml
+<queries><intent><action android:name="android.speech.RecognitionService" /></intent></queries>
+```
+
+Then build the integration around one explicit provider component:
+
+1. Query `RecognitionService.SERVICE_INTERFACE`, select the enabled OSTT service in package `app.offlinespeechtotext`, and create `SpeechRecognizer.createSpeechRecognizer(context, component)` on the main thread. Never change the user's global recognizer setting.
+2. Attach a `RecognitionListener` before capture. Treat each attempt as one generation; accept only its first nonblank `onResults`, map `onError`, and ignore callbacks after cancel, editor replacement, account/conversation change, or a sensitive-field transition.
+3. Recommended on Android 13+: your app records 16 kHz mono PCM16-LE and passes the pipe read end in `RecognizerIntent.EXTRA_AUDIO_SOURCE`. Close the writer and call `stopListening()` to finish, or `cancel()` to discard. This keeps your UI and microphone lifecycle under your control.
+4. Call `destroy()` on every terminal path. Probe caller-audio support before opening the microphone; if unavailable, fall back to `ACTION_RECOGNIZE_SPEECH`, where OSTT owns the compact recording panel.
+
+Start with the tested lifecycle core and complete Kotlin implementation in [Android integration](docs/android-integration.md#custom-ui-with-caller-supplied-audio). It includes provider/version probing, PCM extras, nonblocking pipe writes, cleanup races, exact-origin validation, permissions, and foreground-service requirements for capture that outlives a visible activity.
+
 ## Compatibility and fallback
 
-Android voice-input integrations do not all use the same surface:
-
-| Surface | Experience | Best for |
+| Surface | UI and microphone owner | Use it for |
 |---|---|---|
-| `ACTION_RECOGNIZE_SPEECH` | Offline Speech to Text owns the recording panel and returns a final result. | Apps and keyboards that launch Android's standard voice UI. |
-| `SpeechRecognizer` + `RecognitionService` | The calling app owns the UI; the recognition provider normally owns microphone capture. | Apps with a custom dictation interface when Android permits the selected provider to record. |
-| `SpeechRecognizer` + `EXTRA_AUDIO_SOURCE` | The calling app owns both the UI and microphone capture and streams PCM audio to the provider. | Custom app UI on Android 13+ when a provider supports caller-supplied audio. |
-| Voice IME | Offline Speech to Text is the active keyboard. | Keyboards such as HeliBoard whose microphone action switches to the configured voice IME. |
+| `SpeechRecognizer` + `EXTRA_AUDIO_SOURCE` | Your app owns both. | A fully custom UI on Android 13+. |
+| `SpeechRecognizer` + `RecognitionService` | Your app owns UI; provider normally owns capture. | A custom UI where Android permits provider capture. |
+| `ACTION_RECOGNIZE_SPEECH` | OSTT owns both and returns a result. | Broad fallback compatibility. |
+| Voice IME | OSTT is the active keyboard. | HeliBoard and keyboards that switch to a voice IME. |
 
-The app or keyboard decides which surface it exposes. Gboard and FUTO Keyboard use their own voice systems. If an app-owned custom flow cannot safely use the recognition service, it should fall back to `ACTION_RECOGNIZE_SPEECH` before opening the microphone.
-
-See [Android integration](docs/android-integration.md) for provider resolution, permissions, callbacks, caller-audio streaming, lifecycle cleanup, origin validation, fallback, and a scoped Kotlin example.
-
-## Integrate a custom dictation UI
-
-For an app-owned interface like White Noise's composer, keep microphone capture and UI state in your app and use Offline Speech to Text only as the recognition provider:
-
-1. Resolve this app's `RecognitionService` and create `SpeechRecognizer` with that explicit component. Do not change the user's global recognizer setting.
-2. On Android 13+, stream 16 kHz, mono, signed 16-bit little-endian PCM through `RecognizerIntent.EXTRA_AUDIO_SOURCE`. Close the writer to finish input; use `cancel()` for discard.
-3. Treat callbacks as a generation-scoped state machine. Ignore late callbacks after cancel, error, editor replacement, account/conversation change, or a switch to a sensitive field.
-4. Call `destroy()` on every terminal path. If explicit provider selection or caller-supplied audio is unavailable, fall back to `ACTION_RECOGNIZE_SPEECH` before opening the microphone.
-
-The complete callback ordering, format extras, API checks, and Kotlin reference implementation are in [Android integration](docs/android-integration.md#custom-ui-with-caller-supplied-audio).
+Gboard and FUTO Keyboard use their own voice systems. A custom flow should choose its supported route before opening the microphone and fall back to `ACTION_RECOGNIZE_SPEECH`, never retry capture in a loop.
 
 ## Privacy
 
-Recognition and inference run on the device, and the included default model needs no network access or network-permission prompt. The app has Android's install-time `INTERNET` capability only for optional model downloads you explicitly start or source pages you explicitly open; `ACCESS_NETWORK_STATE` only detects an unavailable connection so the app can explain a failed download. The app makes no network request on launch or onboarding. If access is unavailable when you tap Download, the app explains the problem and opens Android's app settings. After a successful download, it offers the same settings so systems with a revocable per-app Network toggle can remove access again. Standard Android does not expose a runtime request/revoke API for the normal `INTERNET` permission. The catalog is bundled metadata, so viewing and filtering it is offline. Downloads are verified before private installation, and manual model import works offline. The app keeps no transcription history. Results exist only where you insert or explicitly share them.
+Recognition, dictionary processing, and inference run on the device, and the included default model needs no network access or network-permission prompt. The app has Android's install-time `INTERNET` capability only for optional model downloads you explicitly start or source pages you explicitly open; `ACCESS_NETWORK_STATE` only detects an unavailable connection so the app can explain a failed download. The app makes no network request on launch or onboarding. If access is unavailable when you tap Download, the app explains the problem and opens Android's app settings. After a successful download, it offers the same settings so systems with a revocable per-app Network toggle can remove access again. Standard Android does not expose a runtime request/revoke API for the normal `INTERNET` permission. The catalog is bundled metadata, so viewing and filtering it is offline. Downloads are verified before private installation, and manual model import works offline. Whisper hints and exact-correction rules are stored only in the app's private data, snapshotted once per transcription, and never logged. Exact corrections run once on the final assembled transcript, so they work consistently across recognition surfaces without retaining a history. Results exist only where you insert or explicitly share them.
 
 Diagnostic logging is disabled by default. When enabled, it records bounded lifecycle, model, timing, and error metadata—not microphone audio, utterances, transcripts, partial hypotheses, prompts, dictionary content, editor text, or transcript-derived filenames.
 
@@ -72,23 +76,19 @@ Live Subtitles uses Android's MediaProjection consent flow to capture playback a
 
 ## Build and contribute
 
-Requirements: JDK 17, Android SDK 35, Android NDK 28.0.13004108, Rust with the `aarch64-linux-android` target, and `cargo-ndk`.
-
-Create `local.properties` in the repository root:
+Requirements: JDK 17, Android SDK 35, Android NDK 28.0.13004108, Rust with the `aarch64-linux-android` target, and `cargo-ndk`. Point `local.properties` at your SDK:
 
 ```properties
 sdk.dir=/path/to/Android/Sdk
 ```
 
-Build and test a debug APK:
-
 ```bash
 ./gradlew testDebugUnitTest assembleDebug
 ```
 
-The APK is written to `app/build/outputs/apk/debug/app-debug.apk`. Native libraries are built automatically through `cargo-ndk`. Normal APK builds download, verify, and package the pinned default model for offline first launch. For a small compile-only developer artifact, pass `-PincludeBundledModel=false`; never use that reduced artifact as a test candidate. Release builds additionally require authorized signing; do not use a production key for routine development.
+The APK is written to `app/build/outputs/apk/debug/app-debug.apk`. Native libraries are built automatically through `cargo-ndk`. Normal APK builds download, verify, and package the pinned default model for offline first launch. For a smaller compile or update-testing artifact, pass `-PincludeBundledModel=false`; label it clearly, preserve an installed model, and never treat it as the clean-install offline-first or publication candidate. Release builds additionally require authorized signing; do not use a production key for routine development.
 
-Changes should preserve package identity, imported models, settings, privacy boundaries, accessibility, and update compatibility. Run focused tests and `git diff --check` before requesting review. See [PRODUCT_ROADMAP.md](PRODUCT_ROADMAP.md) for accepted scope and [RELEASE_HANDOFF.md](RELEASE_HANDOFF.md) for immutable test-artifact evidence.
+Changes should preserve package identity, imported models, settings, privacy boundaries, accessibility, and update compatibility. Run focused tests and `git diff --check` before requesting review.
 
 ## Credits
 
