@@ -788,20 +788,17 @@ public class RustInputMethodService extends InputMethodService {
         }
     }
 
-    /** Tints the record key + mic: idle = primary, recording = error. */
+    /** Tints the record key while keeping every keyboard action icon white. */
     private void tintRecordButton(boolean recording) {
         int keyAttr = recording
                 ? com.google.android.material.R.attr.colorPrimary
                 : com.google.android.material.R.attr.colorPrimaryContainer;
-        int iconAttr = recording
-                ? com.google.android.material.R.attr.colorOnPrimary
-                : com.google.android.material.R.attr.colorOnPrimaryContainer;
         if (recordKey != null) {
             recordKey.setBackgroundTintList(ColorStateList.valueOf(
                     MaterialColors.getColor(recordKey, keyAttr)));
         }
         if (micIcon != null) {
-            micIcon.setColorFilter(MaterialColors.getColor(micIcon, iconAttr));
+            micIcon.setColorFilter(getColor(R.color.white));
         }
     }
 

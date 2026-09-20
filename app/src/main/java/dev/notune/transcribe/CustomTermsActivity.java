@@ -6,6 +6,7 @@ import android.text.TextWatcher;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
@@ -13,11 +14,15 @@ import androidx.appcompat.app.AppCompatActivity;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.materialswitch.MaterialSwitch;
 import com.google.android.material.snackbar.Snackbar;
+import com.google.android.material.textfield.TextInputLayout;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 /** Compact editor for model-aware hints and all-model exact corrections. */
 public final class CustomTermsActivity extends AppCompatActivity {
@@ -25,8 +30,9 @@ public final class CustomTermsActivity extends AppCompatActivity {
     private TextView supportText;
     private TextView countText;
     private Button saveButton;
-    private EditText correctionsEditor;
+    private LinearLayout correctionsRows;
     private TextView correctionsCountText;
+    private Button correctionsAddButton;
     private Button correctionsSaveButton;
     private MaterialSwitch correctionsEnabledSwitch;
     private boolean updatingCorrectionsSwitch;
@@ -50,34 +56,29 @@ public final class CustomTermsActivity extends AppCompatActivity {
             }
             @Override public void afterTextChanged(Editable s) {}
         });
-        correctionsEditor = findViewById(R.id.personal_corrections_editor);
+        correctionsRows = findViewById(R.id.personal_corrections_rows);
         correctionsCountText = findViewById(R.id.personal_corrections_count);
+        correctionsAddButton = findViewById(R.id.personal_corrections_add);
         correctionsSaveButton = findViewById(R.id.personal_corrections_save);
         correctionsEnabledSwitch = findViewById(R.id.personal_corrections_enabled);
+        correctionsAddButton.setOnClickListener(view -> addEmptyCorrectionRow());
         correctionsSaveButton.setOnClickListener(view -> saveCorrections());
         findViewById(R.id.personal_corrections_clear)
                 .setOnClickListener(view -> confirmClearCorrections());
-        correctionsEditor.addTextChangedListener(new TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
-                updateCorrectionsValidation();
-            }
-            @Override public void afterTextChanged(Editable s) {}
-        });
         load();
         loadCorrections();
         correctionsEnabledSwitch.setOnCheckedChangeListener((button, checked) -> {
             if (updatingCorrectionsSwitch) return;
             try {
                 if (checked) {
-                    PersonalCorrections.Parsed parsed = PersonalCorrections.write(
-                            getFilesDir(), correctionsEditor.getText().toString());
+                    PersonalCorrections.Parsed parsed = PersonalCorrections.writePairs(
+                            getFilesDir(), collectCorrectionPairs());
                     if (parsed.rules.isEmpty()) {
                         setCorrectionsSwitch(false);
                         snackbar(getString(R.string.personal_corrections_enable_empty));
                         return;
                     }
-                    setCorrectionsEditor(parsed);
+                    setCorrectionRows(parsed.rules);
                 }
                 PersonalCorrections.setEnabled(getFilesDir(), checked);
                 snackbar(getString(checked
@@ -124,18 +125,11 @@ public final class CustomTermsActivity extends AppCompatActivity {
     private void loadCorrections() {
         try {
             PersonalCorrections.Parsed parsed = PersonalCorrections.read(getFilesDir());
-            correctionsEditor.setText(parsed.storedText);
-            correctionsEditor.setSelection(correctionsEditor.length());
+            setCorrectionRows(parsed.rules);
         } catch (IOException | PersonalCorrections.InvalidCorrectionsException error) {
-            File file = new File(getFilesDir(), PersonalCorrections.FILE_NAME);
-            try {
-                if (file.isFile() && file.length() <= 8192) {
-                    correctionsEditor.setText(new String(
-                            Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
-                }
-            } catch (IOException ignored) {
-                correctionsEditor.setText("");
-            }
+            // Native inference also ignores an invalid restored file. Keep it
+            // untouched until the user explicitly saves or clears new pairs.
+            setCorrectionRows(Collections.emptyList());
         }
         try {
             correctionsEnabledSwitch.setChecked(
@@ -181,9 +175,9 @@ public final class CustomTermsActivity extends AppCompatActivity {
 
     private void saveCorrections() {
         try {
-            PersonalCorrections.Parsed parsed = PersonalCorrections.write(
-                    getFilesDir(), correctionsEditor.getText().toString());
-            setCorrectionsEditor(parsed);
+            PersonalCorrections.Parsed parsed = PersonalCorrections.writePairs(
+                    getFilesDir(), collectCorrectionPairs());
+            setCorrectionRows(parsed.rules);
             if (parsed.rules.isEmpty()) {
                 PersonalCorrections.setEnabled(getFilesDir(), false);
                 setCorrectionsSwitch(false);
@@ -205,7 +199,7 @@ public final class CustomTermsActivity extends AppCompatActivity {
                         PersonalCorrections.write(getFilesDir(), "");
                         PersonalCorrections.setEnabled(getFilesDir(), false);
                         setCorrectionsSwitch(false);
-                        correctionsEditor.setText("");
+                        setCorrectionRows(Collections.emptyList());
                         snackbar(getString(R.string.personal_corrections_cleared));
                     } catch (IOException | PersonalCorrections.InvalidCorrectionsException error) {
                         snackbar(getString(R.string.personal_corrections_save_failed));
@@ -215,9 +209,78 @@ public final class CustomTermsActivity extends AppCompatActivity {
                 .show();
     }
 
-    private void setCorrectionsEditor(PersonalCorrections.Parsed parsed) {
-        correctionsEditor.setText(parsed.storedText);
-        correctionsEditor.setSelection(correctionsEditor.length());
+    private void setCorrectionRows(List<PersonalCorrections.Rule> rules) {
+        correctionsRows.removeAllViews();
+        if (rules.isEmpty()) {
+            addCorrectionRow("", "", false);
+        } else {
+            for (PersonalCorrections.Rule rule : rules) {
+                addCorrectionRow(rule.heard, rule.written, false);
+            }
+        }
+        updateCorrectionsValidation();
+    }
+
+    private void addEmptyCorrectionRow() {
+        for (int index = 0; index < correctionsRows.getChildCount(); index++) {
+            View row = correctionsRows.getChildAt(index);
+            EditText original = row.findViewById(R.id.personal_correction_original);
+            EditText replacement = row.findViewById(R.id.personal_correction_replacement);
+            if (original.getText().length() == 0 && replacement.getText().length() == 0) {
+                original.requestFocus();
+                return;
+            }
+        }
+        addCorrectionRow("", "", true);
+    }
+
+    private void addCorrectionRow(String originalValue, String replacementValue,
+            boolean focus) {
+        if (correctionsRows.getChildCount() >= PersonalCorrections.MAX_RULES) return;
+        View row = getLayoutInflater().inflate(
+                R.layout.item_personal_correction, correctionsRows, false);
+        EditText original = row.findViewById(R.id.personal_correction_original);
+        EditText replacement = row.findViewById(R.id.personal_correction_replacement);
+        TextInputLayout replacementLayout = row.findViewById(
+                R.id.personal_correction_replacement_layout);
+        TextWatcher watcher = new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                updateCorrectionsValidation();
+            }
+            @Override public void afterTextChanged(Editable s) {}
+        };
+        original.addTextChangedListener(watcher);
+        replacement.addTextChangedListener(watcher);
+        original.setText(originalValue);
+        replacement.setText(replacementValue);
+        replacementLayout.setEndIconOnClickListener(view -> {
+            if (correctionsRows.getChildCount() == 1) {
+                original.setText("");
+                replacement.setText("");
+                original.requestFocus();
+            } else {
+                correctionsRows.removeView(row);
+                updateCorrectionsValidation();
+            }
+        });
+        correctionsRows.addView(row);
+        updateCorrectionsValidation();
+        if (focus) original.requestFocus();
+    }
+
+    private List<PersonalCorrections.Rule> collectCorrectionPairs() {
+        List<PersonalCorrections.Rule> pairs = new ArrayList<>();
+        for (int index = 0; index < correctionsRows.getChildCount(); index++) {
+            View row = correctionsRows.getChildAt(index);
+            String original = ((EditText) row.findViewById(
+                    R.id.personal_correction_original)).getText().toString();
+            String replacement = ((EditText) row.findViewById(
+                    R.id.personal_correction_replacement)).getText().toString();
+            if (original.trim().isEmpty() && replacement.trim().isEmpty()) continue;
+            pairs.add(new PersonalCorrections.Rule(original, replacement));
+        }
+        return pairs;
     }
 
     private void setCorrectionsSwitch(boolean checked) {
@@ -242,8 +305,8 @@ public final class CustomTermsActivity extends AppCompatActivity {
 
     private void updateCorrectionsValidation() {
         try {
-            PersonalCorrections.Parsed parsed = PersonalCorrections.parse(
-                    correctionsEditor.getText().toString());
+            PersonalCorrections.Parsed parsed = PersonalCorrections.fromPairs(
+                    collectCorrectionPairs());
             correctionsCountText.setText(getString(R.string.personal_corrections_count,
                     parsed.rules.size(), PersonalCorrections.MAX_RULES));
             correctionsSaveButton.setEnabled(true);
@@ -251,6 +314,8 @@ public final class CustomTermsActivity extends AppCompatActivity {
             correctionsCountText.setText(correctionsProblemMessage(error.problem));
             correctionsSaveButton.setEnabled(false);
         }
+        correctionsAddButton.setEnabled(
+                correctionsRows.getChildCount() < PersonalCorrections.MAX_RULES);
     }
 
     private void updateSupport() {

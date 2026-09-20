@@ -65,7 +65,8 @@
             android:layout_height="44dp"
             android:src="@drawable/ic_mic"
             android:layout_gravity="center"
-            android:contentDescription="@string/section_ime"/>
+            android:contentDescription="@string/section_ime"
+            app:tint="@color/white"/>
 
         <TextView
             android:id="@+id/ime_hint"
@@ -112,7 +113,7 @@
                 android:padding="22dp"
                 android:scaleType="centerInside"
                 android:src="@drawable/ic_pause"
-                app:tint="?attr/colorOnSurfaceVariant" />
+                app:tint="@color/white" />
 
             <ImageButton
                 android:id="@+id/ime_transcribe_keep"
@@ -127,7 +128,7 @@
                 android:padding="22dp"
                 android:scaleType="centerInside"
                 android:src="@drawable/ic_paste"
-                app:tint="?attr/colorOnSurfaceVariant" />
+                app:tint="@color/white" />
         </LinearLayout>
 
         <LinearLayout
@@ -150,7 +151,7 @@
                 android:padding="22dp"
                 android:scaleType="centerInside"
                 android:src="@drawable/ic_close"
-                app:tint="?attr/colorOnSurfaceVariant" />
+                app:tint="@color/white" />
 
             <ImageButton
                 android:id="@+id/ime_transcribe_switch"
@@ -165,7 +166,7 @@
                 android:padding="22dp"
                 android:scaleType="centerInside"
                 android:src="@drawable/ic_keyboard_switch"
-                app:tint="?attr/colorOnSurfaceVariant" />
+                app:tint="@color/white" />
         </LinearLayout>
     </LinearLayout>
 
@@ -185,7 +186,7 @@
             android:src="@drawable/ic_space"
             android:scaleType="centerInside"
             android:background="@drawable/bg_ime_key"
-            app:tint="?attr/colorOnSurfaceVariant"
+            app:tint="@color/white"
             android:clickable="true"
             android:focusable="true"
             android:layout_marginEnd="8dp"
@@ -198,7 +199,7 @@
             android:src="@drawable/ic_enter"
             android:scaleType="centerInside"
             android:background="@drawable/bg_ime_key"
-            app:tint="?attr/colorOnSurfaceVariant"
+            app:tint="@color/white"
             android:clickable="true"
             android:focusable="true"
             android:layout_marginEnd="8dp"
@@ -211,7 +212,7 @@
             android:src="@drawable/ic_backspace"
             android:scaleType="centerInside"
             android:background="@drawable/bg_ime_key"
-            app:tint="?attr/colorOnSurfaceVariant"
+            app:tint="@color/white"
             android:clickable="true"
             android:focusable="true"
             android:layout_marginEnd="8dp"
@@ -224,7 +225,7 @@
             android:src="@drawable/ic_keyboard_switch"
             android:scaleType="centerInside"
             android:background="@drawable/bg_ime_key"
-            app:tint="?attr/colorOnSurfaceVariant"
+            app:tint="@color/white"
             android:clickable="true"
             android:focusable="true"
             android:contentDescription="@string/ime_switch_keyboard"/>

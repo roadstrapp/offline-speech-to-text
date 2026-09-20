@@ -29,6 +29,12 @@ import java.util.regex.Pattern;
  */
 public final class DiagnosticLog {
     public static final long MAX_BYTES = 64L * 1024L;
+    /**
+     * Compact below the hard cap so subsequent events can append without
+     * rewriting the file again immediately. The log is diagnostic-only and
+     * intentionally retains recent complete records rather than every event.
+     */
+    private static final long COMPACT_TO_BYTES = 48L * 1024L;
     private static final String ENABLED_FILE = "diagnostic_logging";
     private static final String LOG_FILE = "diagnostic.log";
     private static final String LOCK_FILE = ".diagnostic.lock";
@@ -97,9 +103,18 @@ public final class DiagnosticLog {
                 byte[] line = (System.currentTimeMillis() + " " + event + " " + detail + "\n")
                         .getBytes(StandardCharsets.UTF_8);
                 File target = log(filesDir);
+                long existingSize = target.isFile() ? target.length() : 0L;
+                if (existingSize + line.length <= MAX_BYTES) {
+                    try (FileChannel channel = new RandomAccessFile(target, "rw").getChannel()) {
+                        channel.position(existingSize);
+                        writeFully(channel, ByteBuffer.wrap(line));
+                    }
+                    return;
+                }
+
                 byte[] existing = target.isFile() ? Files.readAllBytes(target.toPath()) : new byte[0];
                 int keep = (int) Math.min(existing.length,
-                        Math.max(0L, MAX_BYTES - line.length));
+                        Math.max(0L, COMPACT_TO_BYTES - line.length));
                 int start = existing.length - keep;
                 while (start < existing.length && start > 0 && existing[start - 1] != '\n') {
                     start++;

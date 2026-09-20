@@ -1,5 +1,6 @@
 pub mod assets;
 pub mod audio;
+mod audio_finalization;
 pub mod custom_terms;
 pub mod engine;
 pub mod foreground_recording;

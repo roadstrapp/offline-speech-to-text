@@ -6,6 +6,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use jni::objects::{GlobalRef, JObject, JValue};
 use jni::JNIEnv;
 
+use crate::audio_finalization::append_final_decode_silence;
 use crate::engine;
 
 pub const OWNER_IME: u8 = 1;
@@ -416,7 +417,7 @@ pub fn transcribe_recording(mut env: JNIEnv, state: &mut VoiceSessionState) {
     // Move the captured samples into inference instead of duplicating the
     // entire recording. This also clears the process-held capture buffer at
     // the capture/inference boundary.
-    let buffer = std::mem::take(&mut *state.audio_buffer.lock().unwrap());
+    let mut buffer = std::mem::take(&mut *state.audio_buffer.lock().unwrap());
 
     // Guard against empty buffer (mic permission denied, instant stop, etc.)
     if buffer.is_empty() {
@@ -428,6 +429,8 @@ pub fn transcribe_recording(mut env: JNIEnv, state: &mut VoiceSessionState) {
         release_owned_session(state);
         return;
     }
+
+    append_final_decode_silence(&mut buffer);
 
     let jvm = state.jvm.clone();
     let target_ref = state.target_ref.clone();

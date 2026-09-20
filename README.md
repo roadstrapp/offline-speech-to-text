@@ -10,7 +10,7 @@ Private, on-device speech recognition for Android apps, keyboards, shared audio,
 - Hold and drag Backspace to highlight from the first character, move left or right one character at a time, and release to delete the selected range.
 - Caption audio playing on the device with Live Subtitles.
 - Open or share an audio file to transcribe it.
-- Start immediately with the included Parakeet TDT 0.6B v3 Q4 model for 25 European languages—no connection or download required—or browse 52 exact optional downloads across every model family supported by the pinned runtime, including Whisper and 1.1B Parakeet variants. Keep a private personal dictionary with recognition hints for Whisper and opt-in `heard => written` corrections for every model; corrections are whole-word/phrase, longest-first, non-chaining, digit-safe, and skipped inside quotations, URLs, and email addresses.
+- Start immediately with the included Parakeet TDT 0.6B v3 Q4 model for 25 European languages—no connection or download required—or browse 52 exact optional downloads across every model family supported by the pinned runtime, including Whisper and 1.1B Parakeet variants. Keep a private personal dictionary with recognition hints for Whisper and opt-in exact corrections for every model; each correction has separate **What was heard** and **Replace with** fields, with no syntax to learn. Corrections are whole-word/phrase, longest-first, non-chaining, digit-safe, and skipped inside quotations, URLs, and email addresses.
 - Choose a goal—balanced, compact, multilingual, translation, or higher accuracy—and get a compatible recommendation based on language, memory, storage, and model size. Every catalog card shows a practical size/fit estimate.
 - Verify downloaded model size and SHA-256 before atomic activation; interrupted downloads resume safely and never replace the active model.
 - Choose automatic or manual stopping, pause other audio while listening, keep an IME recording active across app switches, select inserted text, and tune inference threads.
@@ -27,7 +27,7 @@ Private, on-device speech recognition for Android apps, keyboards, shared audio,
 
 1. Grant microphone access, then use **Try voice input**. The included default model works entirely offline from first launch.
 2. Tap a microphone in an app or keyboard that launches Android voice recognition. If Android asks, choose **Offline Speech to Text**.
-3. Optional: open **Manage speech models**. Installed-model selection is first, followed by **Personal dictionary**, the device recommendation, and the complete download catalog. Whisper hints use one name or phrase per line. For Parakeet or any model, add explicit corrections such as `marmot protocol => Marmot Protocol`, save them, then turn on **Apply exact corrections**. Download progress stays in the card you tapped. Every Download button verifies exact size and SHA-256 before installing and selecting a model. **Browse model websites** and manual GGUF import remain separate fallbacks below the download choices.
+3. Optional: open **Manage speech models**. Installed-model selection is first, followed by **Personal dictionary**, the device recommendation, and the complete download catalog. Whisper hints use one name or phrase per line. For Parakeet or any model, add the recognized phrase and its desired replacement in the two labeled fields, save, then turn on **Apply exact corrections**. Download progress stays in the card you tapped. Every Download button verifies exact size and SHA-256 before installing and selecting a model. **Browse model websites** and manual GGUF import remain separate fallbacks below the download choices.
 
 Optional paths:
 
@@ -76,7 +76,7 @@ Live Subtitles uses Android's MediaProjection consent flow to capture playback a
 
 ## Build and contribute
 
-Requirements: JDK 17, Android SDK 35, Android NDK 28.0.13004108, Rust with the `aarch64-linux-android` target, and `cargo-ndk`. Point `local.properties` at your SDK:
+Requirements: JDK 17, Android SDK 35, Android NDK 28.0.13004108, Rust with the `aarch64-linux-android` target, and `cargo-ndk`. Use `JAVA_HOME` or your Gradle toolchain configuration for the JDK; the repository does not commit a machine-specific Java path. Point `local.properties` at your SDK:
 
 ```properties
 sdk.dir=/path/to/Android/Sdk

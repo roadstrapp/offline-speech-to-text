@@ -3,12 +3,25 @@ package dev.notune.transcribe;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 
 public final class PersonalCorrectionsStoreTest {
     public static void main(String[] args) throws Exception {
         rulesAreNormalizedAndExplicit();
+        pairsAreValidatedWithoutUserSyntax();
         unsafeAmbiguousAndNumericChangesAreRejected();
         writesAndOptInAreAtomicAndClearable();
+    }
+
+    private static void pairsAreValidatedWithoutUserSyntax() throws Exception {
+        PersonalCorrections.Parsed parsed = PersonalCorrections.fromPairs(Arrays.asList(
+                new PersonalCorrections.Rule("  marmot   protocol ", "Marmot Protocol"),
+                new PersonalCorrections.Rule("e\u0301clair", "Éclair")));
+        assertEquals(2, parsed.rules.size(), "pair count");
+        assertEquals("marmot protocol => Marmot Protocol\néclair => Éclair\n",
+                parsed.storedText, "pair UI keeps canonical compatible storage");
+        assertPairProblem(PersonalCorrections.Problem.EMPTY_SIDE, "marmot", "");
+        assertPairProblem(PersonalCorrections.Problem.MISSING_SEPARATOR, "a => b", "c");
     }
 
     private static void rulesAreNormalizedAndExplicit() throws Exception {
@@ -41,6 +54,11 @@ public final class PersonalCorrectionsStoreTest {
         assertEquals("ipf => IPF\n",
                 new String(Files.readAllBytes(file), StandardCharsets.UTF_8),
                 "write publishes normalized complete data");
+        PersonalCorrections.writePairs(root.toFile(), Arrays.asList(
+                new PersonalCorrections.Rule("ostt", "OSTT")));
+        assertEquals("ostt => OSTT\n",
+                new String(Files.readAllBytes(file), StandardCharsets.UTF_8),
+                "pair write publishes normalized complete data");
         assertEquals(false, PersonalCorrections.isEnabled(root.toFile()),
                 "corrections default off");
         PersonalCorrections.setEnabled(root.toFile(), true);
@@ -68,6 +86,17 @@ public final class PersonalCorrectionsStoreTest {
             throw new AssertionError("expected " + expected);
         } catch (PersonalCorrections.InvalidCorrectionsException error) {
             assertEquals(expected, error.problem, "validation problem");
+        }
+    }
+
+    private static void assertPairProblem(PersonalCorrections.Problem expected,
+            String original, String replacement) throws Exception {
+        try {
+            PersonalCorrections.fromPairs(Arrays.asList(
+                    new PersonalCorrections.Rule(original, replacement)));
+            throw new AssertionError("expected " + expected);
+        } catch (PersonalCorrections.InvalidCorrectionsException error) {
+            assertEquals(expected, error.problem, "pair validation problem");
         }
     }
 

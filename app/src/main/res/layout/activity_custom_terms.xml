@@ -128,22 +128,21 @@
                 android:minHeight="48dp"
                 android:text="@string/personal_corrections_enable" />
 
-            <com.google.android.material.textfield.TextInputLayout
+            <LinearLayout
+                android:id="@+id/personal_corrections_rows"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:hint="@string/personal_corrections_hint">
+                android:orientation="vertical" />
 
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/personal_corrections_editor"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:gravity="top|start"
-                    android:inputType="textMultiLine|textCapSentences"
-                    android:minHeight="160dp"
-                    android:minLines="6"
-                    android:padding="12dp" />
-            </com.google.android.material.textfield.TextInputLayout>
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/personal_corrections_add"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:minHeight="48dp"
+                android:text="@string/personal_corrections_add" />
 
             <TextView
                 android:id="@+id/personal_corrections_count"

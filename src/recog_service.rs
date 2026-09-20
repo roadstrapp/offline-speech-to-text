@@ -21,6 +21,7 @@ use jni::sys::jint;
 use jni::JNIEnv;
 use once_cell::sync::Lazy;
 
+use crate::audio_finalization::append_final_decode_silence;
 use crate::engine;
 use crate::voice_session::{
     claim_session_owner, release_session_owner, SendStream, OWNER_RECOGNITION_SERVICE,
@@ -775,7 +776,7 @@ fn finalize(shared: Arc<Endpoint>, stream: Arc<Mutex<Option<SendStream>>>) {
     *stream.lock().unwrap() = None;
 
     // Transfer ownership to inference without a full audio-buffer copy.
-    let buffer = std::mem::take(&mut *shared.audio_buffer.lock().unwrap());
+    let mut buffer = std::mem::take(&mut *shared.audio_buffer.lock().unwrap());
     let speech = shared.speech_started.load(Ordering::SeqCst);
 
     let mut env = match shared.jvm.attach_current_thread() {
@@ -801,6 +802,10 @@ fn finalize(shared: Arc<Endpoint>, stream: Arc<Mutex<Option<SendStream>>>) {
         clear_session(&shared);
         return;
     }
+
+    // Give offline decoders right context for their final tokens without
+    // extending microphone capture or retaining any additional spoken audio.
+    append_final_decode_silence(&mut buffer);
 
     if engine::get_engine().is_none() {
         if engine::ensure_loaded(&mut env, target).is_err() {

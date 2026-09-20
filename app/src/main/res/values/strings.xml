@@ -218,9 +218,12 @@
     <string name="custom_terms_error_budget">Shorten the list to at most %1$d UTF-8 bytes so every term fits the Whisper prompt.</string>
     <string name="custom_terms_privacy">Stored only in this app. Terms are never added to diagnostic logs, and changing them does not reload the model.</string>
     <string name="personal_corrections_title">Exact corrections for Parakeet and all models</string>
-    <string name="personal_corrections_desc">Use one explicit “heard =&gt; written” rule per line. Matches are case-insensitive whole words or phrases. Corrections never run inside quoted text, URLs, or email addresses, never change digits, and do not chain.</string>
+    <string name="personal_corrections_desc">Add what speech recognition heard and what it should write instead. Matches are case-insensitive whole words or phrases. Corrections never run inside quoted text, URLs, or email addresses, never change digits, and do not chain.</string>
     <string name="personal_corrections_enable">Apply exact corrections</string>
-    <string name="personal_corrections_hint">marmot protocol =&gt; Marmot Protocol</string>
+    <string name="personal_corrections_original_hint">What was heard</string>
+    <string name="personal_corrections_replacement_hint">Replace with</string>
+    <string name="personal_corrections_add">Add correction</string>
+    <string name="personal_corrections_remove">Remove correction</string>
     <string name="personal_corrections_count">%1$d/%2$d exact corrections</string>
     <string name="personal_corrections_saved">Saved %1$d exact corrections</string>
     <string name="personal_corrections_cleared">Exact corrections cleared</string>
@@ -231,8 +234,8 @@
     <string name="personal_corrections_clear_body">This removes every heard-to-written rule. Whisper hints are kept.</string>
     <string name="personal_corrections_save_failed">Could not update exact corrections</string>
     <string name="personal_corrections_error_count">Use at most %1$d exact corrections.</string>
-    <string name="personal_corrections_error_separator">Use exactly one =&gt; separator on each line.</string>
-    <string name="personal_corrections_error_empty">Both sides of each correction are required.</string>
+    <string name="personal_corrections_error_separator">Correction fields cannot contain the internal arrow separator.</string>
+    <string name="personal_corrections_error_empty">Enter both the original and replacement text.</string>
     <string name="personal_corrections_error_length">Each side must be at most %1$d characters.</string>
     <string name="personal_corrections_error_unsafe">Quotes and control characters are not allowed in correction rules.</string>
     <string name="personal_corrections_error_duplicate">Each heard phrase can appear only once.</string>

@@ -1,0 +1,7 @@
+Keep final words by giving offline decoders a short inference-only silence tail after recording stops.
+
+Use simple original/replacement fields for exact personal-dictionary corrections, with no rule syntax to learn.
+
+Render every voice-keyboard icon in white for a consistent high-contrast layout.
+
+Keep optional diagnostic logging responsive with bounded append-and-compact storage.

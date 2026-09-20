@@ -18,12 +18,16 @@ class ReleaseConfigurationTest(unittest.TestCase):
         return (light + 0.05) / (dark + 0.05)
     def test_release_identity_and_default_model_contract_are_immutable(self):
         gradle = (ROOT / "app/build.gradle.kts").read_text()
+        gradle_properties = (ROOT / "gradle.properties").read_text()
+        workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
         self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
-        self.assertIn("versionCode = 29", gradle)
-        self.assertIn('versionName = "0.4.0"', gradle)
+        self.assertIn("versionCode = 30", gradle)
+        self.assertIn('versionName = "0.4.1"', gradle)
         self.assertIn('providers.gradleProperty("includeBundledModel")', gradle)
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: true', gradle)
         self.assertIn('ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,', gradle)
+        self.assertNotIn("org.gradle.java.home", gradle_properties)
+        self.assertNotIn("sed -i '/org.gradle.java.home/d'", workflow)
         self.assertIn('"b68557be1e3c40207fd7c4bd9d63f1d3316b963f15325bfb0cc16a8bb0ffd181"', gradle)
         self.assertIn('resolve/85ac09ea12fc4b1112fa76810059364bc6adc9de', gradle)
         self.assertNotIn("parakeet-tdt_ctc-110m", gradle)
@@ -94,6 +98,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
     def test_ime_recording_exposes_four_compact_accessible_actions(self):
         layout = ET.parse(ROOT / "app/src/main/res/layout/ime_layout.xml").getroot()
         android = "{http://schemas.android.com/apk/res/android}"
+        app = "{http://schemas.android.com/apk/res-auto}"
         expected = {
             "@+id/ime_pause_resume",
             "@+id/ime_cancel_recording",
@@ -125,12 +130,29 @@ class ReleaseConfigurationTest(unittest.TestCase):
                          if node.attrib.get(android + "id") == "@+id/ime_recording_actions")
         self.assertEqual("vertical", recording.attrib[android + "orientation"])
 
+        white_icons = expected | {
+            "@+id/ime_mic_icon",
+            "@+id/ime_space",
+            "@+id/ime_enter",
+            "@+id/ime_backspace",
+            "@+id/ime_switch_keyboard",
+        }
+        by_id = {node.attrib.get(android + "id"): node for node in layout.iter()}
+        for icon_id in white_icons:
+            self.assertEqual("@color/white", by_id[icon_id].attrib.get(app + "tint"), icon_id)
+
+        for drawable in ("ic_space.xml", "ic_enter.xml", "ic_keyboard_switch.xml"):
+            source = (ROOT / "app/src/main/res/drawable" / drawable).read_text()
+            self.assertNotIn("#333333", source, drawable)
+            self.assertIn('@android:color/white', source, drawable)
+
         source = (ROOT / "app/src/main/java/dev/notune/transcribe/RustInputMethodService.java").read_text()
         self.assertIn("cancelRecording();", source)
         self.assertIn("setRecordingPaused(requestedPause)", source)
         self.assertIn("stopTranscribe(false)", source)
         self.assertIn("stopTranscribe(true)", source)
         self.assertIn("ImeTextEdit.isSensitiveEditor", source)
+        self.assertIn("micIcon.setColorFilter(getColor(R.color.white))", source)
         self.assertIn("switchKeyboardButton.setVisibility(recording ? View.GONE : View.VISIBLE)",
                       source)
         native = (ROOT / "src/voice_session.rs").read_text()
@@ -383,6 +405,20 @@ class ReleaseConfigurationTest(unittest.TestCase):
             activity,
         )
 
+    def test_microphone_finalization_preserves_audio_and_adds_decoder_tail(self):
+        helper = (ROOT / "src/audio_finalization.rs").read_text()
+        voice = (ROOT / "src/voice_session.rs").read_text()
+        service = (ROOT / "src/recog_service.rs").read_text()
+        self.assertIn("FINAL_DECODE_SILENCE_MS: usize = 500", helper)
+        self.assertIn("if samples.is_empty()", helper)
+        self.assertIn("samples.resize", helper)
+        self.assertEqual(1, voice.count("append_final_decode_silence(&mut buffer)"))
+        self.assertEqual(1, service.count("append_final_decode_silence(&mut buffer)"))
+        self.assertLess(voice.index("if buffer.is_empty()"),
+                        voice.index("append_final_decode_silence(&mut buffer)"))
+        self.assertLess(service.index("if buffer.len() < 3200"),
+                        service.index("append_final_decode_silence(&mut buffer)"))
+
     def test_fixed_amber_palette_and_launcher_icon_have_no_blue_fallback(self):
         color_files = [
             ROOT / "app/src/main/res/values/colors.xml",
@@ -421,6 +457,10 @@ class ReleaseConfigurationTest(unittest.TestCase):
         source = (ROOT / "app/src/main/java/dev/notune/transcribe/MainActivity.java").read_text()
         self.assertIn("DiagnosticLog.setEnabled", source)
         self.assertIn("DiagnosticLog.clear", source)
+        diagnostic = (ROOT / "app/src/main/java/dev/notune/transcribe/DiagnosticLog.java").read_text()
+        self.assertIn("COMPACT_TO_BYTES = 48L * 1024L", diagnostic)
+        self.assertIn("existingSize + line.length <= MAX_BYTES", diagnostic)
+        self.assertIn("channel.position(existingSize)", diagnostic)
         self.assertIn('R.id.btn_source', source)
         self.assertIn('R.id.btn_license', source)
         self.assertIn('Intent.ACTION_VIEW', source)
@@ -698,6 +738,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         manifest = (ROOT / "app/src/main/AndroidManifest.xml").read_text()
         layout = (ROOT / "app/src/main/res/layout/activity_models.xml").read_text()
         editor_layout = (ROOT / "app/src/main/res/layout/activity_custom_terms.xml").read_text()
+        correction_row = (ROOT / "app/src/main/res/layout/item_personal_correction.xml").read_text()
         store = (ROOT / "app/src/main/java/dev/notune/transcribe/CustomTerms.java").read_text()
         activity = (ROOT / "app/src/main/java/dev/notune/transcribe/CustomTermsActivity.java").read_text()
         catalog = (ROOT / "app/src/main/java/dev/notune/transcribe/ModelCatalog.java").read_text()
@@ -722,8 +763,21 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("custom-term list", native_terms)
         self.assertNotIn("log::", native_terms)
         self.assertIn('@+id/personal_corrections_enabled', editor_layout)
-        self.assertIn('@+id/personal_corrections_editor', editor_layout)
+        self.assertIn('@+id/personal_corrections_rows', editor_layout)
+        self.assertIn('@+id/personal_corrections_add', editor_layout)
+        self.assertNotIn('personal_corrections_editor', editor_layout)
+        self.assertIn('@+id/personal_correction_original', correction_row)
+        self.assertIn('@+id/personal_correction_replacement', correction_row)
+        self.assertIn('@string/personal_corrections_original_hint', correction_row)
+        self.assertIn('@string/personal_corrections_replacement_hint', correction_row)
+        self.assertIn('collectCorrectionPairs()', activity)
+        self.assertIn('PersonalCorrections.writePairs(', activity)
+        base_strings = ET.parse(ROOT / "app/src/main/res/values/strings.xml").getroot()
+        copy = {item.attrib["name"]: "".join(item.itertext())
+                for item in base_strings.findall("string")}
+        self.assertNotIn("=>", copy["personal_corrections_desc"])
         self.assertIn('MAX_RULES = 32', corrections)
+        self.assertIn('static Parsed fromPairs', corrections)
         self.assertIn('StandardCopyOption.ATOMIC_MOVE', corrections)
         self.assertIn('NUMBER_MISMATCH', corrections)
         self.assertNotIn('DiagnosticLog', corrections)

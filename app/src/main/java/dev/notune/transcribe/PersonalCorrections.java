@@ -66,8 +66,7 @@ final class PersonalCorrections {
 
     static Parsed parse(String raw) throws InvalidCorrectionsException {
         String input = raw == null ? "" : raw;
-        List<Rule> rules = new ArrayList<>();
-        Set<String> sources = new HashSet<>();
+        List<Rule> pairs = new ArrayList<>();
         for (String line : input.split("\\r\\n|\\n|\\r", -1)) {
             if (containsUnsafeCharacter(line)) {
                 throw new InvalidCorrectionsException(Problem.INVALID_CONTROL);
@@ -78,10 +77,32 @@ final class PersonalCorrections {
             if (separator < 0 || trimmed.indexOf("=>", separator + 2) >= 0) {
                 throw new InvalidCorrectionsException(Problem.MISSING_SEPARATOR);
             }
-            String heard = normalize(trimmed.substring(0, separator));
-            String written = normalize(trimmed.substring(separator + 2));
+            pairs.add(new Rule(
+                    trimmed.substring(0, separator),
+                    trimmed.substring(separator + 2)));
+        }
+        return fromPairs(pairs);
+    }
+
+    /** Validates UI-owned pairs without exposing the on-disk separator to users. */
+    static Parsed fromPairs(List<Rule> pairs) throws InvalidCorrectionsException {
+        List<Rule> rules = new ArrayList<>();
+        Set<String> sources = new HashSet<>();
+        List<Rule> input = pairs == null ? Collections.emptyList() : pairs;
+        if (input.size() > MAX_RULES) {
+            throw new InvalidCorrectionsException(Problem.TOO_MANY_RULES);
+        }
+        for (Rule pair : input) {
+            if (pair == null) {
+                throw new InvalidCorrectionsException(Problem.EMPTY_SIDE);
+            }
+            String heard = normalize(pair.heard);
+            String written = normalize(pair.written);
             if (heard.isEmpty() || written.isEmpty()) {
                 throw new InvalidCorrectionsException(Problem.EMPTY_SIDE);
+            }
+            if (heard.contains("=>") || written.contains("=>")) {
+                throw new InvalidCorrectionsException(Problem.MISSING_SEPARATOR);
             }
             if (heard.codePointCount(0, heard.length()) > MAX_SIDE_CODE_POINTS
                     || written.codePointCount(0, written.length()) > MAX_SIDE_CODE_POINTS) {
@@ -98,9 +119,6 @@ final class PersonalCorrections {
                 throw new InvalidCorrectionsException(Problem.NUMBER_MISMATCH);
             }
             rules.add(new Rule(heard, written));
-            if (rules.size() > MAX_RULES) {
-                throw new InvalidCorrectionsException(Problem.TOO_MANY_RULES);
-            }
         }
 
         StringBuilder stored = new StringBuilder();
@@ -125,6 +143,13 @@ final class PersonalCorrections {
     static Parsed write(File filesDir, String raw)
             throws IOException, InvalidCorrectionsException {
         Parsed parsed = parse(raw);
+        writeAtomically(filesDir, FILE_NAME, parsed.storedText);
+        return parsed;
+    }
+
+    static Parsed writePairs(File filesDir, List<Rule> pairs)
+            throws IOException, InvalidCorrectionsException {
+        Parsed parsed = fromPairs(pairs);
         writeAtomically(filesDir, FILE_NAME, parsed.storedText);
         return parsed;
     }
