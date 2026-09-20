@@ -212,6 +212,14 @@
                         android:layout_marginBottom="8dp"/>
 
                     <Button
+                        android:id="@+id/btn_ime_recovery"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/ime_recovery_open_button"
+                        android:visibility="gone"
+                        android:layout_marginBottom="8dp" />
+
+                    <Button
                         android:id="@+id/btn_ime_picker"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"

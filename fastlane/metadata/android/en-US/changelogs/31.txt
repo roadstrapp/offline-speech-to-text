@@ -1,0 +1,3 @@
+Never lose a finished voice-keyboard transcription when Android refreshes or closes the original text field. Same-editor connection refreshes now insert normally; otherwise OSTT saves one private recovery result with copy, keep, and delete controls.
+
+The APK is now small: first setup recommends and downloads a verified model once, and ordinary app updates keep it. Models are grouped and explained by family, with the largest comfortable option for this phone highlighted. Download guidance uses phone resources and system language, with an App Info shortcut for optional Network removal afterward.

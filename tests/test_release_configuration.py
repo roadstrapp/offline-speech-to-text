@@ -21,10 +21,10 @@ class ReleaseConfigurationTest(unittest.TestCase):
         gradle_properties = (ROOT / "gradle.properties").read_text()
         workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
         self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
-        self.assertIn("versionCode = 30", gradle)
-        self.assertIn('versionName = "0.4.1"', gradle)
+        self.assertIn("versionCode = 31", gradle)
+        self.assertIn('versionName = "0.5.0"', gradle)
         self.assertIn('providers.gradleProperty("includeBundledModel")', gradle)
-        self.assertIn('.orNull?.toBooleanStrictOrNull() ?: true', gradle)
+        self.assertIn('.orNull?.toBooleanStrictOrNull() ?: false', gradle)
         self.assertIn('ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,', gradle)
         self.assertNotIn("org.gradle.java.home", gradle_properties)
         self.assertNotIn("sed -i '/org.gradle.java.home/d'", workflow)
@@ -41,6 +41,13 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("25 European languages", readme)
         self.assertNotIn("485,425,504 bytes", readme)
         self.assertNotIn("b68557be1e3c40207fd7c4bd9d63f1d3316b963f15325bfb0cc16a8bb0ffd181", readme)
+
+        store_description = (
+            ROOT / "fastlane/metadata/android/en-US/full_description.txt"
+        ).read_text()
+        self.assertIn("does not bundle a speech model", store_description)
+        self.assertIn("Download and install", store_description)
+        self.assertNotIn("standard release includes", store_description.lower())
 
     def test_delivery_mode_copy_uses_reviewed_base_strings_in_every_locale(self):
         delivery_copy = {
@@ -63,7 +70,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertNotIn("download separately", values["models_builtin_sub"].lower())
         models = (ROOT / "app/src/main/java/dev/notune/transcribe/ModelsActivity.java").read_text()
         self.assertIn("if (BuildConfig.HAS_BUNDLED_MODEL)", models)
-        self.assertIn("getString(R.string.models_builtin_sub)", models)
+        self.assertIn("R.string.models_builtin_sub", models)
+        self.assertIn("R.string.models_builtin_retained_sub", models)
         self.assertIn("models_recommendation_included", models)
         self.assertIn("models_recommendation_included_available", models)
         self.assertIn("models_included", models)
@@ -77,6 +85,11 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("re-extracting", marker_branch)
         self.assertLess(assets.index("let model_path = find_gguf(&model_dir)?;"),
                         assets.index('std::fs::write(&marker_file, "ok")?;'))
+        inventory = (ROOT / "app/src/main/java/dev/notune/transcribe/SpeechModelInventory.java").read_text()
+        self.assertIn('new File(filesDir, "builtin-model")', inventory)
+        self.assertIn('new File(directory, ".extraction_complete")', inventory)
+        self.assertIn('const BUILTIN_MODEL_DIR: &str = "builtin-model";', assets)
+        self.assertIn('const EXTRACTION_COMPLETE_MARKER: &str = ".extraction_complete";', assets)
 
     def test_models_activity_avoids_redundant_delivery_copy(self):
         layout = (ROOT / "app/src/main/res/layout/activity_models.xml").read_text()
@@ -84,6 +97,11 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertNotIn("text_models_desc", layout)
         self.assertNotIn("findViewById(R.id.text_models_desc)", source)
         self.assertIn("text_model_recommendation", layout)
+        self.assertIn("addFamilyHeader(renderedFamily)", source)
+        self.assertIn("largestComfortableInFamily", source)
+        row = (ROOT / "app/src/main/res/layout/item_model_download.xml").read_text()
+        self.assertIn("txt_download_model_fit_badge", row)
+        self.assertIn("bg_model_family_recommended", source)
 
 
     def test_model_helper_copy_stays_dense_in_every_locale(self):
@@ -163,12 +181,12 @@ class ReleaseConfigurationTest(unittest.TestCase):
             source.index("public void onWindowHidden()") : source.index("public void onStartInput(")
         ]
         self.assertIn("if (isRecording && isStopOnHideEnabled())", window_hidden)
-        self.assertIn("stopAndDiscard();", window_hidden)
+        self.assertIn("stopForRecovery();", window_hidden)
         self.assertIn("isStopOnHideEnabled()", window_hidden)
         finish_input = source[
             source.index("public void onFinishInput()") : source.index("private void stopAndDiscard()")
         ]
-        self.assertIn("stopAndDiscard();", finish_input)
+        self.assertIn("stopForRecovery();", finish_input)
 
     def test_ime_recording_session_policy_is_the_only_commit_gate(self):
         source = (ROOT / "app/src/main/java/dev/notune/transcribe/RustInputMethodService.java").read_text()
@@ -220,13 +238,25 @@ class ReleaseConfigurationTest(unittest.TestCase):
                         source.index("private void restoreDeleteSelection(")]
         self.assertNotIn("finishComposingText()", cancel)
 
-    def test_transcription_never_moves_to_a_replacement_editor_and_failure_is_visible(self):
+    def test_transcription_survives_wrapper_replacement_and_is_staged_before_delivery(self):
         source = (ROOT / "app/src/main/java/dev/notune/transcribe/RustInputMethodService.java").read_text()
         session = (ROOT / "app/src/main/java/dev/notune/transcribe/ImeRecordingSession.java").read_text()
-        self.assertIn("getCurrentInputConnection() == requestedTarget", source)
-        self.assertIn("current == origin", session)
+        manifest = (ROOT / "app/src/main/AndroidManifest.xml").read_text()
+        staging = source.index("PendingImeTranscriptStore.saveIfEmpty(this, text)")
+        insertion = source.index("commitTranscribedText(current, committed)")
+        self.assertLess(staging, insertion)
+        self.assertIn("editorGeneration == originGeneration", session)
+        self.assertNotIn("current == origin", session)
+        self.assertNotIn("getCurrentInputConnection() == requestedTarget", source)
+        self.assertIn("if (!ic.commitText(committed, 1)) return false", source)
+        self.assertIn("ImeTranscriptRecoveryActivity", manifest)
+        self.assertIn("openTranscriptRecovery()", source)
+        recovery_intent = source[source.index("private void openTranscriptRecovery()"):
+                                 source.index("private void copyEmergencyTranscript")]
+        self.assertIn("EXTRA_ALREADY_INSERTED", recovery_intent)
+        self.assertNotIn("putExtra(\"text\"", recovery_intent)
+        self.assertNotIn("putExtra(\"transcript\"", recovery_intent)
         self.assertIn("Toast.makeText(getApplicationContext()", source)
-        self.assertIn("if (!discarded)", source)
 
     def test_default_model_import_is_verified_before_activation(self):
         source = (ROOT / "app/src/main/java/dev/notune/transcribe/ModelsActivity.java").read_text()
@@ -395,10 +425,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn('@+id/mic_processing_ring', popup)
         self.assertIn('@+id/mic_processing_ring', side)
         self.assertIn('processingResult = true', ime)
-        self.assertIn(
-            'processingRing.setVisibility(isProcessing ? View.VISIBLE : View.GONE)',
-            ime,
-        )
+        self.assertIn('isProcessing && !recoveryPending ? View.VISIBLE : View.GONE', ime)
         self.assertIn('awaitingResult = true', activity)
         self.assertIn(
             'showProcessing(awaitingResult || isProcessingStatus(s))',
@@ -629,6 +656,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
 
     def test_model_guidance_and_network_copy_are_honest(self):
         activity = (ROOT / "app/src/main/java/dev/notune/transcribe/ModelsActivity.java").read_text()
+        main = (ROOT / "app/src/main/java/dev/notune/transcribe/MainActivity.java").read_text()
+        gradle = (ROOT / "app/build.gradle.kts").read_text()
         manifest = (ROOT / "app/src/main/AndroidManifest.xml").read_text()
         strings = ET.parse(ROOT / "app/src/main/res/values/strings.xml").getroot()
         values = {item.attrib["name"]: "".join(item.itertext()) for item in strings.findall("string")}
@@ -652,9 +681,46 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("runtime prompt", values["models_network_body"].lower())
         self.assertIn("cannot revoke", values["models_remove_network_body"].lower())
         self.assertNotIn("parakeet", values["models_recommendation_installed"].lower())
+        self.assertIn('.orNull?.toBooleanStrictOrNull() ?: false', gradle)
+        self.assertIn("showInitialModelSetupIfNeeded()", main)
+        self.assertIn("hasUsableSpeechModel()", main)
+        self.assertNotIn("model_setup_intro_seen", main)
+        self.assertIn("modelSetupPromptChecked", main)
+        self.assertNotIn('requestPermissions(new String[]{Manifest.permission.INTERNET}',
+                         activity + main)
+        self.assertIn("bestSupportedDeviceLanguage(tags)", activity)
+        self.assertIn("Locale.getDefault()", activity)
+        self.assertIn("memory.totalMem", activity)
+        self.assertIn("getFilesDir().getUsableSpace()", activity)
+        inventory = (ROOT / "app/src/main/java/dev/notune/transcribe/SpeechModelInventory.java").read_text()
+        self.assertIn('new File(filesDir, "builtin-model")', inventory)
+        self.assertIn("hasRetainedBuiltInModel", activity + main + inventory)
+
+    def test_transcript_recovery_is_private_sensitive_and_off_main_thread(self):
+        ime = (ROOT / "app/src/main/java/dev/notune/transcribe/RustInputMethodService.java").read_text()
+        recovery = (ROOT / "app/src/main/java/dev/notune/transcribe/ImeTranscriptRecoveryActivity.java").read_text()
+        clipboard = (ROOT / "app/src/main/java/dev/notune/transcribe/TranscriptClipboard.java").read_text()
+        self.assertIn("RECOVERY_IO.execute", ime)
+        self.assertIn("recoveryIo.execute", recovery)
+        self.assertIn("ClipDescription.EXTRA_IS_SENSITIVE", clipboard)
+        self.assertIn("FLAG_SECURE", recovery)
+        self.assertIn("ViewCompat.setAccessibilityHeading", recovery)
+        self.assertIn("ime_recovery_inserted_clear_failed", ime)
+        self.assertIn('android:saveEnabled="false"',
+                      (ROOT / "app/src/main/res/layout/activity_ime_transcript_recovery.xml").read_text())
+        self.assertNotIn("ClipData.newPlainText", ime + recovery)
+        auto_record = ime[ime.index('if (new File(getFilesDir(), "auto_record").exists())'):
+                          ime.index("@Override\n    public void onWindowHidden")]
+        pending_branch = auto_record[auto_record.index("if (hasPendingTranscriptRecovery())"):
+                                     auto_record.index("if (isPauseAudioEnabled())")]
+        self.assertNotIn("openTranscriptRecovery()", pending_branch)
+        self.assertIn("updateUiState()", pending_branch)
 
     def test_theme_rebuild_reapplies_keyboard_insets(self):
         ime = (ROOT / "app/src/main/java/dev/notune/transcribe/RustInputMethodService.java").read_text()
+        self.assertIn("int basePaddingBottom = view.getPaddingBottom();", ime)
+        self.assertIn("basePaddingBottom + insets.getSystemWindowInsetBottom()", ime)
+        self.assertNotIn("originalPaddingBottom", ime)
         theme_branch = ime[ime.index("// Rebuild the keyboard if the theme preference changed"):
                            ime.index("@Override\n    public void onFinishInput")]
         self.assertIn("setInputView(refreshedView);", theme_branch)
@@ -750,6 +816,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn('android:exported="false"', manifest)
         self.assertIn('@+id/card_custom_terms', layout)
         self.assertIn('@+id/custom_terms_editor', editor_layout)
+        self.assertIn('android:scrollbars="none"', editor_layout)
         self.assertIn("MAX_TERMS = 32", store)
         self.assertIn("MAX_PROMPT_UTF8_BYTES = 200", store)
         self.assertIn("StandardCopyOption.ATOMIC_MOVE", store)

@@ -5,13 +5,11 @@ plugins {
     id("com.android.application")
 }
 
-// Normal APKs include the verified default model so first launch and speech
-// recognition work without a network connection. Developers may explicitly
-// opt out for small local compile or update-testing artifacts with
-// -PincludeBundledModel=false. Those artifacts must be labeled clearly and
-// must not stand in for clean-install offline-first or publication candidates.
+// Normal APKs stay small. Speech models are downloaded once into app-private
+// storage and survive ordinary APK updates. A maintainer can still opt into a
+// bundled-model build for controlled offline testing.
 val includeBundledModel = providers.gradleProperty("includeBundledModel")
-    .orNull?.toBooleanStrictOrNull() ?: true
+    .orNull?.toBooleanStrictOrNull() ?: false
 
 android {
     namespace = "dev.notune.transcribe"
@@ -21,8 +19,8 @@ android {
         applicationId = "app.offlinespeechtotext"
         minSdk = 26
         targetSdk = 35
-        versionCode = 30
-        versionName = "0.4.1"
+        versionCode = 31
+        versionName = "0.5.0"
         buildConfigField("boolean", "HAS_BUNDLED_MODEL", includeBundledModel.toString())
         ndk {
             abiFilters += "arm64-v8a"

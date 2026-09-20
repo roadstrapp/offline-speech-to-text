@@ -28,6 +28,7 @@ public final class BehaviorTest {
         themeDefaultsToDarkButPreservesExplicitChoices();
         successfulImportBecomesActiveModel();
         exactDefaultModelContractAcceptsOnlyThePinnedArtifact();
+        compactUpdatesRetainExistingModelsWithoutBundling();
         modelCatalogIsCapabilityHonest();
         recommendationFiltersBeforeRanking();
         modelGuidanceUsesConservativeSizeAndDeviceTiers();
@@ -39,7 +40,7 @@ public final class BehaviorTest {
         verifiedModelLabelsRequirePersistedProvenance();
         setupStatesAreExplicit();
         imeEditorSafetyIsFailClosed();
-        recordingSessionCommitsOnlyToItsOriginalSafeEditor();
+        recordingSessionTracksTheSafeEditorLifecycleNotWrapperIdentity();
         deletePreviewMovesByWholeGraphemeClusters();
         deletePreviewExtendsAnExistingSelectionByCluster();
         settingsMigrationPreservesUnknownAndFutureState();
@@ -84,6 +85,33 @@ public final class BehaviorTest {
                         DefaultModelContract.BYTE_SIZE,
                         "0000000000000000000000000000000000000000000000000000000000000000"),
                 "a digest mismatch is rejected");
+    }
+
+    private static void compactUpdatesRetainExistingModelsWithoutBundling() throws Exception {
+        Path fresh = Files.createTempDirectory("offline-stt-fresh-compact");
+        assertEquals(false, SpeechModelInventory.hasUsableModel(fresh.toFile(), false),
+                "a fresh compact install needs model setup");
+
+        Path retainedDirectory = fresh.resolve("builtin-model");
+        Files.createDirectories(retainedDirectory);
+        Path retained = retainedDirectory.resolve(DefaultModelContract.FILE_NAME);
+        try (java.io.RandomAccessFile model = new java.io.RandomAccessFile(
+                retained.toFile(), "rw")) {
+            model.setLength(DefaultModelContract.BYTE_SIZE);
+        }
+        Files.writeString(retainedDirectory.resolve(".extraction_complete"), "ok");
+        assertEquals(true, SpeechModelInventory.hasUsableModel(fresh.toFile(), false),
+                "a compact update keeps the previously extracted model usable");
+
+        Path selected = Files.createTempDirectory("offline-stt-selected-compact");
+        Files.createDirectories(selected.resolve("models"));
+        Files.writeString(selected.resolve("models/custom.gguf"), "model");
+        Files.writeString(selected.resolve("active_model"), "custom.gguf");
+        assertEquals(true, SpeechModelInventory.hasUsableModel(selected.toFile(), false),
+                "a downloaded model survives ordinary compact APK updates");
+        Files.writeString(selected.resolve("active_model"), "../escape.gguf");
+        assertEquals(false, SpeechModelInventory.hasUsableModel(selected.toFile(), false),
+                "setup inventory rejects active-model path traversal");
     }
 
     private static void modelCatalogIsCapabilityHonest() {
@@ -171,8 +199,10 @@ public final class BehaviorTest {
                 new ModelRecommendation.DeviceProfile(true, true, true, 4L << 30,
                         DefaultModelContract.BYTE_SIZE, null),
                 new ModelRecommendation.Request("en-US", false));
-        assertEquals(true, storage.reasons.contains(ModelRecommendation.Reason.INSUFFICIENT_STORAGE),
-                "storage headroom is required before any download");
+        assertEquals(ModelRecommendation.Status.RECOMMENDED, storage.status,
+                "balanced guidance falls back when the default lacks storage headroom");
+        assertEquals("whisper-small-Q4_K_M.gguf", storage.model.fileName,
+                "a smaller verified model is recommended instead of a dead end");
 
         ModelRecommendation.Result compact = ModelRecommendation.recommend(
                 capable, new ModelRecommendation.Request(
@@ -372,6 +402,17 @@ public final class BehaviorTest {
         assertEquals(ModelGuidance.DeviceFit.NOT_ENOUGH_RAM,
                 ModelGuidance.fit(huge, ordinaryPhone),
                 "large models are rejected before download when estimated RAM is insufficient");
+        ModelDescriptor ordinaryParakeet = ModelGuidance.largestComfortableInFamily(
+                ModelCatalog.verifiedDownloads(), "Parakeet", ordinaryPhone);
+        assertEquals(DefaultModelContract.FILE_NAME, ordinaryParakeet.fileName,
+                "a 4 GiB phone highlights the largest conservative Parakeet fit");
+        ModelRecommendation.DeviceProfile highMemoryPhone =
+                new ModelRecommendation.DeviceProfile(
+                        true, true, true, 12L << 30, 16L << 30, null);
+        ModelDescriptor largeCanary = ModelGuidance.largestComfortableInFamily(
+                ModelCatalog.verifiedDownloads(), "Canary", highMemoryPhone);
+        assertEquals("canary-qwen-2.5b-Q4_K_M.gguf", largeCanary.fileName,
+                "a high-memory phone can highlight a larger comfortable family option");
     }
 
     private static void importedModelNamesStayInsidePrivateModelStorage() {
@@ -520,37 +561,39 @@ public final class BehaviorTest {
                 "private no-learning fields allow content-free local dictation");
     }
 
-    private static void recordingSessionCommitsOnlyToItsOriginalSafeEditor() {
+    private static void recordingSessionTracksTheSafeEditorLifecycleNotWrapperIdentity() {
         Object originalEditor = new Object();
         Object replacementEditor = new Object();
         ImeRecordingSession session = new ImeRecordingSession();
 
-        session.begin(originalEditor);
-        assertEquals(true, session.canCommitTo(originalEditor, true, true),
+        session.begin(originalEditor, 7L);
+        assertEquals(true, session.canCommitTo(originalEditor, 7L, true, true),
                 "a transcription may commit to its original active safe editor");
-        assertEquals(false, session.canCommitTo(replacementEditor, true, true),
-                "a transcription never commits to a different editor");
-        assertEquals(false, session.canCommitTo(originalEditor, false, true),
+        assertEquals(true, session.canCommitTo(replacementEditor, 7L, true, true),
+                "a replacement IPC wrapper remains valid in the same editor lifecycle");
+        assertEquals(false, session.canCommitTo(originalEditor, 8L, true, true),
+                "a transcription never commits after Android starts another editor");
+        assertEquals(false, session.canCommitTo(originalEditor, 7L, false, true),
                 "a transcription never commits to a sensitive editor");
-        assertEquals(false, session.canCommitTo(originalEditor, true, false),
+        assertEquals(false, session.canCommitTo(originalEditor, 7L, true, false),
                 "a transcription never commits without active input");
 
         ImeRecordingSession failedSession = new ImeRecordingSession();
-        failedSession.begin(originalEditor);
+        failedSession.begin(originalEditor, 7L);
         failedSession.onError();
-        assertEquals(false, failedSession.canCommitTo(originalEditor, true, true),
+        assertEquals(false, failedSession.canCommitTo(originalEditor, 7L, true, true),
                 "an error fail-closes an otherwise active recording");
 
         session.discard();
         session.onError();
-        assertEquals(false, session.canCommitTo(originalEditor, true, true),
+        assertEquals(false, session.canCommitTo(originalEditor, 7L, true, true),
                 "an error cannot clear the discard latch for a late transcription");
 
-        session.begin(originalEditor);
-        assertEquals(true, session.canCommitTo(originalEditor, true, true),
+        session.begin(originalEditor, 9L);
+        assertEquals(true, session.canCommitTo(originalEditor, 9L, true, true),
                 "only a new recording clears the discard latch");
         session.finish();
-        assertEquals(false, session.canCommitTo(originalEditor, true, true),
+        assertEquals(false, session.canCommitTo(originalEditor, 9L, true, true),
                 "a completed session cannot replay into an editor");
     }
 

@@ -4,6 +4,8 @@
     android:layout_height="wrap_content"
     android:orientation="vertical"
     android:minHeight="64dp"
+    android:paddingStart="8dp"
+    android:paddingEnd="8dp"
     android:paddingTop="4dp"
     android:paddingBottom="4dp">
 
@@ -25,6 +27,16 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:textAppearance="?attr/textAppearanceBodyLarge" />
+
+            <TextView
+                android:id="@+id/txt_download_model_fit_badge"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="@string/models_family_recommended"
+                android:textAppearance="?attr/textAppearanceLabelMedium"
+                android:textColor="?attr/colorPrimary"
+                android:visibility="gone" />
 
             <TextView
                 android:id="@+id/txt_download_model_meta"

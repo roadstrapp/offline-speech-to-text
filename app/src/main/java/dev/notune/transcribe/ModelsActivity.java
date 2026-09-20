@@ -44,6 +44,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -293,11 +294,32 @@ public class ModelsActivity extends AppCompatActivity {
                 ? catalogFamilies.get(position) : null;
         boolean busy = DOWNLOAD_LIFECYCLE.isRunning() || importInFlight.get();
         ModelRecommendation.DeviceProfile device = currentDeviceProfile();
+        boolean builtInAvailable = hasBuiltInModelAvailable();
         ModelDownloadLifecycle.Snapshot download = DOWNLOAD_LIFECYCLE.snapshot();
+        List<ModelDescriptor> visibleModels = new ArrayList<>();
         for (ModelDescriptor model : ModelCatalog.verifiedDownloads()) {
             boolean isRunningModel = download.state == ModelDownloadLifecycle.State.RUNNING
                     && model.id.equals(download.modelId);
             if (selected != null && !selected.equals(model.architecture) && !isRunningModel) continue;
+            visibleModels.add(model);
+        }
+        visibleModels.sort(Comparator.comparing((ModelDescriptor model) -> model.architecture)
+                .thenComparingLong(model -> model.byteSize));
+        Map<String, ModelDescriptor> familyFits = new LinkedHashMap<>();
+        for (ModelDescriptor model : visibleModels) {
+            if (!familyFits.containsKey(model.architecture)) {
+                familyFits.put(model.architecture, ModelGuidance.largestComfortableInFamily(
+                        ModelCatalog.verifiedDownloads(), model.architecture, device));
+            }
+        }
+        String renderedFamily = null;
+        for (ModelDescriptor model : visibleModels) {
+            if (!model.architecture.equals(renderedFamily)) {
+                renderedFamily = model.architecture;
+                addFamilyHeader(renderedFamily);
+            }
+            ModelDescriptor familyFit = familyFits.get(model.architecture);
+            boolean recommendedInFamily = familyFit != null && familyFit.id.equals(model.id);
             View row = getLayoutInflater().inflate(
                     R.layout.item_model_download, downloadCatalog, false);
             ((TextView) row.findViewById(R.id.txt_download_model_name))
@@ -310,9 +332,13 @@ public class ModelsActivity extends AppCompatActivity {
                             sizeTierLabel(model.sizeTier()),
                             Formatter.formatShortFileSize(this, model.minimumRamBytes),
                             deviceFitLabel(ModelGuidance.fit(model, device))));
+            if (recommendedInFamily) {
+                row.findViewById(R.id.txt_download_model_fit_badge).setVisibility(View.VISIBLE);
+                row.setBackgroundResource(R.drawable.bg_model_family_recommended);
+            }
             Button action = row.findViewById(R.id.btn_download_model);
             File installed = new File(modelsDir(), model.fileName);
-            boolean bundled = BuildConfig.HAS_BUNDLED_MODEL
+            boolean builtIn = builtInAvailable
                     && DefaultModelContract.FILE_NAME.equals(model.fileName);
             boolean verified = VerifiedModelProvenance.isVerified(
                     getFilesDir(), installed, model);
@@ -324,8 +350,9 @@ public class ModelsActivity extends AppCompatActivity {
             ModelDownloadLifecycle.Snapshot downloadSnapshot = DOWNLOAD_LIFECYCLE.snapshot();
             boolean failedHere = downloadSnapshot.state == ModelDownloadLifecycle.State.FAILED
                     && model.id.equals(downloadSnapshot.modelId);
-            if (bundled) {
-                action.setText(R.string.models_included);
+            if (builtIn) {
+                action.setText(BuildConfig.HAS_BUNDLED_MODEL
+                        ? R.string.models_included : R.string.models_installed);
             } else if (verified) {
                 action.setText(R.string.models_installed);
             } else if (!cpuCompatible) {
@@ -339,7 +366,7 @@ public class ModelsActivity extends AppCompatActivity {
             } else {
                 action.setText(R.string.models_download);
             }
-            action.setEnabled(!bundled && !verified && !busy
+            action.setEnabled(!builtIn && !verified && !busy
                     && cpuCompatible && enoughRam && enoughStorage);
             action.setOnClickListener(v -> beginDownload(model, DOWNLOAD_ORIGIN_CATALOG));
             row.findViewById(R.id.btn_cancel_model_download)
@@ -353,6 +380,29 @@ public class ModelsActivity extends AppCompatActivity {
             downloadCatalog.addView(row);
         }
         renderProgress(DOWNLOAD_LIFECYCLE.snapshot());
+    }
+
+    private void addFamilyHeader(String family) {
+        View header = getLayoutInflater().inflate(
+                R.layout.item_model_family_header, downloadCatalog, false);
+        ((TextView) header.findViewById(R.id.txt_model_family_name)).setText(
+                getString(R.string.models_family_title, family));
+        ((TextView) header.findViewById(R.id.txt_model_family_desc)).setText(
+                familyDescriptionRes(family));
+        downloadCatalog.addView(header);
+    }
+
+    private int familyDescriptionRes(String family) {
+        switch (family) {
+            case "Parakeet": return R.string.models_family_parakeet;
+            case "Whisper": return R.string.models_family_whisper;
+            case "Canary": return R.string.models_family_canary;
+            case "Moonshine": return R.string.models_family_moonshine;
+            case "GigaAM": return R.string.models_family_gigaam;
+            case "MedASR": return R.string.models_family_medasr;
+            case "Nemotron": return R.string.models_family_nemotron;
+            default: return R.string.models_family_specialist;
+        }
     }
 
     private String sizeTierLabel(ModelDescriptor.SizeTier tier) {
@@ -407,6 +457,14 @@ public class ModelsActivity extends AppCompatActivity {
         }
         languageTags = tags;
 
+        // A fresh install has no model from which to infer a useful default.
+        // Seed the visible choice from the phone locale so recommendation can
+        // choose a compatible family before the first download.
+        if (stored.isEmpty() && !hasAnyUsableModel()) {
+            stored = bestSupportedDeviceLanguage(tags);
+            if (!stored.isEmpty()) writeConfig("model_language", stored);
+        }
+
         List<String> labels = new ArrayList<>(tags.size());
         for (String tag : tags) {
             labels.add(tag.isEmpty()
@@ -439,6 +497,22 @@ public class ModelsActivity extends AppCompatActivity {
             public void onNothingSelected(AdapterView<?> parent) {
             }
         });
+    }
+
+    private static String bestSupportedDeviceLanguage(List<String> tags) {
+        Locale device = Locale.getDefault();
+        String exact = device.toLanguageTag();
+        if (tags.contains(exact)) return exact;
+        for (String tag : tags) {
+            if (!tag.isEmpty() && Locale.forLanguageTag(tag).getLanguage()
+                    .equals(device.getLanguage())) return tag;
+        }
+        return "";
+    }
+
+    private boolean hasAnyUsableModel() {
+        return SpeechModelInventory.hasUsableModel(
+                getFilesDir(), BuildConfig.HAS_BUNDLED_MODEL);
     }
 
     // --- Inference threads --------------------------------------------------
@@ -495,10 +569,15 @@ public class ModelsActivity extends AppCompatActivity {
 
     private ModelDescriptor activeKnownModel() {
         String active = readConfig("active_model");
-        if (active.isEmpty() && BuildConfig.HAS_BUNDLED_MODEL) {
+        if (active.isEmpty() && hasBuiltInModelAvailable()) {
             return ModelCatalog.verifiedDefault();
         }
         return ModelCatalog.findByFileName(active);
+    }
+
+    private boolean hasBuiltInModelAvailable() {
+        return BuildConfig.HAS_BUNDLED_MODEL
+                || SpeechModelInventory.hasRetainedBuiltInModel(getFilesDir());
     }
 
     private String readConfig(String name) {
@@ -548,9 +627,12 @@ public class ModelsActivity extends AppCompatActivity {
             active = "";
         }
 
-        if (BuildConfig.HAS_BUNDLED_MODEL) {
+        if (hasBuiltInModelAvailable()) {
             addModelRow(getString(R.string.models_builtin),
-                    getString(R.string.models_builtin_sub), null, active.isEmpty());
+                    getString(BuildConfig.HAS_BUNDLED_MODEL
+                            ? R.string.models_builtin_sub
+                            : R.string.models_builtin_retained_sub),
+                    null, active.isEmpty());
         }
         for (String name : names) {
             String size = Formatter.formatShortFileSize(
@@ -564,7 +646,7 @@ public class ModelsActivity extends AppCompatActivity {
 
     private void updateCapabilityControls(String active) {
         boolean knownUnsupported = isVerifiedDefault(new File(modelsDir(), active))
-                || (active.isEmpty() && BuildConfig.HAS_BUNDLED_MODEL);
+                || (active.isEmpty() && hasBuiltInModelAvailable());
         findViewById(R.id.translate_row).setVisibility(
                 knownUnsupported ? View.GONE : View.VISIBLE);
         updateCustomTermsSummary();
@@ -610,14 +692,23 @@ public class ModelsActivity extends AppCompatActivity {
         if (result.status == ModelRecommendation.Status.RECOMMENDED) {
             recommendedModel = result.model;
             boolean isDefault = DefaultModelContract.FILE_NAME.equals(result.model.fileName);
-            if (BuildConfig.HAS_BUNDLED_MODEL && isDefault) {
+            if (hasBuiltInModelAvailable() && isDefault) {
                 recommendationUsesBundledModel = true;
                 boolean bundledActive = readConfig("active_model").isEmpty();
-                recommendationText.setText(bundledActive
-                        ? R.string.models_recommendation_included
-                        : R.string.models_recommendation_included_available);
+                if (BuildConfig.HAS_BUNDLED_MODEL) {
+                    recommendationText.setText(bundledActive
+                            ? R.string.models_recommendation_included
+                            : R.string.models_recommendation_included_available);
+                } else {
+                    recommendationText.setText(bundledActive
+                            ? R.string.models_recommendation_retained
+                            : R.string.models_recommendation_retained_available);
+                }
                 downloadButton.setText(bundledActive
-                        ? R.string.models_included : R.string.models_use_included);
+                        ? (BuildConfig.HAS_BUNDLED_MODEL
+                                ? R.string.models_included : R.string.models_installed)
+                        : (BuildConfig.HAS_BUNDLED_MODEL
+                                ? R.string.models_use_included : R.string.models_use_installed));
                 downloadButton.setEnabled(!bundledActive && !DOWNLOAD_LIFECYCLE.isRunning());
                 return;
             }
@@ -854,10 +945,12 @@ public class ModelsActivity extends AppCompatActivity {
         final String provenance;
         final String language;
         final String integrity;
-        if (active.isEmpty() && BuildConfig.HAS_BUNDLED_MODEL) {
+        if (active.isEmpty() && hasBuiltInModelAvailable()) {
             title = getString(R.string.models_builtin);
             size = Formatter.formatShortFileSize(this, DefaultModelContract.BYTE_SIZE);
-            provenance = getString(R.string.models_provenance_bundled);
+            provenance = getString(BuildConfig.HAS_BUNDLED_MODEL
+                    ? R.string.models_provenance_bundled
+                    : R.string.models_provenance_retained);
             language = getString(R.string.models_language_parakeet);
             integrity = getString(R.string.models_integrity_loaded);
         } else if (!active.isEmpty() && names.contains(active)) {

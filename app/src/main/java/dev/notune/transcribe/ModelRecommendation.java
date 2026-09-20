@@ -115,7 +115,8 @@ public final class ModelRecommendation {
             default:
                 ModelDescriptor defaultModel = ModelCatalog.verifiedDefault();
                 if (!request.translation && (request.languageTag.isEmpty()
-                        || defaultModel.supportsLanguage(request.languageTag))) {
+                        || defaultModel.supportsLanguage(request.languageTag))
+                        && hardCompatible(defaultModel, device)) {
                     return defaultModel;
                 }
                 preferredFile = "whisper-small-Q4_K_M.gguf";

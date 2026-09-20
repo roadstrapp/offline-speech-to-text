@@ -58,14 +58,17 @@ public class MainActivity extends AppCompatActivity {
     private TextView imeStatusText;
     private Button imePickerButton;
     private Button imeSettingsButton;
+    private Button imeRecoveryButton;
     private Button startSubsButton;
     private Button benchButton;
     private TextView benchResultText;
     private volatile boolean micRequestedThisSession;
+    private boolean modelSetupPromptChecked;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        modelSetupPromptChecked = savedInstanceState != null;
         setContentView(R.layout.activity_main);
 
         statusText = findViewById(R.id.text_status);
@@ -75,6 +78,7 @@ public class MainActivity extends AppCompatActivity {
         voiceTryButton = findViewById(R.id.btn_voice_try);
         imeStatusText = findViewById(R.id.text_ime_status);
         imePickerButton = findViewById(R.id.btn_ime_picker);
+        imeRecoveryButton = findViewById(R.id.btn_ime_recovery);
         startSubsButton = findViewById(R.id.btn_subs_start);
         imeSettingsButton = findViewById(R.id.btn_ime_settings);
         Button voiceHelpButton = findViewById(R.id.btn_voice_help);
@@ -87,6 +91,8 @@ public class MainActivity extends AppCompatActivity {
         imeSettingsButton.setOnClickListener(v ->
                 startActivity(new Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)));
         imePickerButton.setOnClickListener(v -> handleImeAction());
+        imeRecoveryButton.setOnClickListener(v ->
+                startActivity(new Intent(this, ImeTranscriptRecoveryActivity.class)));
 
         startSubsButton.setOnClickListener(v -> {
             Intent intent = new Intent(this, LiveSubtitleActivity.class);
@@ -195,11 +201,13 @@ public class MainActivity extends AppCompatActivity {
         // Initial check
         updateVoiceInputStatus();
         updateImeStatus();
+        updateImeRecoveryStatus();
 
         configureAccessibility();
 
         // Start init
         initNative(this);
+        showInitialModelSetupIfNeeded();
     }
 
     private void setupRecognizePanelPosition() {
@@ -261,6 +269,7 @@ public class MainActivity extends AppCompatActivity {
         // Re-check on return from the keyboard chooser, settings, or a test run.
         updateVoiceInputStatus();
         updateImeStatus();
+        updateImeRecoveryStatus();
     }
 
     /**
@@ -341,6 +350,28 @@ public class MainActivity extends AppCompatActivity {
                 imeSettingsButton.setVisibility(View.VISIBLE);
                 break;
         }
+    }
+
+    private void updateImeRecoveryStatus() {
+        imeRecoveryButton.setVisibility(
+                PendingImeTranscriptStore.hasRecordFast(this) ? View.VISIBLE : View.GONE);
+    }
+
+    private void showInitialModelSetupIfNeeded() {
+        if (modelSetupPromptChecked || hasUsableSpeechModel()) return;
+        modelSetupPromptChecked = true;
+        new MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.model_setup_title)
+                .setMessage(R.string.model_setup_body)
+                .setPositiveButton(R.string.model_setup_action, (dialog, which) ->
+                        startActivity(new Intent(this, ModelsActivity.class)))
+                .setNegativeButton(R.string.model_setup_later, null)
+                .show();
+    }
+
+    private boolean hasUsableSpeechModel() {
+        return SpeechModelInventory.hasUsableModel(
+                getFilesDir(), BuildConfig.HAS_BUNDLED_MODEL);
     }
 
     private void handleImeAction() {

@@ -18,6 +18,7 @@ javac -d "$OUT" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/StoredThemeMode.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/ImportedModelSelection.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/DefaultModelContract.java" \
+  "$ROOT/app/src/main/java/dev/notune/transcribe/SpeechModelInventory.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/ModelDescriptor.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/ModelCatalog.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/ModelRecommendation.java" \
@@ -30,16 +31,21 @@ javac -d "$OUT" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/SetupState.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/ImeTextEdit.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/ImeRecordingSession.java" \
+  "$ROOT/app/src/main/java/dev/notune/transcribe/PendingTranscriptRecord.java" \
+  "$ROOT/app/src/main/java/dev/notune/transcribe/PendingTranscriptFiles.java" \
+  "$ROOT/app/src/main/java/dev/notune/transcribe/EmergencyTranscriptBuffer.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/SettingsSchema.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/DiagnosticLog.java" \
   "$ROOT/tests/BehaviorTest.java" \
   "$ROOT/tests/ModelDownloadBoundaryTest.java" \
   "$ROOT/tests/CustomTermsStoreTest.java" \
-  "$ROOT/tests/PersonalCorrectionsStoreTest.java"
+  "$ROOT/tests/PersonalCorrectionsStoreTest.java" \
+  "$ROOT/tests/PendingTranscriptRecordTest.java"
 java -ea -cp "$OUT" dev.notune.transcribe.BehaviorTest
 java -ea -cp "$OUT" dev.notune.transcribe.ModelDownloadBoundaryTest
 java -ea -cp "$OUT" dev.notune.transcribe.CustomTermsStoreTest
 java -ea -cp "$OUT" dev.notune.transcribe.PersonalCorrectionsStoreTest
+java -ea -cp "$OUT" dev.notune.transcribe.PendingTranscriptRecordTest
 
 javac -d "$OUT" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/ForegroundRecordingCoordinator.java" \

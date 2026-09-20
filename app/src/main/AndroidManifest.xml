@@ -112,6 +112,11 @@
         <activity
             android:name=".ForegroundResultActivity"
             android:exported="false" />
+        <activity
+            android:name=".ImeTranscriptRecoveryActivity"
+            android:excludeFromRecents="true"
+            android:process=":ime"
+            android:exported="false" />
         <receiver
             android:name=".ForegroundRecordingActionReceiver"
             android:exported="false" />

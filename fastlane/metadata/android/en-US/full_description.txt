@@ -16,11 +16,11 @@ Prefer voice input as its own keyboard? A dedicated voice keyboard is included �
 WHY YOU'LL LOVE IT
 • 100% offline — even works in airplane mode, nothing is ever uploaded
 • Private by design — audio is processed on-device and never stored or sent
-• Fast and accurate, powered by NVIDIA's Parakeet model
-• 25 languages, including English, German, French, Spanish, Italian, Portuguese, Dutch, Polish, Russian and Ukrainian
+• Fast and accurate with verified Parakeet and Whisper model downloads
+• Guided model recommendations based on your phone, free storage and language
 • Free and open source (MIT License)
 
-The standard release includes a verified Parakeet speech model, so transcription works without a separate download. You can also import compatible transcribe.cpp GGUF models from local storage.
+The small app download does not bundle a speech model. On first setup, choose the recommended verified model and tap Download and install. The model stays on your phone through ordinary app updates and works fully offline afterward. You can also import compatible transcribe.cpp GGUF models from local storage.
 
 POWERED BY OPEN SOURCE
 We believe in transparency and the power of the community. Offline Speech to Text is built with cutting-edge open-source technology:

@@ -29,6 +29,10 @@
     
     <string name="status_label">Status:</string>
     <string name="status_checking">Checking assets...</string>
+    <string name="model_setup_title">Choose an offline speech model</string>
+    <string name="model_setup_body">This small app download does not include a speech model. OSTT will recommend one using this phone’s memory, storage, and system language. Network access is used only after you tap Download; speech recognition is offline afterward. If Network access is disabled, OSTT will open App settings so you can allow it.</string>
+    <string name="model_setup_action">Choose model</string>
+    <string name="model_setup_later">Not now</string>
     <string name="status_ready">Ready</string>
     <string name="status_error">Error</string>
     
@@ -68,7 +72,28 @@
     <string name="ime_switch_keyboard">Switch keyboard</string>
     <string name="ime_sensitive_field">Voice recording is unavailable in password fields</string>
     <string name="ime_recording_discarded">Recording discarded</string>
-    <string name="ime_editor_changed">Original text field changed · transcription not inserted</string>
+    <string name="ime_editor_changed">Text field changed · transcription saved for recovery</string>
+    <string name="ime_recovery_ready">Saved transcription available</string>
+    <string name="ime_recovery_open">Review and copy saved transcription</string>
+    <string name="ime_tap_to_record">Tap to record</string>
+    <string name="ime_processing_on_device">Transcribing on device</string>
+    <string name="ime_recovery_open_button">Open saved transcription</string>
+    <string name="ime_recovery_title">Saved transcription</string>
+    <string name="ime_recovery_explanation">The original text field was no longer available. Your exact transcription is stored privately on this device until you copy or delete it.</string>
+    <string name="ime_recovery_explanation_inserted">The transcription was inserted, but its private safety copy could not be cleared. Delete the saved copy to avoid inserting it twice.</string>
+    <string name="ime_recovery_copy">Copy and clear</string>
+    <string name="ime_recovery_keep">Keep for later</string>
+    <string name="ime_recovery_delete">Delete transcription</string>
+    <string name="ime_recovery_delete_title">Delete saved transcription?</string>
+    <string name="ime_recovery_delete_message">This cannot be undone.</string>
+    <string name="ime_recovery_unavailable">No saved transcription is available.</string>
+    <string name="ime_recovery_loading">Loading saved transcription…</string>
+    <string name="ime_recovery_damaged">The saved recovery record is damaged and cannot be presented as exact text. Delete it before recording again.</string>
+    <string name="ime_recovery_copied">Transcription copied</string>
+    <string name="ime_recovery_copy_failed">Could not copy. The transcription is still saved privately.</string>
+    <string name="ime_recovery_clear_failed">Copied, but the private saved copy could not be cleared. Delete it before recording again.</string>
+    <string name="ime_recovery_inserted_clear_failed">Inserted, but the private saved copy could not be cleared. Delete it before recording again.</string>
+    <string name="ime_recovery_storage_failed">Private recovery storage failed · transcription copied to clipboard</string>
 
     <string name="setting_subtitle_lines">Subtitle length</string>
     <string name="setting_subtitle_lines_desc">How many lines the live subtitles show; older text scrolls away</string>
@@ -77,7 +102,7 @@
     <string name="subtitle_lines_all">All</string>
 
     <string name="section_history">History</string>
-    <string name="history_not_stored">No transcription history is stored by this release. Speech results remain only in the app where you insert them or in the clipboard when you explicitly copy them.</string>
+    <string name="history_not_stored">No transcription history is stored. If an original text field disappears, one pending recovery result is kept privately until you copy or delete it; successful insertion clears it immediately.</string>
 
     <string name="recognition_service_label">Offline Speech to Text</string>
 
@@ -89,6 +114,7 @@
     <string name="models_active_none">No model is active. Import a model to enable offline speech.</string>
     <string name="models_active_summary">%1$s · %2$s · %3$s · %4$s · %5$s</string>
     <string name="models_provenance_bundled">Included</string>
+    <string name="models_provenance_retained">Installed by an earlier version</string>
     <string name="models_provenance_imported">Private import</string>
     <string name="models_provenance_verified">Verified download</string>
     <string name="models_language_parakeet">25 European languages</string>
@@ -98,6 +124,7 @@
     <string name="models_retry">Retry model load</string>
     <string name="models_builtin">Parakeet TDT 0.6B v3 Q4</string>
     <string name="models_builtin_sub">Included in app · 25 European languages</string>
+    <string name="models_builtin_retained_sub">Installed by an earlier version · 25 European languages</string>
     <string name="models_loading">Loading model…</string>
     <string name="models_import">Import model file (.gguf)</string>
     <string name="models_importing">Importing %1$s…</string>
@@ -141,6 +168,16 @@
     <string name="models_catalog_all">All families</string>
     <string name="models_catalog_meta">%1$s · %2$s · SHA-256 verified</string>
     <string name="models_catalog_guidance">%1$s · about %2$s RAM · %3$s</string>
+    <string name="models_family_title">%1$s family</string>
+    <string name="models_family_recommended">Largest comfortable fit in this family for this phone</string>
+    <string name="models_family_parakeet">Fast CPU transcription. The recommended v3 model covers 25 European languages; most other variants are English-only. No speech translation.</string>
+    <string name="models_family_whisper">Broad multilingual coverage, language detection, optional English translation, and personal-dictionary hints. Larger models trade speed and memory for accuracy.</string>
+    <string name="models_family_canary">Multilingual transcription and speech translation. Larger variants need substantially more memory.</string>
+    <string name="models_family_moonshine">Compact English models, including streaming variants. OSTT’s keyboard still records first, then transcribes.</string>
+    <string name="models_family_gigaam">Russian-focused transcription with compact CTC and RNN-T variants.</string>
+    <string name="models_family_medasr">Compact English medical-speech specialist. Prefer a general family for ordinary dictation.</string>
+    <string name="models_family_nemotron">Streaming-oriented models; the multilingual variant supports language prompting. OSTT’s keyboard still records first, then transcribes.</string>
+    <string name="models_family_specialist">Specialist model family. Language and feature support varies by model; review its source details before choosing it over the main recommendation.</string>
     <string name="models_size_compact">Compact</string>
     <string name="models_size_phone">Phone-friendly</string>
     <string name="models_size_large">Large</string>
@@ -162,6 +199,8 @@
     <string name="models_recommendation_ready_details">%1$s · %2$s · %3$s · about %4$s RAM</string>
     <string name="models_recommendation_included">Parakeet TDT 0.6B v3 Q4 · included and active · works offline</string>
     <string name="models_recommendation_included_available">Parakeet TDT 0.6B v3 Q4 · included · no download needed</string>
+    <string name="models_recommendation_retained">Parakeet TDT 0.6B v3 Q4 · already installed and active · works offline</string>
+    <string name="models_recommendation_retained_available">Parakeet TDT 0.6B v3 Q4 · already installed · no download needed</string>
     <string name="models_recommendation_installed">%1$s · installed and active</string>
     <string name="models_recommendation_none">No verified automatic match: %1$s. Manual import and model links remain available.</string>
     <string name="models_reason_language">the selected language is not supported</string>

@@ -367,7 +367,7 @@ Treat one recognition attempt as one generation with one immutable destination s
 - `cancel`: close caller audio, discard the generation, and ignore late callbacks.
 - `destroy`: call on the main thread when the owning lifecycle ends.
 
-Before inserting text, revalidate every origin dimension that matters: session generation, account, conversation or document, editor identity, draft revision, and whether the field has become sensitive. A result for a stale origin must be discarded or presented in an explicit recovery UI; it must never be inserted into whichever field happens to be active.
+Before inserting text, revalidate every origin dimension that matters: session generation, account, conversation or document, editor identity, draft revision, and whether the field has become sensitive. Atomically stage each non-cancelled final result in app-private no-backup storage before attempting delivery. Clear it only after the destination confirms insertion or the user explicitly copies or deletes it. A result for a stale origin must be presented in an explicit recovery UI; it must never be inserted into whichever field happens to be active or silently discarded. Keep result content out of logs, notifications, Intent extras, saved-instance state, and analytics.
 
 If capture can continue after the activity is no longer visible, the caller—not the recognition provider—must run a microphone-typed foreground service. Declare `android:foregroundServiceType="microphone"`, `FOREGROUND_SERVICE`, and on Android 14+ `FOREGROUND_SERVICE_MICROPHONE`; start it while the app still has while-in-use microphone eligibility, show an honest ongoing notification, and stop it as soon as capture closes. Handle notification permission and start restrictions explicitly. Never hide active capture or continue it after process/lifecycle recovery without fresh user intent.
 
@@ -388,5 +388,7 @@ Android shows its normal microphone privacy indicator during capture. Microphone
 ## Voice IME contract
 
 Offline Speech to Text also declares an `InputMethodService` with a voice subtype. Users enable it in Android keyboard settings and select it with the system keyboard switcher. HeliBoard and several other keyboards route their microphone button to the configured voice IME rather than to `ACTION_RECOGNIZE_SPEECH`.
+
+The IME scopes delivery to an editor lifecycle generation rather than Java `InputConnection` object identity, because Android may replace that IPC wrapper during an ordinary editor restart. A same-editor restart can therefore accept the result. Every non-cancelled final transcript is first written atomically to one checksummed, app-private, no-backup recovery slot. Confirmed `commitText` clears it; an absent/changed editor or rejected commit opens copy/keep/delete recovery and leaves the result reachable from the app. New IME recordings are blocked until that result is recovered, so it cannot be overwritten. Explicit **Cancel** remains the only path that intentionally discards the current recording.
 
 An app cannot silently enable, select, start, or stop another app's IME through public Android APIs. If your product needs controls inside its own UI, use one of the three recognition contracts above. If a keyboard switch is acceptable, direct the user to Android's standard input-method settings or picker.
