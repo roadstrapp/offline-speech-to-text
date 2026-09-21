@@ -21,8 +21,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         gradle_properties = (ROOT / "gradle.properties").read_text()
         workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
         self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
-        self.assertIn("versionCode = 33", gradle)
-        self.assertIn('versionName = "0.6.1"', gradle)
+        self.assertIn("versionCode = 34", gradle)
+        self.assertIn('versionName = "0.6.2"', gradle)
         self.assertIn('providers.gradleProperty("includeBundledModel")', gradle)
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: false', gradle)
         self.assertIn('ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,', gradle)
@@ -209,6 +209,50 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("recordingSession.onError();", source)
         self.assertNotIn("discardNextTranscription", source)
         self.assertNotIn("pendingCommitText", source)
+
+    def test_ime_app_switch_does_not_misreport_an_empty_auto_start_as_permission_failure(self):
+        ime = (ROOT / "app/src/main/java/dev/notune/transcribe/RustInputMethodService.java").read_text()
+        native_ime = (ROOT / "src/ime.rs").read_text()
+        voice = (ROOT / "src/voice_session.rs").read_text()
+
+        input_view = ime[ime.index("public void onStartInputView("):
+                         ime.index("private void tryStartAutomaticRecording()")]
+        self.assertIn("if (!restarting && windowVisible) tryStartAutomaticRecording();",
+                      input_view)
+
+        auto_start = ime[ime.index("private void tryStartAutomaticRecording()"):
+                         ime.index("@Override\n    public void onFinishInput()")]
+        self.assertIn("automaticStartInFlight || isRecording || processingResult", auto_start)
+        self.assertIn("automaticStartInFlight = true;", auto_start)
+        self.assertIn("finally", auto_start)
+        self.assertIn("automaticStartInFlight = false;", auto_start)
+
+        stop_result = ime[ime.index("private void stopForResult("):
+                          ime.index("private void releasePauseAudio()")]
+        self.assertIn("boolean lifecycleHandoff", stop_result)
+        self.assertIn("capturedAudio = finishRecording();", stop_result)
+        self.assertIn("if (!capturedAudio)", stop_result)
+        self.assertIn('lastStatus = "Ready";', stop_result)
+        self.assertIn("pendingSwitchBack && !lifecycleHandoff", stop_result)
+        self.assertIn("switchToOtherInputMethod();", stop_result)
+        self.assertIn("R.string.ime_no_audio_captured", stop_result)
+
+        manual_stop = ime[ime.index("private void stopTranscribe("):
+                          ime.index("/** Stop capture and keep its result")]
+        recovery_stop = ime[ime.index("private void stopForRecovery()"):
+                            ime.index("private void stopForResult(")]
+        self.assertIn("stopForResult(switchKeyboard", manual_stop)
+        self.assertIn(", false);", manual_stop)
+        self.assertIn("stopForResult(false, true);", recovery_stop)
+
+        self.assertIn(
+            "Java_dev_notune_transcribe_RustInputMethodService_finishRecording",
+            native_ime,
+        )
+        self.assertIn("voice_session::end_recording_capture(state)", native_ime)
+        self.assertIn("voice_session::cleanup_session(state);", native_ime)
+        self.assertNotIn("Check microphone permissions", voice)
+        self.assertIn("Error: no audio was captured. Try again.", voice)
 
     def test_android_8_and_9_paths_guard_newer_platform_apis(self):
         activity = (ROOT / "app/src/main/java/dev/notune/transcribe/LiveSubtitleActivity.java").read_text()
@@ -750,8 +794,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn('android:saveEnabled="false"',
                       (ROOT / "app/src/main/res/layout/activity_ime_transcript_recovery.xml").read_text())
         self.assertNotIn("ClipData.newPlainText", ime + recovery)
-        auto_record = ime[ime.index('if (new File(getFilesDir(), "auto_record").exists())'):
-                          ime.index("@Override\n    public void onWindowHidden")]
+        auto_record = ime[ime.index("private void tryStartAutomaticRecording()"):
+                          ime.index("@Override\n    public void onFinishInput()")]
         pending_branch = auto_record[auto_record.index("if (hasPendingTranscriptRecovery())"):
                                      auto_record.index("if (isPauseAudioEnabled())")]
         self.assertNotIn("openTranscriptRecovery()", pending_branch)

@@ -19,8 +19,8 @@ android {
         applicationId = "app.offlinespeechtotext"
         minSdk = 26
         targetSdk = 35
-        versionCode = 33
-        versionName = "0.6.1"
+        versionCode = 34
+        versionName = "0.6.2"
         buildConfigField("boolean", "HAS_BUNDLED_MODEL", includeBundledModel.toString())
         ndk {
             abiFilters += "arm64-v8a"

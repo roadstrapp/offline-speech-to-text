@@ -72,6 +72,10 @@ public class RustInputMethodService extends InputMethodService {
     private boolean recordingPaused = false;
     private boolean processingResult = false;
     private boolean pendingSwitchBack = false;
+    // onStartInputView() and onWindowShown() may both request auto-start for
+    // one show sequence. Claim the start synchronously on the IME main thread
+    // so the second callback cannot open another native capture session.
+    private boolean automaticStartInFlight = false;
     private String lastStatus = "Initializing...";
     private static final long DELETE_PREVIEW_DELAY = 180;
     private static final long SPACE_REPEAT_INITIAL_DELAY = 400;
@@ -378,29 +382,7 @@ public class RustInputMethodService extends InputMethodService {
             // text area); never auto-start a recording from here.
             return;
         }
-        if (new File(getFilesDir(), "auto_record").exists()) {
-            if (editorSafeForDictation && inputActive
-                    && getCurrentInputConnection() != null
-                    && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
-                    == PackageManager.PERMISSION_GRANTED) {
-                if (hasPendingTranscriptRecovery()) {
-                    // "Keep for later" must remain meaningful: auto-record
-                    // never traps the user in a recovery-activity relaunch
-                    // loop. The record key remains the explicit way to open it.
-                    updateUiState();
-                    return;
-                }
-                if (isPauseAudioEnabled()) {
-                    audioPauser.request(this);
-                    pauseAudioActive = true;
-                }
-                recordingSession.begin(getCurrentInputConnection(), editorGeneration);
-                transcriptionTargetConnection = null;
-                recordingPaused = false;
-                startRecording();
-                updateRecordButtonUI(true);
-            }
-        }
+        tryStartAutomaticRecording();
     }
 
     @Override
@@ -458,6 +440,45 @@ public class RustInputMethodService extends InputMethodService {
             refreshedView.requestApplyInsets();
         }
         if (!isRecording) updateUiState();
+        // Android can keep the same IME window visible while moving it to a
+        // different app/editor. onWindowShown() then does not represent a new
+        // hidden -> shown transition, so start automatic recording here for a
+        // genuinely new input view as well. A restarting editor is the same
+        // destination and must not start a surprise recording after a cursor
+        // move or framework refresh.
+        if (!restarting && windowVisible) tryStartAutomaticRecording();
+    }
+
+    private void tryStartAutomaticRecording() {
+        if (!new File(getFilesDir(), "auto_record").exists()
+                || automaticStartInFlight || isRecording || processingResult
+                || !editorSafeForDictation || !inputActive
+                || getCurrentInputConnection() == null
+                || checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        if (hasPendingTranscriptRecovery()) {
+            // "Keep for later" must remain meaningful: auto-record never traps
+            // the user in a recovery-activity relaunch loop. The record key
+            // remains the explicit way to open it.
+            updateUiState();
+            return;
+        }
+        automaticStartInFlight = true;
+        try {
+            if (isPauseAudioEnabled()) {
+                audioPauser.request(this);
+                pauseAudioActive = true;
+            }
+            recordingSession.begin(getCurrentInputConnection(), editorGeneration);
+            transcriptionTargetConnection = null;
+            recordingPaused = false;
+            startRecording();
+            updateRecordButtonUI(true);
+        } finally {
+            automaticStartInFlight = false;
+        }
     }
 
     @Override
@@ -569,7 +590,7 @@ public class RustInputMethodService extends InputMethodService {
         transcriptionTargetConnection = recordingSession.canCommitTo(
                 current, editorGeneration, editorSafeForDictation, inputActive)
                 ? current : null;
-        stopForResult(switchKeyboard && transcriptionTargetConnection != null);
+        stopForResult(switchKeyboard && transcriptionTargetConnection != null, false);
     }
 
     /** Stop capture and keep its result even when Android has removed the editor. */
@@ -579,21 +600,42 @@ public class RustInputMethodService extends InputMethodService {
         transcriptionTargetConnection = recordingSession.canCommitTo(
                 current, editorGeneration, editorSafeForDictation, inputActive)
                 ? current : null;
-        stopForResult(false);
+        stopForResult(false, true);
     }
 
-    private void stopForResult(boolean switchKeyboard) {
+    private void stopForResult(boolean switchKeyboard, boolean lifecycleHandoff) {
         pendingSwitchBack = switchKeyboard;
+        boolean capturedAudio;
         try {
-            stopRecording();
+            capturedAudio = finishRecording();
         } catch (Throwable t) {
-            Log.w(TAG, "stopRecording failed; cancelling capture", t);
+            Log.w(TAG, "finishRecording failed; cancelling capture", t);
             recordingSession.onError();
             transcriptionTargetConnection = null;
             try { cancelRecording(); } catch (Throwable ignored) { }
             pendingSwitchBack = false;
             updateRecordButtonUI(false);
             releasePauseAudio();
+            return;
+        }
+        if (!capturedAudio) {
+            // A new app/editor can replace the old input immediately after
+            // automatic recording starts, before the native callback supplies
+            // its first buffer. That is a normal lifecycle handoff, not a
+            // microphone-permission failure and not a transcription result.
+            processingResult = false;
+            transcriptionTargetConnection = null;
+            recordingSession.finish();
+            lastStatus = "Ready";
+            updateRecordButtonUI(false);
+            releasePauseAudio();
+            boolean switchAfterEmptyStop = pendingSwitchBack && !lifecycleHandoff;
+            pendingSwitchBack = false;
+            if (switchAfterEmptyStop) {
+                switchToOtherInputMethod();
+            } else if (!lifecycleHandoff && statusView != null) {
+                statusView.setText(R.string.ime_no_audio_captured);
+            }
             return;
         }
         processingResult = true;
@@ -858,6 +900,7 @@ public class RustInputMethodService extends InputMethodService {
     private native void cleanupNative();
     private native void startRecording();
     private native void stopRecording();
+    private native boolean finishRecording();
     private native void cancelRecording();
     private native boolean setRecordingPaused(boolean paused);
 

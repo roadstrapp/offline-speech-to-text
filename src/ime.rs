@@ -52,6 +52,28 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_RustInputMethodService_
 }
 
 #[no_mangle]
+pub unsafe extern "system" fn Java_dev_notune_transcribe_RustInputMethodService_finishRecording(
+    env: JNIEnv,
+    _class: JClass,
+) -> jboolean {
+    let mut guard = IME_STATE.lock().unwrap();
+    let Some(state) = guard.as_mut() else {
+        return JNI_FALSE;
+    };
+    if voice_session::end_recording_capture(state) {
+        voice_session::transcribe_recording(env, state);
+        JNI_TRUE
+    } else {
+        // An IME lifecycle transition can stop an auto-started session before
+        // the audio callback's first buffer. Release the native owner without
+        // reporting a false permission error; Java decides whether the new
+        // editor should immediately auto-start another session.
+        voice_session::cleanup_session(state);
+        JNI_FALSE
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "system" fn Java_dev_notune_transcribe_RustInputMethodService_cancelRecording(
     env: JNIEnv,
     _class: JClass,

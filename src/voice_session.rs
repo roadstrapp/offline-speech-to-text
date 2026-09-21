@@ -419,12 +419,14 @@ pub fn transcribe_recording(mut env: JNIEnv, state: &mut VoiceSessionState) {
     // the capture/inference boundary.
     let mut buffer = std::mem::take(&mut *state.audio_buffer.lock().unwrap());
 
-    // Guard against empty buffer (mic permission denied, instant stop, etc.)
+    // Guard against an empty buffer. Permission is checked by each Android
+    // entry point before capture; an empty callback stream is not proof that
+    // permission was denied.
     if buffer.is_empty() {
         notify_status(
             &mut env,
             state.target_ref.as_obj(),
-            "Error: no audio recorded. Check microphone permissions.",
+            "Error: no audio was captured. Try again.",
         );
         release_owned_session(state);
         return;

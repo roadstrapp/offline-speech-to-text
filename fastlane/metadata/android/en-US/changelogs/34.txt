@@ -1,0 +1,3 @@
+Fix automatic voice-keyboard recording when switching between apps or text fields.
+
+An editor transition before the first audio buffer no longer produces a false microphone-permission error. When Android keeps the voice keyboard visible for a new editor, automatic recording starts there correctly, while any real captured result still uses private recovery if its original field is gone.

@@ -73,6 +73,7 @@
     <string name="ime_switch_keyboard">Switch keyboard</string>
     <string name="ime_sensitive_field">Voice recording is unavailable in password fields</string>
     <string name="ime_recording_discarded">Recording discarded</string>
+    <string name="ime_no_audio_captured">No audio captured</string>
     <string name="ime_editor_changed">Text field changed · transcription saved for recovery</string>
     <string name="ime_recovery_ready">Saved transcription available</string>
     <string name="ime_recovery_open">Review and copy saved transcription</string>
