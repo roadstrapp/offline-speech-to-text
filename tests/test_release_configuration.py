@@ -21,8 +21,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         gradle_properties = (ROOT / "gradle.properties").read_text()
         workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
         self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
-        self.assertIn("versionCode = 31", gradle)
-        self.assertIn('versionName = "0.5.0"', gradle)
+        self.assertIn("versionCode = 32", gradle)
+        self.assertIn('versionName = "0.6.0"', gradle)
         self.assertIn('providers.gradleProperty("includeBundledModel")', gradle)
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: false', gradle)
         self.assertIn('ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,', gradle)
@@ -31,6 +31,19 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn('"b68557be1e3c40207fd7c4bd9d63f1d3316b963f15325bfb0cc16a8bb0ffd181"', gradle)
         self.assertIn('resolve/85ac09ea12fc4b1112fa76810059364bc6adc9de', gradle)
         self.assertNotIn("parakeet-tdt_ctc-110m", gradle)
+
+    def test_transcribe_cpp_runtime_stays_on_the_reviewed_lockstep_release(self):
+        manifest = (ROOT / "Cargo.toml").read_text()
+        lockfile = (ROOT / "Cargo.lock").read_text()
+        self.assertIn('transcribe-cpp = "0.2.3"', manifest)
+        self.assertRegex(
+            lockfile,
+            r'name = "transcribe-cpp"\nversion = "0\.2\.3"',
+        )
+        self.assertRegex(
+            lockfile,
+            r'name = "transcribe-cpp-sys"\nversion = "0\.2\.3"',
+        )
 
     def test_default_model_is_honestly_labeled_without_delivery_detail_in_readme(self):
         strings = ET.parse(ROOT / "app/src/main/res/values/strings.xml").getroot()
@@ -259,12 +272,12 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("Toast.makeText(getApplicationContext()", source)
 
     def test_default_model_import_is_verified_before_activation(self):
-        source = (ROOT / "app/src/main/java/dev/notune/transcribe/ModelsActivity.java").read_text()
+        source = (ROOT / "app/src/main/java/dev/notune/transcribe/ModelImportTask.java").read_text()
         verification = source.index("DefaultModelContract.matches")
         activation = source.index("ModelInstaller.installImported")
         self.assertLess(verification, activation)
         self.assertIn("MessageDigest.getInstance(\"SHA-256\")", source)
-        self.assertIn("models_import_default_mismatch", source)
+        self.assertIn("DEFAULT_MODEL_MISMATCH", source)
 
     def test_amoled_black_has_a_safe_default_resource(self):
         colors = ET.parse(ROOT / "app/src/main/res/values/colors.xml").getroot()
@@ -312,10 +325,12 @@ class ReleaseConfigurationTest(unittest.TestCase):
 
     def test_successful_import_activates_and_reloads_model(self):
         source = (ROOT / "app/src/main/java/dev/notune/transcribe/ModelsActivity.java").read_text()
-        activation = source.index("ModelInstaller.installImported")
-        success_value = source.index("final boolean success = moved && activated")
-        success_branch = source[source.index("if (success)"):source.index("} else {", source.index("if (success)"))]
-        self.assertLess(activation, success_value)
+        task = (ROOT / "app/src/main/java/dev/notune/transcribe/ModelImportTask.java").read_text()
+        self.assertIn("ModelInstaller.installImported", task)
+        success_branch = source[source.index(
+            "if (snapshot.state == ModelImportLifecycle.State.COMPLETE)"):
+            source.index("} else {", source.index(
+                "if (snapshot.state == ModelImportLifecycle.State.COMPLETE)"))]
         self.assertIn("reloadModelNative", success_branch)
 
     def test_setup_first_information_architecture_and_recovery_controls(self):
@@ -614,10 +629,13 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("tryLock()", downloader)
         self.assertIn("setRequestProperty(\"Range\"", downloader)
         self.assertIn("setRequestProperty(\"If-Range\"", downloader)
-        self.assertEqual(2, catalog.count("ModelDescriptor.Provenance.EXACT_PINNED"))
+        self.assertEqual(3, catalog.count("ModelDescriptor.Provenance.EXACT_PINNED"))
         self.assertIn("SenseVoice", catalog)
         self.assertIn("Whisper", catalog)
         self.assertIn("parakeet-tdt-1.1b", catalog)
+        self.assertIn("parakeet-primeline-Q4_K_M.gguf", catalog)
+        self.assertIn("transcribe.cpp 0.2.3", catalog)
+        self.assertNotIn("transcribe.cpp 0.1.3", catalog)
         self.assertIn("ModelCatalog.verifiedDownloads()", activity)
         self.assertIn("startDownload(model, origin)", activity)
         self.assertIn("hasUsableNetworkAccess()", activity)
@@ -652,7 +670,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertNotIn('writeConfig("active_model"', selection)
         self.assertNotIn('writeConfig("active_model"', activity)
         self.assertIn("if (f.isFile())", activity)
-        self.assertIn("importInFlight.get()", activity)
+        self.assertIn("IMPORT_LIFECYCLE.isRunning()", activity)
+        self.assertIn("IMPORT_LIFECYCLE.attach(importObserver)", activity)
 
     def test_model_guidance_and_network_copy_are_honest(self):
         activity = (ROOT / "app/src/main/java/dev/notune/transcribe/ModelsActivity.java").read_text()

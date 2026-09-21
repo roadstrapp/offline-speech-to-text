@@ -113,6 +113,13 @@ public final class ModelRecommendation {
                 break;
             case BALANCED:
             default:
+                if (!request.translation) {
+                    ModelDescriptor localePreferred =
+                            ModelCatalog.localePreferredBalanced(request.languageTag);
+                    if (localePreferred != null && hardCompatible(localePreferred, device)) {
+                        return localePreferred;
+                    }
+                }
                 ModelDescriptor defaultModel = ModelCatalog.verifiedDefault();
                 if (!request.translation && (request.languageTag.isEmpty()
                         || defaultModel.supportsLanguage(request.languageTag))

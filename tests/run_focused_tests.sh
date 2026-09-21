@@ -26,6 +26,8 @@ javac -d "$OUT" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/ModelDownloadPolicy.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/ModelDownloadLifecycle.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/ModelDownloadTask.java" \
+  "$ROOT/app/src/main/java/dev/notune/transcribe/ModelImportTask.java" \
+  "$ROOT/app/src/main/java/dev/notune/transcribe/ModelImportLifecycle.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/VerifiedModelProvenance.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/ModelInstaller.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/SetupState.java" \
@@ -36,13 +38,16 @@ javac -d "$OUT" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/EmergencyTranscriptBuffer.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/SettingsSchema.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/DiagnosticLog.java" \
+  "$ROOT/app/src/main/java/dev/notune/transcribe/NativeStatus.java" \
   "$ROOT/tests/BehaviorTest.java" \
   "$ROOT/tests/ModelDownloadBoundaryTest.java" \
+  "$ROOT/tests/ModelImportTaskTest.java" \
   "$ROOT/tests/CustomTermsStoreTest.java" \
   "$ROOT/tests/PersonalCorrectionsStoreTest.java" \
   "$ROOT/tests/PendingTranscriptRecordTest.java"
 java -ea -cp "$OUT" dev.notune.transcribe.BehaviorTest
 java -ea -cp "$OUT" dev.notune.transcribe.ModelDownloadBoundaryTest
+java -ea -cp "$OUT" dev.notune.transcribe.ModelImportTaskTest
 java -ea -cp "$OUT" dev.notune.transcribe.CustomTermsStoreTest
 java -ea -cp "$OUT" dev.notune.transcribe.PersonalCorrectionsStoreTest
 java -ea -cp "$OUT" dev.notune.transcribe.PendingTranscriptRecordTest

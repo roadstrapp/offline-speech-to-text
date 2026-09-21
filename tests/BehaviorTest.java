@@ -29,6 +29,7 @@ public final class BehaviorTest {
         successfulImportBecomesActiveModel();
         exactDefaultModelContractAcceptsOnlyThePinnedArtifact();
         compactUpdatesRetainExistingModelsWithoutBundling();
+        nativeStatusClassificationIsSharedAndStable();
         modelCatalogIsCapabilityHonest();
         recommendationFiltersBeforeRanking();
         modelGuidanceUsesConservativeSizeAndDeviceTiers();
@@ -133,7 +134,7 @@ public final class BehaviorTest {
         assertEquals(true, model.abis.contains("arm64-v8a")
                         && !model.requiresDotProduct && !model.requiresFp16,
                 "the baseline backend keeps every arm64 model installable");
-        assertEquals(52, ModelCatalog.verifiedDownloads().size(),
+        assertEquals(53, ModelCatalog.verifiedDownloads().size(),
                 "every model variant supported by the pinned runtime is downloadable");
         assertEquals(true, ModelCatalog.verifiedDownloads().stream().allMatch(
                         ModelDescriptor::isVerifiedDownload),
@@ -166,6 +167,35 @@ public final class BehaviorTest {
                         candidate -> candidate.architecture.equals("Parakeet")
                                 && candidate.fileName.contains("1.1b")),
                 "the catalog includes larger Parakeet variants");
+        ModelDescriptor primeLine = ModelCatalog.localePreferredBalanced("de-DE");
+        assertEquals("8b01f1893fa1db166d8b08375f8300c140fc7f110af7e9b68480a27b145dad7d",
+                primeLine.sha256, "primeLine is pinned to the verified artifact digest");
+        assertEquals(true, primeLine.downloadUrl.contains(
+                        "resolve/7c63545b352e5d410ccc1ea1eb49aa751e65780b/"),
+                "primeLine downloads use the reviewed immutable model revision");
+        assertEquals(true, primeLine.supportsLanguage("de-DE"),
+                "primeLine advertises its retained Parakeet v3 language coverage");
+        assertEquals("transcribe.cpp 0.2.3", primeLine.backend,
+                "new catalog entries name the active runtime version");
+        assertEquals(true, ModelCatalog.localePreferredBalanced("fr-FR") == null,
+                "a language-tuned model does not override the general default elsewhere");
+        assertEquals(false, ModelCatalog.isGeneralFamilyChoice(primeLine),
+                "a language-tuned model is excluded from generic family highlights");
+    }
+
+    private static void nativeStatusClassificationIsSharedAndStable() {
+        assertEquals(NativeStatus.Phase.ERROR, NativeStatus.classify("Error loading model"),
+                "native errors have one shared classification");
+        assertEquals(NativeStatus.Phase.LOADING, NativeStatus.classify("Initializing model"),
+                "initialization is classified as loading");
+        assertEquals(NativeStatus.Phase.PROCESSING, NativeStatus.classify("Transcribing..."),
+                "transcription is classified as processing");
+        assertEquals(NativeStatus.Phase.WAITING, NativeStatus.classify("Waiting for audio"),
+                "waiting remains the diagnostic idle phase");
+        assertEquals("ready", NativeStatus.diagnosticLabel("Ready"),
+                "ready status has a content-free diagnostic label");
+        assertEquals("unknown", NativeStatus.diagnosticLabel(null),
+                "missing status fails closed without throwing");
     }
 
     private static void recommendationFiltersBeforeRanking() {
@@ -175,6 +205,11 @@ public final class BehaviorTest {
                 capable, new ModelRecommendation.Request("fr-FR", false));
         assertEquals(ModelRecommendation.Status.RECOMMENDED, accepted.status,
                 "a compatible device and supported language get the verified model");
+
+        ModelRecommendation.Result german = ModelRecommendation.recommend(
+                capable, new ModelRecommendation.Request("de-DE", false));
+        assertEquals("parakeet-primeline-Q4_K_M.gguf", german.model.fileName,
+                "balanced German guidance chooses the tuned primeLine model");
 
         ModelRecommendation.Result language = ModelRecommendation.recommend(
                 capable, new ModelRecommendation.Request("zh-CN", false));

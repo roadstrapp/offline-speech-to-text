@@ -1,6 +1,7 @@
 package dev.notune.transcribe;
 
 import android.Manifest;
+import android.content.ContentResolver;
 import android.content.Intent;
 import android.app.ActivityManager;
 import android.content.Context;
@@ -36,12 +37,9 @@ import com.google.android.material.snackbar.Snackbar;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -72,6 +70,8 @@ public class ModelsActivity extends AppCompatActivity {
     private static final long FREE_SPACE_MARGIN = 64L * 1024 * 1024;
     private static final ModelDownloadLifecycle DOWNLOAD_LIFECYCLE =
             new ModelDownloadLifecycle();
+    private static final ModelImportLifecycle IMPORT_LIFECYCLE =
+            new ModelImportLifecycle();
     private static final String DOWNLOAD_ORIGIN_RECOMMENDED = "recommended";
     private static final String DOWNLOAD_ORIGIN_CATALOG = "catalog";
 
@@ -138,7 +138,7 @@ public class ModelsActivity extends AppCompatActivity {
 
     private boolean recommendationUsesBundledModel;
     private final ModelDownloadLifecycle.Observer downloadObserver = this::renderDownloadState;
-    private final AtomicBoolean importInFlight = new AtomicBoolean(false);
+    private final ModelImportLifecycle.Observer importObserver = this::renderImportState;
     private final AtomicBoolean manualReloadInFlight = new AtomicBoolean(false);
 
     @Override
@@ -220,12 +220,14 @@ public class ModelsActivity extends AppCompatActivity {
     protected void onStart() {
         super.onStart();
         DOWNLOAD_LIFECYCLE.attach(downloadObserver);
+        IMPORT_LIFECYCLE.attach(importObserver);
         refreshList();
     }
 
     @Override
     protected void onStop() {
         DOWNLOAD_LIFECYCLE.detach(downloadObserver);
+        IMPORT_LIFECYCLE.detach(importObserver);
         super.onStop();
     }
 
@@ -292,7 +294,7 @@ public class ModelsActivity extends AppCompatActivity {
         int position = catalogFamilySpinner.getSelectedItemPosition();
         String selected = position > 0 && position < catalogFamilies.size()
                 ? catalogFamilies.get(position) : null;
-        boolean busy = DOWNLOAD_LIFECYCLE.isRunning() || importInFlight.get();
+        boolean busy = DOWNLOAD_LIFECYCLE.isRunning() || IMPORT_LIFECYCLE.isRunning();
         ModelRecommendation.DeviceProfile device = currentDeviceProfile();
         boolean builtInAvailable = hasBuiltInModelAvailable();
         ModelDownloadLifecycle.Snapshot download = DOWNLOAD_LIFECYCLE.snapshot();
@@ -788,12 +790,8 @@ public class ModelsActivity extends AppCompatActivity {
     }
 
     private void startDownload(ModelDescriptor model, String origin) {
-        if (DOWNLOAD_LIFECYCLE.isRunning()) return;
-        downloadButton.setEnabled(false);
-        importButton.setEnabled(false);
-        for (Button button : catalogDownloadButtons) button.setEnabled(false);
-        catalogFamilySpinner.setEnabled(false);
-        setModelChoiceControlsEnabled(false);
+        if (DOWNLOAD_LIFECYCLE.isRunning() || IMPORT_LIFECYCLE.isRunning()) return;
+        setTransferBusy(true);
         DOWNLOAD_LIFECYCLE.start(model.id, origin, listener ->
                 ModelDownloadTask.start(getFilesDir(), model, listener));
     }
@@ -802,19 +800,13 @@ public class ModelsActivity extends AppCompatActivity {
         runOnUiThread(() -> {
             if (isFinishing() || (Build.VERSION.SDK_INT >= 17 && isDestroyed())) return;
             if (snapshot.state == ModelDownloadLifecycle.State.RUNNING) {
-                downloadButton.setEnabled(false);
-                importButton.setEnabled(false);
-                catalogFamilySpinner.setEnabled(false);
-                setModelChoiceControlsEnabled(false);
-                for (Button button : catalogDownloadButtons) button.setEnabled(false);
+                setTransferBusy(true);
                 renderProgress(snapshot);
                 return;
             }
             if (snapshot.state == ModelDownloadLifecycle.State.IDLE) return;
 
-            importButton.setEnabled(true);
-            catalogFamilySpinner.setEnabled(true);
-            setModelChoiceControlsEnabled(true);
+            setTransferBusy(false);
             renderProgress(DOWNLOAD_LIFECYCLE.snapshot());
             if (snapshot.state == ModelDownloadLifecycle.State.COMPLETE) {
                 DOWNLOAD_LIFECYCLE.clearTerminal();
@@ -880,6 +872,16 @@ public class ModelsActivity extends AppCompatActivity {
         goalSpinner.setEnabled(enabled);
         languageSpinner.setEnabled(enabled);
         translateSwitch.setEnabled(enabled);
+    }
+
+    private void setTransferBusy(boolean busy) {
+        importButton.setEnabled(!busy);
+        catalogFamilySpinner.setEnabled(!busy);
+        setModelChoiceControlsEnabled(!busy);
+        if (busy) {
+            downloadButton.setEnabled(false);
+            for (Button button : catalogDownloadButtons) button.setEnabled(false);
+        }
     }
 
     private boolean hasUsableNetworkAccess() {
@@ -986,7 +988,7 @@ public class ModelsActivity extends AppCompatActivity {
         RadioButton radio = row.findViewById(R.id.radio_model);
         radio.setChecked(checked);
         row.setOnClickListener(v -> {
-            if (DOWNLOAD_LIFECYCLE.isRunning() || importInFlight.get()) {
+            if (DOWNLOAD_LIFECYCLE.isRunning() || IMPORT_LIFECYCLE.isRunning()) {
                 snackbar(getString(R.string.models_busy));
                 return;
             }
@@ -1114,85 +1116,53 @@ public class ModelsActivity extends AppCompatActivity {
     }
 
     private void importModel(Uri uri, String name, long size) {
-        if (DOWNLOAD_LIFECYCLE.isRunning()
-                || !importInFlight.compareAndSet(false, true)) return;
-        importButton.setEnabled(false);
-        downloadButton.setEnabled(false);
-        importArea.setVisibility(View.VISIBLE);
-        importBar.setIndeterminate(size <= 0);
-        importBar.setMax(100);
-        importBar.setProgress(0);
-        importText.setText(getString(R.string.models_importing, name));
-
-        File tmp = new File(modelsDir(), name + ".part");
-
-        new Thread(() -> {
-            boolean ok = false;
-            long copied = 0;
-            String sha256 = "";
-            try (InputStream in = getContentResolver().openInputStream(uri);
-                 OutputStream out = new FileOutputStream(tmp)) {
-                MessageDigest digest = MessageDigest.getInstance("SHA-256");
-                byte[] buf = new byte[1024 * 1024];
-                int read;
-                while (in != null && (read = in.read(buf)) != -1) {
-                    out.write(buf, 0, read);
-                    digest.update(buf, 0, read);
-                    copied += read;
-                    if (size > 0) {
-                        int pct = (int) (copied * 100 / size);
-                        runOnUiThread(() -> importBar.setProgress(pct));
-                    }
-                }
-                sha256 = toHex(digest.digest());
-                ok = true;
-            } catch (IOException | NoSuchAlgorithmException | RuntimeException e) {
-                Log.e(TAG, "Model import failed", e);
-            }
-
-            boolean defaultMismatch = ok
-                    && DefaultModelContract.FILE_NAME.equals(name)
-                    && !DefaultModelContract.matches(name, copied, sha256);
-            boolean moved = false;
-            boolean activated = false;
-            String installedName = name;
-            if (ok && !defaultMismatch) {
-                try {
-                    installedName = ModelInstaller.installImported(getFilesDir(), tmp, name);
-                    moved = true;
-                    activated = true;
-                } catch (IOException | RuntimeException e) {
-                    Log.e(TAG, "Imported model could not be activated", e);
-                }
-            }
-            if (!moved) tmp.delete();
-            final boolean success = moved && activated;
-            final String completedName = installedName;
-            runOnUiThread(() -> {
-                importInFlight.set(false);
-                importButton.setEnabled(true);
-                updateRecommendation();
-                importArea.setVisibility(View.GONE);
-                if (success) {
-                    snackbar(getString(R.string.models_import_done, completedName));
-                    refreshList();
-                    showModelStatus(getString(R.string.models_loading));
-                    reloadModelNative(this);
-                } else if (defaultMismatch) {
-                    snackbar(getString(R.string.models_import_default_mismatch));
-                } else {
-                    snackbar(getString(R.string.models_import_failed));
-                }
-            });
-        }, "model-import").start();
+        if (DOWNLOAD_LIFECYCLE.isRunning() || IMPORT_LIFECYCLE.isRunning()) return;
+        File filesDir = getFilesDir();
+        ContentResolver resolver = getApplicationContext().getContentResolver();
+        IMPORT_LIFECYCLE.start(name, size, listener -> ModelImportTask.start(
+                filesDir, name, size, () -> resolver.openInputStream(uri), listener));
     }
 
-    private static String toHex(byte[] bytes) {
-        StringBuilder result = new StringBuilder(bytes.length * 2);
-        for (byte value : bytes) {
-            result.append(String.format(Locale.ROOT, "%02x", value & 0xff));
-        }
-        return result.toString();
+    private void renderImportState(ModelImportLifecycle.Snapshot snapshot) {
+        runOnUiThread(() -> {
+            if (isFinishing() || (Build.VERSION.SDK_INT >= 17 && isDestroyed())) return;
+            if (snapshot.state == ModelImportLifecycle.State.IDLE) {
+                importArea.setVisibility(View.GONE);
+                return;
+            }
+            if (snapshot.state == ModelImportLifecycle.State.RUNNING) {
+                setTransferBusy(true);
+                importArea.setVisibility(View.VISIBLE);
+                importBar.setIndeterminate(snapshot.total <= 0L);
+                importBar.setMax(100);
+                if (snapshot.total > 0L) {
+                    int percent = (int) Math.min(
+                            100L, snapshot.copied * 100L / snapshot.total);
+                    importBar.setProgress(percent);
+                }
+                String label = getString(R.string.models_importing, snapshot.requestedName);
+                if (!label.contentEquals(importText.getText())) importText.setText(label);
+                return;
+            }
+
+            IMPORT_LIFECYCLE.clearTerminal();
+            importArea.setVisibility(View.GONE);
+            setTransferBusy(false);
+            if (snapshot.state == ModelImportLifecycle.State.COMPLETE) {
+                snackbar(getString(R.string.models_import_done, snapshot.installedName));
+                refreshList();
+                updateRecommendation();
+                showModelStatus(getString(R.string.models_loading));
+                reloadModelNative(this);
+            } else {
+                snackbar(getString(snapshot.failure
+                        == ModelImportTask.Failure.DEFAULT_MODEL_MISMATCH
+                        ? R.string.models_import_default_mismatch
+                        : R.string.models_import_failed));
+                refreshList();
+                updateRecommendation();
+            }
+        });
     }
 
     private String queryDisplayName(Uri uri) {

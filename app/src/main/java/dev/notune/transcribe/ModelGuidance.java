@@ -31,6 +31,7 @@ final class ModelGuidance {
             if (!model.architecture.equals(family) || fit(model, device) != DeviceFit.GOOD) {
                 continue;
             }
+            if (!ModelCatalog.isGeneralFamilyChoice(model)) continue;
             if (best == null || model.byteSize > best.byteSize) best = model;
         }
         return best;

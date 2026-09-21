@@ -864,42 +864,33 @@ public class RustInputMethodService extends InputMethodService {
     // Called from Rust
     public void onStatusUpdate(String status) {
         mainHandler.post(() -> {
-            DiagnosticLog.event(getFilesDir(), "ime_state", "state=" + diagnosticState(status));
+            boolean error = NativeStatus.isError(status);
+            DiagnosticLog.event(getFilesDir(), "ime_state",
+                    "state=" + NativeStatus.diagnosticLabel(status));
             lastStatus = status;
-            if (status != null && status.startsWith("Error")) {
+            if (error) {
                 processingResult = false;
                 transcriptionTargetConnection = null;
                 recordingSession.onError();
                 if (isRecording) updateRecordButtonUI(false);
             }
             updateUiState();
-            if (pendingSwitchBack && status != null && status.startsWith("Error")) {
+            if (pendingSwitchBack && error) {
                 pendingSwitchBack = false;
                 switchToOtherInputMethod();
             }
-            if (pauseAudioActive && status != null && status.startsWith("Error")) {
+            if (pauseAudioActive && error) {
                 audioPauser.abandon(this);
                 pauseAudioActive = false;
             }
         });
     }
 
-    private static String diagnosticState(String status) {
-        if (status == null) return "unknown";
-        if (status.startsWith("Error")) return "error";
-        if (status.contains("Loading") || status.contains("Initializing")) return "loading";
-        if (status.contains("Transcribing") || status.contains("Processing")) return "processing";
-        if (status.contains("Waiting")) return "idle";
-        if (status.equals("Ready")) return "ready";
-        return "unknown";
-    }
-
     private void updateUiState() {
         boolean recoveryPending = hasPendingTranscriptRecovery();
-        boolean isLoading = lastStatus.contains("Loading") || lastStatus.contains("Initializing");
-        boolean isWaiting = lastStatus.contains("Waiting");
-        boolean isTranscribing = lastStatus.contains("Transcribing") || lastStatus.contains("Processing");
-        boolean isError = lastStatus.startsWith("Error");
+        boolean isWaiting = NativeStatus.isWaiting(lastStatus);
+        boolean isTranscribing = NativeStatus.isProcessing(lastStatus);
+        boolean isError = NativeStatus.isError(lastStatus);
         boolean isProcessing = processingResult || isTranscribing || isWaiting;
 
         // Don't show internal loading states to the user

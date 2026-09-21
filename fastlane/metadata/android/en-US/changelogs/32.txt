@@ -1,0 +1,5 @@
+Upgrade the offline transcription engine to transcribe.cpp 0.2.3 for current decoder fixes and more efficient resource handling.
+
+German-primary phones now recommend the German-tuned Parakeet primeLine model, while the multilingual Parakeet model remains the balanced default elsewhere.
+
+Manual model imports are more resilient: copying, verification, and atomic installation now continue safely across screen rotation, with clearer progress and failure cleanup.

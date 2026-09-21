@@ -170,7 +170,7 @@
     <string name="models_catalog_guidance">%1$s · about %2$s RAM · %3$s</string>
     <string name="models_family_title">%1$s family</string>
     <string name="models_family_recommended">Largest comfortable fit in this family for this phone</string>
-    <string name="models_family_parakeet">Fast CPU transcription. The recommended v3 model covers 25 European languages; most other variants are English-only. No speech translation.</string>
+    <string name="models_family_parakeet">Fast CPU transcription. The recommended v3 model covers 25 European languages; primeLine is tuned for German at the same size and speed. Most other variants are English-only. No speech translation.</string>
     <string name="models_family_whisper">Broad multilingual coverage, language detection, optional English translation, and personal-dictionary hints. Larger models trade speed and memory for accuracy.</string>
     <string name="models_family_canary">Multilingual transcription and speech translation. Larger variants need substantially more memory.</string>
     <string name="models_family_moonshine">Compact English models, including streaming variants. OSTT’s keyboard still records first, then transcribes.</string>

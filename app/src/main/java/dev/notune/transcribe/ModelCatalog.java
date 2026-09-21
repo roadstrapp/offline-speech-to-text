@@ -8,11 +8,16 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Offline catalog for the exact model variants documented by transcribe.cpp
- * 0.1.3 / vendored revision a94e021ef658dc7c788837341a13f6acea3baf3c.
+ * Offline catalog for exact model artifacts supported by transcribe.cpp 0.2.3.
  */
 public final class ModelCatalog {
     private static final long MIB = 1024L * 1024L;
+    private static final String RUNTIME = "transcribe.cpp 0.2.3";
+    private static final LinkedHashSet<String> PARAKEET_V3_LANGUAGES =
+            new LinkedHashSet<>(Arrays.asList(
+                    "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de",
+                    "el", "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "sk",
+                    "sl", "es", "sv", "ru", "uk"));
     private static final LinkedHashSet<String> WHISPER_LANGUAGES = new LinkedHashSet<>(
             Arrays.asList("en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr",
                     "pl", "ca", "nl", "ar", "sv", "it", "id", "hi", "fi", "vi",
@@ -48,19 +53,32 @@ public final class ModelCatalog {
 
     private static final ModelDescriptor PARAKEET = new ModelDescriptor(
             "parakeet-tdt-0.6b-v3-q4km", "Parakeet TDT 0.6B v3 · Q4", "Parakeet",
-            "transcribe.cpp 0.1.3", DefaultModelContract.FILE_NAME,
+            RUNTIME, DefaultModelContract.FILE_NAME,
             DefaultModelContract.BYTE_SIZE, DefaultModelContract.SHA256,
             DefaultModelContract.DOWNLOAD_URL,
             "https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf",
             "CC-BY-4.0", "https://creativecommons.org/licenses/by/4.0/",
             Collections.singleton("arm64-v8a"), false, false,
-            new LinkedHashSet<>(Arrays.asList(
-                    "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de",
-                    "el", "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "sk",
-                    "sl", "es", "sv", "ru", "uk")),
+            PARAKEET_V3_LANGUAGES,
             ModelDescriptor.Capability.SUPPORTED, ModelDescriptor.Capability.UNSUPPORTED,
             ModelDescriptor.Capability.UNKNOWN, ModelDescriptor.Capability.UNSUPPORTED,
             2L * 1024L * MIB, DefaultModelContract.BYTE_SIZE + 64L * MIB,
+            ModelDescriptor.Provenance.EXACT_PINNED);
+
+    private static final ModelDescriptor PARAKEET_PRIMELINE = new ModelDescriptor(
+            "parakeet-primeline-q4km", "Parakeet primeLine · Q4", "Parakeet",
+            RUNTIME, "parakeet-primeline-Q4_K_M.gguf", 485425568L,
+            "8b01f1893fa1db166d8b08375f8300c140fc7f110af7e9b68480a27b145dad7d",
+            "https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/"
+                    + "7c63545b352e5d410ccc1ea1eb49aa751e65780b/"
+                    + "parakeet-primeline-Q4_K_M.gguf?download=true",
+            "https://huggingface.co/handy-computer/parakeet-primeline-gguf",
+            "CC-BY-4.0", "https://creativecommons.org/licenses/by/4.0/",
+            Collections.singleton("arm64-v8a"), false, false,
+            PARAKEET_V3_LANGUAGES,
+            ModelDescriptor.Capability.SUPPORTED, ModelDescriptor.Capability.UNSUPPORTED,
+            ModelDescriptor.Capability.UNKNOWN, ModelDescriptor.Capability.UNSUPPORTED,
+            2L * 1024L * MIB, 485425568L + 64L * MIB,
             ModelDescriptor.Provenance.EXACT_PINNED);
 
     private static final List<ModelDescriptor> DOWNLOADS;
@@ -68,6 +86,7 @@ public final class ModelCatalog {
     static {
         List<ModelDescriptor> models = new ArrayList<>();
         models.add(PARAKEET);
+        models.add(PARAKEET_PRIMELINE);
         // One mobile-oriented quantization for every model variant in the
         // pinned runtime's model documentation. Larger variants remain visible
         // with their exact size instead of being silently hidden.
@@ -128,6 +147,18 @@ public final class ModelCatalog {
     private ModelCatalog() {}
 
     public static ModelDescriptor verifiedDefault() { return PARAKEET; }
+
+    /** Returns a specialized balanced model only when one matches the locale. */
+    static ModelDescriptor localePreferredBalanced(String languageTag) {
+        String language = Locale.forLanguageTag(languageTag == null ? "" : languageTag)
+                .getLanguage();
+        return "de".equals(language) ? PARAKEET_PRIMELINE : null;
+    }
+
+    /** Specialized locale variants should not become generic family highlights. */
+    static boolean isGeneralFamilyChoice(ModelDescriptor model) {
+        return model != null && model != PARAKEET_PRIMELINE;
+    }
 
     public static List<ModelDescriptor> verifiedDownloads() { return DOWNLOADS; }
 
@@ -199,7 +230,7 @@ public final class ModelCatalog {
             translation = ModelDescriptor.Capability.UNSUPPORTED;
         }
         return new ModelDescriptor(
-                id, display, family, "transcribe.cpp 0.1.3", fileName, bytes, sha256,
+                id, display, family, RUNTIME, fileName, bytes, sha256,
                 source + "/resolve/main/" + fileName + "?download=true", source,
                 "See source", source, Collections.singleton("arm64-v8a"), false, false,
                 languages, detection, translation, streaming,
