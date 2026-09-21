@@ -29,6 +29,7 @@
     
     <string name="status_label">Status:</string>
     <string name="status_checking">Checking assets...</string>
+    <string name="status_model_required">Download or import a speech model to begin.</string>
     <string name="model_setup_title">Choose an offline speech model</string>
     <string name="model_setup_body">This small app download does not include a speech model. OSTT will recommend one using this phone’s memory, storage, and system language. Network access is used only after you tap Download; speech recognition is offline afterward. If Network access is disabled, OSTT will open App settings so you can allow it.</string>
     <string name="model_setup_action">Choose model</string>

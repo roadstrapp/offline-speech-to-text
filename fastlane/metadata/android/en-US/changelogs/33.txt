@@ -1,0 +1,3 @@
+Fix a startup crash in compact installs that do not yet have a speech model.
+
+The home screen now waits to initialize transcription until a downloaded, imported, or retained model is actually available, while the native loader handles a missing packaged model as a normal setup state instead of allowing an Android file exception to escape.

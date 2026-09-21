@@ -72,11 +72,32 @@ pub fn extract_builtin_model(env: &mut JNIEnv, context: &JObject) -> anyhow::Res
         )?
         .l()?;
 
-    copy_assets_recursively(env, &asset_manager_obj, BUILTIN_MODEL_DIR, &base_path)?;
+    // AssetManager.list() returns an empty array for a path that is absent.
+    // A compact build deliberately has no builtin-model asset, so do not feed
+    // that directory name to AssetManager.open(): it throws a Java
+    // FileNotFoundException which remains pending across JNI and can terminate
+    // the native loader thread even when the Rust error is otherwise handled.
+    if list_asset_children(env, &asset_manager_obj, BUILTIN_MODEL_DIR)?.is_empty() {
+        let _ = std::fs::remove_dir_all(&model_dir);
+        anyhow::bail!("no bundled model is packaged in this build");
+    }
+
+    if let Err(error) =
+        copy_assets_recursively(env, &asset_manager_obj, BUILTIN_MODEL_DIR, &base_path)
+    {
+        let _ = std::fs::remove_dir_all(&model_dir);
+        return Err(error);
+    }
 
     // Prove the model exists before recording completion. This also prevents a
     // missing/non-bundled asset directory from poisoning a later app upgrade.
-    let model_path = find_gguf(&model_dir)?;
+    let model_path = match find_gguf(&model_dir) {
+        Ok(path) => path,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&model_dir);
+            return Err(error);
+        }
+    };
     std::fs::write(&marker_file, "ok")?;
     log::info!("Asset extraction complete, marker written");
 
@@ -115,6 +136,31 @@ fn copy_assets_recursively(
     path: &str,
     target_root: &Path,
 ) -> anyhow::Result<()> {
+    let children = list_asset_children(env, asset_manager, path)?;
+    if children.is_empty() {
+        return copy_asset_file(env, asset_manager, path, target_root);
+    }
+
+    let target_dir = target_root.join(path);
+    std::fs::create_dir_all(&target_dir)?;
+
+    for file_name in children {
+        let child_path = if path.is_empty() {
+            file_name
+        } else {
+            format!("{}/{}", path, file_name)
+        };
+
+        copy_assets_recursively(env, asset_manager, &child_path, target_root)?;
+    }
+    Ok(())
+}
+
+fn list_asset_children(
+    env: &mut JNIEnv,
+    asset_manager: &JObject,
+    path: &str,
+) -> anyhow::Result<Vec<String>> {
     use jni::objects::JObjectArray;
 
     let path_jstring = env.new_string(path)?;
@@ -126,30 +172,14 @@ fn copy_assets_recursively(
             &[(&path_jstring).into()],
         )?
         .l()?;
-
     let list_array: JObjectArray = list_array_obj.into();
     let len = env.get_array_length(&list_array)?;
-
-    if len == 0 {
-        return copy_asset_file(env, asset_manager, path, target_root);
-    }
-
-    let target_dir = target_root.join(path);
-    std::fs::create_dir_all(&target_dir)?;
-
+    let mut children = Vec::with_capacity(len as usize);
     for i in 0..len {
         let file_name_obj = env.get_object_array_element(&list_array, i)?;
-        let file_name: String = env.get_string(&file_name_obj.into())?.into();
-
-        let child_path = if path.is_empty() {
-            file_name
-        } else {
-            format!("{}/{}", path, file_name)
-        };
-
-        copy_assets_recursively(env, asset_manager, &child_path, target_root)?;
+        children.push(env.get_string(&file_name_obj.into())?.into());
     }
-    Ok(())
+    Ok(children)
 }
 
 fn copy_asset_file(
@@ -199,6 +229,14 @@ fn copy_asset_file(
             log::info!("Extracted: {:?}", target_file_path);
             Ok(())
         }
-        Err(_) => Ok(()),
+        Err(error) => {
+            // A Java exception must never escape a JNI call as an unhandled
+            // exception merely because a packaged asset is absent or corrupt.
+            // Clear it before returning an ordinary Rust error to the loader.
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
+            anyhow::bail!("could not open packaged asset {asset_path}: {error}")
+        }
     }
 }

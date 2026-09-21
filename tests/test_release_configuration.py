@@ -21,8 +21,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         gradle_properties = (ROOT / "gradle.properties").read_text()
         workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
         self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
-        self.assertIn("versionCode = 32", gradle)
-        self.assertIn('versionName = "0.6.0"', gradle)
+        self.assertIn("versionCode = 33", gradle)
+        self.assertIn('versionName = "0.6.1"', gradle)
         self.assertIn('providers.gradleProperty("includeBundledModel")', gradle)
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: false', gradle)
         self.assertIn('ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,', gradle)
@@ -96,7 +96,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
                                assets.index("// Incomplete or missing")]
         self.assertIn("find_gguf(&model_dir)", marker_branch)
         self.assertIn("re-extracting", marker_branch)
-        self.assertLess(assets.index("let model_path = find_gguf(&model_dir)?;"),
+        self.assertLess(assets.index("let model_path = match find_gguf(&model_dir) {"),
                         assets.index('std::fs::write(&marker_file, "ok")?;'))
         inventory = (ROOT / "app/src/main/java/dev/notune/transcribe/SpeechModelInventory.java").read_text()
         self.assertIn('new File(filesDir, "builtin-model")', inventory)
@@ -289,6 +289,28 @@ class ReleaseConfigurationTest(unittest.TestCase):
         model = layout.index('@+id/btn_models')
         self.assertLess(model, layout.index('@+id/btn_voice_try'))
         self.assertLess(model, layout.index('@+id/btn_subs_start'))
+
+    def test_compact_startup_does_not_open_a_missing_builtin_model_asset(self):
+        assets = (ROOT / "src/assets.rs").read_text()
+        main = (ROOT / "app/src/main/java/dev/notune/transcribe/MainActivity.java").read_text()
+
+        missing_asset_guard = assets.index(
+            "list_asset_children(env, &asset_manager_obj, BUILTIN_MODEL_DIR)?.is_empty()")
+        recursive_copy = assets.index(
+            "copy_assets_recursively(env, &asset_manager_obj, BUILTIN_MODEL_DIR, &base_path)")
+        self.assertLess(missing_asset_guard, recursive_copy)
+        self.assertIn("no bundled model is packaged in this build", assets)
+        self.assertIn("env.exception_clear()", assets)
+
+        helper = main[main.index("private void maybeStartNativeModelLoad()"):
+                      main.index("private void updateVoiceInputStatus()")]
+        self.assertIn("if (!hasUsableSpeechModel())", helper)
+        self.assertIn("return;", helper)
+        self.assertLess(helper.index("if (!hasUsableSpeechModel())"),
+                        helper.index("initNative(this);"))
+        self.assertGreaterEqual(main.count("maybeStartNativeModelLoad();"), 2)
+        self.assertIn("statusText.setText(R.string.status_model_required)", main)
+        self.assertIn("benchButton.setEnabled(false)", main)
 
     def test_home_accessibility_supports_api_26_and_48dp_touch_targets(self):
         layout_path = ROOT / "app/src/main/res/layout/activity_main.xml"

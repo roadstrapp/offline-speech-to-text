@@ -64,6 +64,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView benchResultText;
     private volatile boolean micRequestedThisSession;
     private boolean modelSetupPromptChecked;
+    private boolean nativeInitRequested;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -205,8 +206,11 @@ public class MainActivity extends AppCompatActivity {
 
         configureAccessibility();
 
-        // Start init
-        initNative(this);
+        // Compact builds intentionally ship without a model. Do not start the
+        // native loader until either an imported or retained built-in model is
+        // actually present; the model manager reloads native state after a
+        // verified download or import completes.
+        maybeStartNativeModelLoad();
         showInitialModelSetupIfNeeded();
     }
 
@@ -270,6 +274,23 @@ public class MainActivity extends AppCompatActivity {
         updateVoiceInputStatus();
         updateImeStatus();
         updateImeRecoveryStatus();
+        // Returning from model management may make the first usable model
+        // available without recreating this Activity.
+        maybeStartNativeModelLoad();
+    }
+
+    private void maybeStartNativeModelLoad() {
+        if (!hasUsableSpeechModel()) {
+            statusText.setText(R.string.status_model_required);
+            startSubsButton.setEnabled(false);
+            benchButton.setEnabled(false);
+            return;
+        }
+        benchButton.setEnabled(true);
+        if (!nativeInitRequested) {
+            nativeInitRequested = true;
+            initNative(this);
+        }
     }
 
     /**
@@ -609,6 +630,7 @@ public class MainActivity extends AppCompatActivity {
             // "Ready" may carry a suffix, e.g. "Ready (this model can't translate)".
             if (status.startsWith("Ready")) {
                 startSubsButton.setEnabled(true);
+                benchButton.setEnabled(true);
             }
         });
     }
