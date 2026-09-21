@@ -1,0 +1,3 @@
+Keep completed voice-keyboard transcriptions in the active composer when Compose or another reactive UI recreates its input connection.
+
+OSTT now retries brief connection replacement and inserts into Android's currently focused safe composer instead of opening its recovery screen. If no writable composer exists, the exact transcript remains privately recoverable without interrupting the current app.

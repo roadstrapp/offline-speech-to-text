@@ -35,6 +35,16 @@ final class ImeRecordingSession {
                 && editorGeneration == originGeneration && editorSafe && inputActive;
     }
 
+    /**
+     * A recognition result may arrive after a reactive UI has recreated its
+     * focused composer. Android's current connection is authoritative at final
+     * delivery; requiring the original generation would reject that valid
+     * replacement even though it is the only composer the IME can address.
+     */
+    boolean canDeliverToCurrent(Object current, boolean editorSafe, boolean inputActive) {
+        return !discard && origin != null && current != null && editorSafe && inputActive;
+    }
+
     boolean isDiscarded() {
         return discard;
     }

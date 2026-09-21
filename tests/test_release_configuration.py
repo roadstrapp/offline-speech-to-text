@@ -21,8 +21,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         gradle_properties = (ROOT / "gradle.properties").read_text()
         workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
         self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
-        self.assertIn("versionCode = 34", gradle)
-        self.assertIn('versionName = "0.6.2"', gradle)
+        self.assertIn("versionCode = 35", gradle)
+        self.assertIn('versionName = "0.6.3"', gradle)
         self.assertIn('providers.gradleProperty("includeBundledModel")', gradle)
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: false', gradle)
         self.assertIn('ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,', gradle)
@@ -303,17 +303,27 @@ class ReleaseConfigurationTest(unittest.TestCase):
         insertion = source.index("commitTranscribedText(current, committed)")
         self.assertLess(staging, insertion)
         self.assertIn("editorGeneration == originGeneration", session)
+        self.assertIn("canDeliverToCurrent", session)
         self.assertNotIn("current == origin", session)
-        self.assertNotIn("getCurrentInputConnection() == requestedTarget", source)
+        self.assertIn("DELIVERY_RETRY_LIMIT = 12", source)
+        self.assertIn("DELIVERY_RETRY_DELAY_MS = 125L", source)
+        self.assertIn("recordingSession.canDeliverToCurrent", source)
+        self.assertNotIn("requestedTarget", source)
         self.assertIn("if (!ic.commitText(committed, 1)) return false", source)
         self.assertIn("ImeTranscriptRecoveryActivity", manifest)
         self.assertIn("openTranscriptRecovery()", source)
         recovery_intent = source[source.index("private void openTranscriptRecovery()"):
                                  source.index("private void copyEmergencyTranscript")]
-        self.assertIn("EXTRA_ALREADY_INSERTED", recovery_intent)
         self.assertNotIn("putExtra(\"text\"", recovery_intent)
         self.assertNotIn("putExtra(\"transcript\"", recovery_intent)
         self.assertIn("Toast.makeText(getApplicationContext()", source)
+        delivery = source[source.index("private void deliverStagedTranscription"):
+                          source.index("private void finishTranscriptDelivery")]
+        self.assertIn("mainHandler.postDelayed", delivery)
+        self.assertNotIn("openTranscriptRecovery", delivery)
+        completion = source[source.index("private void finishTranscriptDelivery"):
+                            source.index("private void switchToOtherInputMethod")]
+        self.assertNotIn("openTranscriptRecovery", completion)
 
     def test_default_model_import_is_verified_before_activation(self):
         source = (ROOT / "app/src/main/java/dev/notune/transcribe/ModelImportTask.java").read_text()

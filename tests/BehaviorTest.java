@@ -608,6 +608,12 @@ public final class BehaviorTest {
                 "a replacement IPC wrapper remains valid in the same editor lifecycle");
         assertEquals(false, session.canCommitTo(originalEditor, 8L, true, true),
                 "a transcription never commits after Android starts another editor");
+        assertEquals(true, session.canDeliverToCurrent(replacementEditor, true, true),
+                "a completed result follows Android's current safe composer");
+        assertEquals(false, session.canDeliverToCurrent(null, true, true),
+                "delivery waits while a recreated composer has no connection");
+        assertEquals(false, session.canDeliverToCurrent(replacementEditor, false, true),
+                "delivery never targets a sensitive replacement composer");
         assertEquals(false, session.canCommitTo(originalEditor, 7L, false, true),
                 "a transcription never commits to a sensitive editor");
         assertEquals(false, session.canCommitTo(originalEditor, 7L, true, false),
@@ -618,6 +624,8 @@ public final class BehaviorTest {
         failedSession.onError();
         assertEquals(false, failedSession.canCommitTo(originalEditor, 7L, true, true),
                 "an error fail-closes an otherwise active recording");
+        assertEquals(false, failedSession.canDeliverToCurrent(replacementEditor, true, true),
+                "an error also blocks delivery to a replacement composer");
 
         session.discard();
         session.onError();

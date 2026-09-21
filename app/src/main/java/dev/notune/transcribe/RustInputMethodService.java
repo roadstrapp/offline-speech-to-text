@@ -85,6 +85,8 @@ public class RustInputMethodService extends InputMethodService {
     private final AudioFocusPauser audioPauser = new AudioFocusPauser();
     private static final ExecutorService RECOVERY_IO = Executors.newSingleThreadExecutor(r ->
             new Thread(r, "ime-transcript-recovery"));
+    private static final int DELIVERY_RETRY_LIMIT = 12;
+    private static final long DELIVERY_RETRY_DELAY_MS = 125L;
     private boolean pauseAudioActive = false;
     // Whether an editor is currently focused/started for input. Tracked via
     // onStartInput/onFinishInput because getCurrentInputConnection() returns a
@@ -104,7 +106,6 @@ public class RustInputMethodService extends InputMethodService {
     private boolean windowVisible = false;
     private boolean editorSafeForDictation = false;
     private final ImeRecordingSession recordingSession = new ImeRecordingSession();
-    private InputConnection transcriptionTargetConnection;
     private IForegroundRecordingService longRecordingService;
     private boolean longRecordingBound;
     private final IForegroundRecordingObserver longRecordingObserver =
@@ -331,7 +332,6 @@ public class RustInputMethodService extends InputMethodService {
                     audioPauser.request(this);
                     pauseAudioActive = true;
                 }
-                transcriptionTargetConnection = null;
                 recordingSession.begin(getCurrentInputConnection(), editorGeneration);
                 recordingPaused = false;
                 processingResult = false;
@@ -472,7 +472,6 @@ public class RustInputMethodService extends InputMethodService {
                 pauseAudioActive = true;
             }
             recordingSession.begin(getCurrentInputConnection(), editorGeneration);
-            transcriptionTargetConnection = null;
             recordingPaused = false;
             startRecording();
             updateRecordButtonUI(true);
@@ -550,7 +549,6 @@ public class RustInputMethodService extends InputMethodService {
         processingResult = false;
         pendingSwitchBack = false;
         recordingSession.discard();
-        transcriptionTargetConnection = null;
         try {
             cancelRecording();
         } catch (Throwable t) {
@@ -586,20 +584,12 @@ public class RustInputMethodService extends InputMethodService {
 
     private void stopTranscribe(boolean switchKeyboard) {
         if (!isRecording) return;
-        InputConnection current = getCurrentInputConnection();
-        transcriptionTargetConnection = recordingSession.canCommitTo(
-                current, editorGeneration, editorSafeForDictation, inputActive)
-                ? current : null;
-        stopForResult(switchKeyboard && transcriptionTargetConnection != null, false);
+        stopForResult(switchKeyboard, false);
     }
 
     /** Stop capture and keep its result even when Android has removed the editor. */
     private void stopForRecovery() {
         if (!isRecording) return;
-        InputConnection current = getCurrentInputConnection();
-        transcriptionTargetConnection = recordingSession.canCommitTo(
-                current, editorGeneration, editorSafeForDictation, inputActive)
-                ? current : null;
         stopForResult(false, true);
     }
 
@@ -611,7 +601,6 @@ public class RustInputMethodService extends InputMethodService {
         } catch (Throwable t) {
             Log.w(TAG, "finishRecording failed; cancelling capture", t);
             recordingSession.onError();
-            transcriptionTargetConnection = null;
             try { cancelRecording(); } catch (Throwable ignored) { }
             pendingSwitchBack = false;
             updateRecordButtonUI(false);
@@ -624,7 +613,6 @@ public class RustInputMethodService extends InputMethodService {
             // its first buffer. That is a normal lifecycle handoff, not a
             // microphone-permission failure and not a transcription result.
             processingResult = false;
-            transcriptionTargetConnection = null;
             recordingSession.finish();
             lastStatus = "Ready";
             updateRecordButtonUI(false);
@@ -913,7 +901,6 @@ public class RustInputMethodService extends InputMethodService {
             lastStatus = status;
             if (error) {
                 processingResult = false;
-                transcriptionTargetConnection = null;
                 recordingSession.onError();
                 if (isRecording) updateRecordButtonUI(false);
             }
@@ -972,8 +959,6 @@ public class RustInputMethodService extends InputMethodService {
     // Called from Rust
     public void onTextTranscribed(String text) {
         mainHandler.post(() -> {
-            InputConnection requestedTarget = transcriptionTargetConnection;
-            transcriptionTargetConnection = null;
             boolean discarded = recordingSession.isDiscarded();
             if (discarded) {
                 processingResult = false;
@@ -1010,22 +995,35 @@ public class RustInputMethodService extends InputMethodService {
             // explicit Cancel bypasses this contract.
             RECOVERY_IO.execute(() -> {
                 boolean staged = PendingImeTranscriptStore.saveIfEmpty(this, text);
-                mainHandler.post(() -> deliverStagedTranscription(
-                        text, requestedTarget, staged));
+                mainHandler.post(() -> deliverStagedTranscription(text, staged, 0));
             });
         });
     }
 
-    private void deliverStagedTranscription(
-            String text, InputConnection requestedTarget, boolean staged) {
-        processingResult = false;
-        lastStatus = "Ready";
+    private void deliverStagedTranscription(String text, boolean staged, int attempt) {
         InputConnection current = getCurrentInputConnection();
-        boolean safeTarget = requestedTarget != null
-                && recordingSession.canCommitTo(current, editorGeneration,
-                editorSafeForDictation, inputActive);
+        boolean safeTarget = recordingSession.canDeliverToCurrent(
+                current, editorSafeForDictation, inputActive);
         String committed = text + " ";
         boolean inserted = safeTarget && commitTranscribedText(current, committed);
+
+        if (!inserted && attempt < DELIVERY_RETRY_LIMIT
+                && !recordingSession.isDiscarded()) {
+            // Compose and other reactive editors can briefly remove and replace
+            // their InputConnection while keeping the same visible composer.
+            // Give Android a bounded window to expose the replacement instead
+            // of opening OSTT over the app or declaring the result lost.
+            processingResult = true;
+            lastStatus = "Processing...";
+            if (statusView != null) statusView.setText(R.string.ime_waiting_for_composer);
+            mainHandler.postDelayed(
+                    () -> deliverStagedTranscription(text, staged, attempt + 1),
+                    DELIVERY_RETRY_DELAY_MS);
+            return;
+        }
+
+        processingResult = false;
+        lastStatus = "Ready";
         recordingSession.finish();
         releasePauseAudio();
         if (inserted && staged) {
@@ -1039,14 +1037,11 @@ public class RustInputMethodService extends InputMethodService {
         if (!inserted) {
             pendingSwitchBack = false;
             if (staged) {
-                String message = getString(R.string.ime_editor_changed);
-                if (statusView != null) statusView.setText(message);
-                Toast.makeText(getApplicationContext(), message, Toast.LENGTH_LONG).show();
+                if (statusView != null) statusView.setText(R.string.ime_recovery_ready);
             } else {
                 EmergencyTranscriptBuffer.putIfEmpty(text);
                 copyEmergencyTranscript(text);
             }
-            openTranscriptRecovery(false);
         }
         finishTranscriptDelivery(inserted, true);
     }
@@ -1056,7 +1051,6 @@ public class RustInputMethodService extends InputMethodService {
             String message = getString(R.string.ime_recovery_inserted_clear_failed);
             if (statusView != null) statusView.setText(message);
             Toast.makeText(getApplicationContext(), message, Toast.LENGTH_LONG).show();
-            openTranscriptRecovery(true);
         }
         updateRecordButtonUI(false);
         if (inserted && statusView != null && recoveryCleared) {
@@ -1078,13 +1072,8 @@ public class RustInputMethodService extends InputMethodService {
     }
 
     private void openTranscriptRecovery() {
-        openTranscriptRecovery(false);
-    }
-
-    private void openTranscriptRecovery(boolean alreadyInserted) {
         Intent recovery = new Intent(this, ImeTranscriptRecoveryActivity.class)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                .putExtra(ImeTranscriptRecoveryActivity.EXTRA_ALREADY_INSERTED, alreadyInserted);
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         try {
             startActivity(recovery);
         } catch (RuntimeException unavailable) {
