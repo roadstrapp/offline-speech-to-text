@@ -9,7 +9,7 @@
 
 use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use jni::objects::{GlobalRef, JObject};
@@ -31,14 +31,8 @@ const MODEL_TRANSLATE_FILE: &str = "model_translate";
 /// Absent/invalid/0 = default (all cores).
 const MODEL_THREADS_FILE: &str = "model_threads";
 static ACTIVE_THREADS: AtomicI32 = AtomicI32::new(0);
-const CHUNK_PLAN_UNKNOWN: u8 = 0;
-const CHUNK_PLAN_CONFORMER: u8 = 1;
-const CHUNK_PLAN_WHISPER: u8 = 2;
-static ACTIVE_CHUNK_PLAN: AtomicU8 = AtomicU8::new(CHUNK_PLAN_UNKNOWN);
 
-/// Settings captured once for a complete user transcription. Background
-/// chunks share this object so a mid-recording settings edit cannot change
-/// only the later part of the message.
+/// Settings captured once for a complete user transcription.
 pub(crate) struct TranscriptionJob {
     run_ext: Option<transcribe_cpp::RunExtension>,
     corrections: Option<Vec<crate::personal_corrections::Rule>>,
@@ -46,10 +40,6 @@ pub(crate) struct TranscriptionJob {
 }
 
 impl TranscriptionJob {
-    pub(crate) fn clear_text(&mut self) {
-        self.text.clear();
-    }
-
     pub(crate) fn finish(self) -> String {
         if let Some(rules) = self.corrections.as_deref() {
             crate::personal_corrections::apply(&self.text, rules)
@@ -70,7 +60,10 @@ pub struct Engine {
     supports_initial_prompt: bool,
     custom_terms_path: PathBuf,
     files_dir: PathBuf,
-    chunk_plan: crate::long_audio_chunking::Plan,
+    /// `None` means the runtime preserves long-input context itself (Whisper).
+    /// Other offline families use overlapping bounded windows so attention
+    /// memory cannot grow with an arbitrarily long recording.
+    bounded_window_samples: Option<usize>,
     /// Status reported once loading succeeded; carries a warning when the
     /// translate setting can't do what the user expects with this model.
     ready_status: &'static str,
@@ -139,7 +132,7 @@ impl Engine {
         };
 
         log::info!(
-            "engine: {} threads, task {:?}, single-pass decode: {}",
+            "engine: {} threads, task {:?}, whisper run extension: {}",
             threads,
             task,
             run_ext.is_some()
@@ -149,6 +142,26 @@ impl Engine {
             ..Default::default()
         };
         let session = model.session_with(&options).map_err(|e| e.to_string())?;
+        let bounded_window_samples = if is_whisper {
+            None
+        } else {
+            let native_limit = session
+                .limits()
+                .ok()
+                .map(|limits| limits.effective_max_audio_ms)
+                .filter(|limit| *limit > 0)
+                .map(|limit| {
+                    (limit as usize).saturating_mul(crate::long_audio::SAMPLE_RATE) / 1000
+                });
+            let safe_limit = native_limit
+                .unwrap_or(crate::long_audio::DEFAULT_MAX_WINDOW_SAMPLES)
+                .min(crate::long_audio::DEFAULT_MAX_WINDOW_SAMPLES);
+            let final_silence = crate::audio_finalization::final_decode_silence_samples();
+            if safe_limit < final_silence.saturating_add(crate::long_audio::MIN_WINDOW_SAMPLES) {
+                return Err("model reports an unusably short audio limit".to_string());
+            }
+            Some(safe_limit - final_silence)
+        };
         ACTIVE_THREADS.store(threads, Ordering::Relaxed);
         Ok(Engine {
             session,
@@ -158,17 +171,15 @@ impl Engine {
             supports_initial_prompt,
             custom_terms_path: files_dir.join(crate::custom_terms::FILE_NAME),
             files_dir,
-            chunk_plan: if is_whisper {
-                crate::long_audio_chunking::Plan::for_whisper()
-            } else {
-                crate::long_audio_chunking::Plan::for_conformer()
-            },
+            bounded_window_samples,
             ready_status,
         })
     }
 
-    /// Transcribes 16 kHz mono f32 samples to text. Long input is transcribed
-    /// in short quiet-point chunks so full-attention models remain bounded.
+    /// Transcribes one complete 16 kHz mono utterance. Whisper owns its native
+    /// long-input context. Other offline families stay single-pass for normal
+    /// dictation and use overlapping, context-reconciled windows only beyond
+    /// their safe compute bound.
     pub fn transcribe(&mut self, samples: Vec<f32>) -> Result<String, String> {
         let mut job = self.begin_transcription();
         self.transcribe_into(&mut job, &samples)?;
@@ -176,17 +187,15 @@ impl Engine {
     }
 
     pub(crate) fn begin_transcription(&self) -> TranscriptionJob {
-        // Snapshot once per complete transcription. Editing the list while a
-        // long recording is being decoded therefore cannot change only the
-        // later chunks. Unsupported models never read or receive the prompt.
+        // Snapshot once per complete transcription. Unsupported models never
+        // read or receive the prompt.
         let prompt = if self.supports_initial_prompt {
             crate::custom_terms::load_prompt(&self.custom_terms_path)
         } else {
             None
         };
         // Exact personal corrections are model-independent, including for
-        // Parakeet. Snapshot them beside the Whisper prompt so one long
-        // transcription cannot mix old and new settings across chunks.
+        // Parakeet. Snapshot them beside the Whisper prompt.
         TranscriptionJob {
             corrections: crate::personal_corrections::load(&self.files_dir),
             run_ext: self.run_extension(prompt),
@@ -194,30 +203,47 @@ impl Engine {
         }
     }
 
-    /// Adds one or more bounded model runs to an existing complete-message
-    /// job. The input may itself be long (the final fallback path relies on
-    /// that), so the same quiet-point plan remains the last line of defence.
+    /// Adds one complete utterance to a message job.
     pub(crate) fn transcribe_into(
         &mut self,
         job: &mut TranscriptionJob,
         samples: &[f32],
     ) -> Result<(), String> {
-        let mut rest = samples;
-        while !rest.is_empty() {
-            let take = self.chunk_plan.next_chunk_len(rest);
-            let piece = self.run(&rest[..take], &job.run_ext)?;
-            let piece = piece.trim();
-            if !piece.is_empty() {
-                if !job.text.is_empty() {
-                    job.text.push(' ');
-                }
-                job.text.push_str(piece);
+        if let Some(max_window_samples) = self.bounded_window_samples {
+            let windows = crate::long_audio::windows(samples, max_window_samples);
+            let mut assembled = String::new();
+            for (index, window) in windows.iter().enumerate() {
+                let mut owned;
+                let audio = if index + 1 < windows.len() {
+                    owned = samples[window.clone()].to_vec();
+                    crate::audio_finalization::append_final_decode_silence(&mut owned);
+                    owned.as_slice()
+                } else {
+                    &samples[window.clone()]
+                };
+                let piece = self.run(audio, &job.run_ext)?;
+                assembled = crate::long_audio::stitch(&assembled, piece.trim());
             }
-            rest = &rest[take..];
+            append_piece(&mut job.text, &assembled);
+        } else {
+            let piece = self.run(samples, &job.run_ext)?;
+            append_piece(&mut job.text, piece.trim());
         }
         Ok(())
     }
+}
 
+fn append_piece(target: &mut String, piece: &str) {
+    let piece = piece.trim();
+    if !piece.is_empty() {
+        if !target.is_empty() {
+            target.push(' ');
+        }
+        target.push_str(piece);
+    }
+}
+
+impl Engine {
     fn run_extension(&self, prompt: Option<String>) -> Option<transcribe_cpp::RunExtension> {
         self.run_ext.clone().map(|extension| match extension {
             transcribe_cpp::RunExtension::Whisper(mut options) => {
@@ -248,7 +274,7 @@ impl Engine {
                 ..Default::default()
             };
             match self.session.run(samples, &opts) {
-                Ok(t) => return Ok(t.text),
+                Ok(transcript) => return Ok(transcript.text),
                 Err(transcribe_cpp::Error::Unsupported(msg)) if self.language.is_some() => {
                     let lang = self.language.take().unwrap();
                     self.language = lang.split_once('-').map(|(primary, _)| primary.to_string());
@@ -288,25 +314,8 @@ pub fn get_engine() -> Option<Arc<Mutex<Engine>>> {
     GLOBAL_ENGINE.lock().unwrap().clone()
 }
 
-/// Returns the currently loaded model family's safe offline chunking plan.
-/// `None` while the model is still loading keeps capture in one lossless tail;
-/// the next audio callback starts background chunking once loading completes.
-pub(crate) fn active_chunk_plan() -> Option<crate::long_audio_chunking::Plan> {
-    match ACTIVE_CHUNK_PLAN.load(Ordering::Acquire) {
-        CHUNK_PLAN_CONFORMER => Some(crate::long_audio_chunking::Plan::for_conformer()),
-        CHUNK_PLAN_WHISPER => Some(crate::long_audio_chunking::Plan::for_whisper()),
-        _ => None,
-    }
-}
-
 fn install_engine(engine: Engine) {
-    let plan = if engine.chunk_plan == crate::long_audio_chunking::Plan::for_whisper() {
-        CHUNK_PLAN_WHISPER
-    } else {
-        CHUNK_PLAN_CONFORMER
-    };
     *GLOBAL_ENGINE.lock().unwrap() = Some(Arc::new(Mutex::new(engine)));
-    ACTIVE_CHUNK_PLAN.store(plan, Ordering::Release);
 }
 
 /// Runs a transcription on the shared engine. Two layers of hardening keep a
@@ -352,7 +361,6 @@ pub fn reset() {
     }
     *GLOBAL_ENGINE.lock().unwrap() = None;
     ACTIVE_THREADS.store(0, Ordering::Relaxed);
-    ACTIVE_CHUNK_PLAN.store(CHUNK_PLAN_UNKNOWN, Ordering::Release);
     *state = LoadState::Idle;
 }
 

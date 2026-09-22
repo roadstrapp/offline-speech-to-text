@@ -84,6 +84,27 @@ public final class DiagnosticLog {
         withLock(filesDir, () -> Files.deleteIfExists(log(filesDir).toPath()));
     }
 
+    /**
+     * Returns one locked, bounded snapshot for an explicit user export.
+     *
+     * The app never exposes the live private file. Callers copy these bytes to
+     * a user-selected document or a temporary FileProvider share instead.
+     */
+    static byte[] snapshot(File filesDir) throws IOException {
+        filesDir.mkdirs();
+        byte[][] result = new byte[][] {new byte[0]};
+        withLock(filesDir, () -> {
+            File target = log(filesDir);
+            if (!target.isFile()) return;
+            long size = target.length();
+            if (size < 0L || size > MAX_BYTES) {
+                throw new IOException("Diagnostic log exceeds its retention bound");
+            }
+            result[0] = Files.readAllBytes(target.toPath());
+        });
+        return result[0];
+    }
+
     public static void event(File filesDir, String event, String detail) {
         if (!EVENTS.contains(event) || !isSafeDetail(detail) || !isEnabled(filesDir)) {
             return;

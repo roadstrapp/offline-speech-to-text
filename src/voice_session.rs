@@ -301,19 +301,7 @@ fn start_recording_impl(
             let level = (rms * 6.0).clamp(0.0, 1.0);
             let is_speech = level > MIN_SPEECH_LEVEL && level > noise_floor + SPEECH_MARGIN;
 
-            let chunk =
-                buffer_clone
-                    .lock()
-                    .unwrap()
-                    .push(data, is_speech, engine::active_chunk_plan());
-            if let Some(chunk) = chunk {
-                if let Err(chunk) = background.submit(chunk) {
-                    // The worker is process-private and expected to live until
-                    // stop/cancel. Restore the exact audio if it ever exits
-                    // early so final fallback still receives every sample.
-                    buffer_clone.lock().unwrap().restore_front(chunk);
-                }
-            }
+            buffer_clone.lock().unwrap().push(data);
 
             if let Some(ep) = &endpoint_cb {
                 if is_speech {

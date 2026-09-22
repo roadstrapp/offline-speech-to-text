@@ -62,13 +62,13 @@ javac -d "$OUT" \
   "$ROOT/tests/M4LifecycleTest.java"
 java -ea -cp "$OUT" dev.notune.transcribe.M4LifecycleTest
 
-rustc --edition 2021 --test "$ROOT/tests/LongAudioChunkingTest.rs" \
-  -o "$OUT/long_audio_chunking_test"
-"$OUT/long_audio_chunking_test"
-
 rustc --edition 2021 --test "$ROOT/tests/BackgroundChunkingTest.rs" \
   -o "$OUT/background_chunking_test"
 "$OUT/background_chunking_test"
+
+rustc --edition 2021 --test "$ROOT/tests/LongAudioTest.rs" \
+  -o "$OUT/long_audio_test"
+"$OUT/long_audio_test"
 
 rustc --edition 2021 --test "$ROOT/src/audio_finalization.rs" \
   -o "$OUT/audio_finalization_test"

@@ -8,7 +8,7 @@ pub mod custom_terms;
 pub mod engine;
 pub mod foreground_recording;
 pub mod ime;
-pub mod long_audio_chunking;
+mod long_audio;
 pub mod main_activity;
 pub mod models;
 pub mod personal_corrections;

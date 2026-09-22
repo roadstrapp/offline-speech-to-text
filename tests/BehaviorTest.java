@@ -1,5 +1,6 @@
 package dev.notune.transcribe;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -745,6 +746,9 @@ public final class BehaviorTest {
         String first = Files.readString(filesDir.resolve("diagnostic.log"), StandardCharsets.UTF_8);
         assertEquals(true, first.contains("app_start process=app"),
                 "allowlisted metadata is recorded while enabled");
+        byte[] exported = DiagnosticLog.snapshot(filesDir.toFile());
+        assertEquals(first, new String(exported, StandardCharsets.UTF_8),
+                "export snapshot contains the complete bounded private log");
 
         DiagnosticLog.event(filesDir.toFile(), "timing",
                 "process=ime,audio_ms=11000,duration_ms=900,cpu_threads=2");
@@ -829,6 +833,13 @@ public final class BehaviorTest {
         DiagnosticLog.clear(filesDir.toFile());
         assertEquals(false, Files.exists(filesDir.resolve("diagnostic.log")),
                 "clear removes retained diagnostics");
+        assertEquals(0, DiagnosticLog.snapshot(filesDir.toFile()).length,
+                "cleared diagnostics export as an empty snapshot");
+        Files.write(filesDir.resolve("diagnostic.log"),
+                new byte[(int) DiagnosticLog.MAX_BYTES + 1]);
+        assertThrows(IOException.class, () -> DiagnosticLog.snapshot(filesDir.toFile()),
+                "an unexpectedly oversized private log fails closed instead of being shared");
+        DiagnosticLog.clear(filesDir.toFile());
     }
 
     private static void assertEquals(Object expected, Object actual, String message) {

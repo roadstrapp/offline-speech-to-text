@@ -1,0 +1,5 @@
+Keep long dictation smooth across natural pauses.
+
+OSTT now preserves each ordinary recording as one continuous utterance and lets the speech runtime maintain its own long-audio context, preventing short hesitations from creating false sentence boundaries. Very long input to other offline model families uses overlapping, reconciled windows.
+
+Diagnostic logging remains off by default and content-free. When enabled, Settings can save the bounded log as a text file, share a temporary read-only snapshot through Android's Sharesheet, or clear it immediately.

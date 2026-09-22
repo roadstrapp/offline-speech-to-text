@@ -760,17 +760,7 @@ fn audio_callback(shared: &Arc<Endpoint>, data: &[f32], analyzer: &mut AudioAnal
 
     let is_speech = level > MIN_SPEECH_LEVEL && level > analyzer.noise_floor + SPEECH_MARGIN;
 
-    let chunk =
-        shared
-            .audio_buffer
-            .lock()
-            .unwrap()
-            .push(data, is_speech, engine::active_chunk_plan());
-    if let Some(chunk) = chunk {
-        if let Err(chunk) = shared.background.submit(chunk) {
-            shared.audio_buffer.lock().unwrap().restore_front(chunk);
-        }
-    }
+    shared.audio_buffer.lock().unwrap().push(data);
 
     if is_speech {
         shared.last_voice_ms.store(

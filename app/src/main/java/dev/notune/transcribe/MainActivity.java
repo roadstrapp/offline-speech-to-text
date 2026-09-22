@@ -1,6 +1,7 @@
 package dev.notune.transcribe;
 
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -30,6 +31,7 @@ import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.app.AppCompatDelegate;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 import androidx.core.view.ViewCompat;
 import androidx.core.widget.ImageViewCompat;
 
@@ -37,14 +39,23 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.snackbar.Snackbar;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.util.ArrayList;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
     private static final String TAG = "MainActivity";
     private static final int PERM_REQ_CODE = 101;
     private static final int REQ_VOICE_TEST = 202;
+    private static final int REQ_SAVE_DIAGNOSTICS = 203;
     private static final int MIN_TOUCH_TARGET_DP = 48;
+    private static final int MAX_SHARED_DIAGNOSTIC_FILES = 8;
 
     static {
         NativeLibraries.load();
@@ -65,6 +76,11 @@ public class MainActivity extends AppCompatActivity {
     private volatile boolean micRequestedThisSession;
     private boolean modelSetupPromptChecked;
     private boolean nativeInitRequested;
+    private final ExecutorService diagnosticIo = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "diagnostic-export");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -152,6 +168,10 @@ public class MainActivity extends AppCompatActivity {
                 snackbar(getString(R.string.diagnostic_log_error));
             }
         });
+        findViewById(R.id.btn_save_diagnostic_log).setOnClickListener(v ->
+                chooseDiagnosticExportDestination());
+        findViewById(R.id.btn_share_diagnostic_log).setOnClickListener(v ->
+                shareDiagnosticLog());
         findViewById(R.id.btn_source).setOnClickListener(v -> openLink(
                 "https://gitworkshop.dev/npub1jg2qmt3rxjksq65v3nk7dq6yaz2c4uf3qt9epdhxwms2xwd47j2s38a228/relay.ngit.dev/offline-speech-to-text"));
         findViewById(R.id.btn_license).setOnClickListener(v -> openLink(
@@ -461,6 +481,12 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_SAVE_DIAGNOSTICS) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                writeDiagnosticExport(data.getData());
+            }
+            return;
+        }
         if (requestCode == REQ_VOICE_TEST && resultCode == RESULT_OK && data != null) {
             ArrayList<String> results =
                     data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
@@ -471,6 +497,127 @@ public class MainActivity extends AppCompatActivity {
         }
         // onResume() also refreshes, but do it here too for an immediate update.
         updateVoiceInputStatus();
+    }
+
+    private void chooseDiagnosticExportDestination() {
+        diagnosticIo.execute(() -> {
+            try {
+                if (DiagnosticLog.snapshot(getFilesDir()).length == 0) {
+                    postDiagnosticMessage(R.string.diagnostic_log_empty);
+                    return;
+                }
+                runOnUiThread(() -> {
+                    if (!canPresentDiagnosticUi()) return;
+                    try {
+                        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT)
+                                .addCategory(Intent.CATEGORY_OPENABLE)
+                                .setType("text/plain")
+                                .putExtra(Intent.EXTRA_TITLE, diagnosticExportFileName());
+                        startActivityForResult(intent, REQ_SAVE_DIAGNOSTICS);
+                    } catch (ActivityNotFoundException exception) {
+                        snackbar(getString(R.string.diagnostic_log_export_error));
+                    }
+                });
+            } catch (IOException | RuntimeException exception) {
+                postDiagnosticMessage(R.string.diagnostic_log_export_error);
+            }
+        });
+    }
+
+    private void writeDiagnosticExport(Uri destination) {
+        diagnosticIo.execute(() -> {
+            try {
+                byte[] snapshot = DiagnosticLog.snapshot(getFilesDir());
+                if (snapshot.length == 0) {
+                    postDiagnosticMessage(R.string.diagnostic_log_empty);
+                    return;
+                }
+                try (OutputStream output = getContentResolver()
+                        .openOutputStream(destination, "wt")) {
+                    if (output == null) throw new IOException("No output stream");
+                    output.write(snapshot);
+                }
+                postDiagnosticMessage(R.string.diagnostic_log_saved);
+            } catch (IOException | RuntimeException exception) {
+                postDiagnosticMessage(R.string.diagnostic_log_export_error);
+            }
+        });
+    }
+
+    private void shareDiagnosticLog() {
+        diagnosticIo.execute(() -> {
+            try {
+                byte[] snapshot = DiagnosticLog.snapshot(getFilesDir());
+                if (snapshot.length == 0) {
+                    postDiagnosticMessage(R.string.diagnostic_log_empty);
+                    return;
+                }
+                File directory = new File(getCacheDir(), "diagnostics");
+                if (!directory.isDirectory() && !directory.mkdirs()) {
+                    throw new IOException("Could not create diagnostics cache");
+                }
+                pruneSharedDiagnosticFiles(directory);
+                // A unique immutable snapshot prevents a later share from
+                // changing the bytes behind an earlier recipient's grant.
+                File export = new File(directory,
+                        "ostt-diagnostics-share-" + System.currentTimeMillis() + "-"
+                                + System.nanoTime() + ".txt");
+                try (OutputStream output = new FileOutputStream(export, false)) {
+                    output.write(snapshot);
+                }
+                if (!export.setReadOnly()) {
+                    throw new IOException("Could not protect diagnostics snapshot");
+                }
+                Uri uri = FileProvider.getUriForFile(
+                        this, getPackageName() + ".fileprovider", export);
+                Intent send = new Intent(Intent.ACTION_SEND)
+                        .setType("text/plain")
+                        .putExtra(Intent.EXTRA_STREAM, uri);
+                send.setClipData(ClipData.newUri(getContentResolver(), export.getName(), uri));
+                send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                runOnUiThread(() -> {
+                    if (!canPresentDiagnosticUi()) return;
+                    try {
+                        startActivity(Intent.createChooser(send,
+                                getString(R.string.diagnostic_log_share_chooser)));
+                    } catch (ActivityNotFoundException exception) {
+                        snackbar(getString(R.string.diagnostic_log_export_error));
+                    }
+                });
+            } catch (IOException | RuntimeException exception) {
+                postDiagnosticMessage(R.string.diagnostic_log_export_error);
+            }
+        });
+    }
+
+    private static void pruneSharedDiagnosticFiles(File directory) {
+        File[] files = directory.listFiles((parent, name) ->
+                name.startsWith("ostt-diagnostics-share-") && name.endsWith(".txt"));
+        if (files == null || files.length < MAX_SHARED_DIAGNOSTIC_FILES) return;
+        java.util.Arrays.sort(files,
+                java.util.Comparator.comparingLong(File::lastModified));
+        int remove = files.length - MAX_SHARED_DIAGNOSTIC_FILES + 1;
+        for (int index = 0; index < remove; index++) {
+            // Cache cleanup is best effort; a failed delete cannot expose data
+            // or prevent the fresh explicit share.
+            files[index].delete();
+        }
+    }
+
+    private boolean canPresentDiagnosticUi() {
+        return !isFinishing() && !isDestroyed();
+    }
+
+    private void postDiagnosticMessage(int message) {
+        runOnUiThread(() -> {
+            if (canPresentDiagnosticUi()) snackbar(getString(message));
+        });
+    }
+
+    private static String diagnosticExportFileName() {
+        String timestamp = new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
+                .format(new Date());
+        return "ostt-diagnostics-" + timestamp + ".txt";
     }
 
     /**
@@ -633,6 +780,12 @@ public class MainActivity extends AppCompatActivity {
                 benchButton.setEnabled(true);
             }
         });
+    }
+
+    @Override
+    protected void onDestroy() {
+        diagnosticIo.shutdown();
+        super.onDestroy();
     }
 
     private native void initNative(MainActivity activity);
