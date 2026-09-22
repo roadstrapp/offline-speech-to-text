@@ -7,7 +7,6 @@ import android.speech.RecognizerIntent;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
-import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 import android.content.pm.PackageManager;
@@ -52,10 +51,6 @@ public class RecognizeActivity extends AppCompatActivity {
                 panel.setLayoutParams(params);
             }
         }
-
-        // Keep the screen awake for the lifetime of this recording screen so it
-        // never sleeps mid-capture and cuts the recording short.
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         micLevel = findViewById(R.id.mic_level);
         processingRing = findViewById(R.id.mic_processing_ring);
@@ -166,6 +161,14 @@ public class RecognizeActivity extends AppCompatActivity {
             showProcessing(awaitingResult || isProcessingStatus(s));
             status.setText(shown);
         });
+    }
+
+    /** Content-free timing emitted only when the user opted into diagnostics. */
+    public void onTranscriptionMetrics(long audioMs, long computeMs, int threads) {
+        DiagnosticLog.event(getFilesDir(), "timing",
+                "process=app,audio_ms=" + Math.max(0L, audioMs)
+                        + ",duration_ms=" + Math.max(0L, computeMs)
+                        + ",cpu_threads=" + Math.max(0, threads));
     }
 
     // Called from Rust with 0..1

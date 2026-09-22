@@ -10,6 +10,7 @@ import android.inputmethodservice.InputMethodService;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.ContextThemeWrapper;
 import android.view.KeyEvent;
@@ -88,6 +89,9 @@ public class RustInputMethodService extends InputMethodService {
     private static final int DELIVERY_RETRY_LIMIT = 12;
     private static final long DELIVERY_RETRY_DELAY_MS = 125L;
     private boolean pauseAudioActive = false;
+    private long recordingStartedElapsedMs = -1L;
+    private long pauseStartedElapsedMs = -1L;
+    private long accumulatedPausedMs = 0L;
     // Whether an editor is currently focused/started for input. Tracked via
     // onStartInput/onFinishInput because getCurrentInputConnection() returns a
     // non-null no-op connection when nothing is focused, so commitText would be
@@ -335,7 +339,7 @@ public class RustInputMethodService extends InputMethodService {
                 recordingSession.begin(getCurrentInputConnection(), editorGeneration);
                 recordingPaused = false;
                 processingResult = false;
-                startRecording();
+                startRecording(isAutoStopEnabled());
                 updateRecordButtonUI(true);
             });
 
@@ -473,7 +477,7 @@ public class RustInputMethodService extends InputMethodService {
             }
             recordingSession.begin(getCurrentInputConnection(), editorGeneration);
             recordingPaused = false;
-            startRecording();
+            startRecording(isAutoStopEnabled());
             updateRecordButtonUI(true);
         } finally {
             automaticStartInFlight = false;
@@ -567,17 +571,26 @@ public class RustInputMethodService extends InputMethodService {
         if (!isRecording) return;
         boolean requestedPause = !recordingPaused;
         if (!setRecordingPaused(requestedPause)) {
-            // A UI/native disagreement could leave a live microphone behind.
-            // Fail closed and discard instead of pretending pause succeeded.
-            stopAndDiscard();
+            // If a vendor backend cannot resume its stream, preserve and
+            // transcribe everything captured before Pause. A transport quirk
+            // must never turn a valid dictation into data loss.
+            stopForRecovery();
             return;
         }
         recordingPaused = requestedPause;
         if (recordingPaused) {
+            pauseStartedElapsedMs = SystemClock.elapsedRealtime();
             releasePauseAudio();
-        } else if (isPauseAudioEnabled() && !pauseAudioActive) {
-            audioPauser.request(this);
-            pauseAudioActive = true;
+        } else {
+            if (pauseStartedElapsedMs >= 0L) {
+                accumulatedPausedMs += Math.max(0L,
+                        SystemClock.elapsedRealtime() - pauseStartedElapsedMs);
+                pauseStartedElapsedMs = -1L;
+            }
+            if (isPauseAudioEnabled() && !pauseAudioActive) {
+                audioPauser.request(this);
+                pauseAudioActive = true;
+            }
         }
         updateRecordingActionsUi();
     }
@@ -815,12 +828,15 @@ public class RustInputMethodService extends InputMethodService {
     }
 
     private void updateRecordButtonUI(boolean recording) {
+        boolean wasRecording = isRecording;
         isRecording = recording;
         if (!recording) recordingPaused = false;
-        // Keep the screen awake while recording so it never sleeps mid-capture
-        // and cuts the recording short. Cleared automatically once we stop.
-        if (inputView != null) {
-            inputView.setKeepScreenOn(recording);
+        if (recording && !wasRecording) {
+            recordingStartedElapsedMs = SystemClock.elapsedRealtime();
+            pauseStartedElapsedMs = -1L;
+            accumulatedPausedMs = 0L;
+        } else if (!recording && wasRecording) {
+            finishCaptureDiagnostics();
         }
         if (recordContainer != null) {
             recordContainer.setVisibility(recording ? View.GONE : View.VISIBLE);
@@ -886,7 +902,7 @@ public class RustInputMethodService extends InputMethodService {
     // Native methods
     private native void initNative(RustInputMethodService service);
     private native void cleanupNative();
-    private native void startRecording();
+    private native void startRecording(boolean autoStop);
     private native void stopRecording();
     private native boolean finishRecording();
     private native void cancelRecording();
@@ -998,6 +1014,14 @@ public class RustInputMethodService extends InputMethodService {
                 mainHandler.post(() -> deliverStagedTranscription(text, staged, 0));
             });
         });
+    }
+
+    /** Content-free timing emitted only when the user opted into diagnostics. */
+    public void onTranscriptionMetrics(long audioMs, long computeMs, int threads) {
+        DiagnosticLog.event(getFilesDir(), "timing",
+                "process=ime,audio_ms=" + Math.max(0L, audioMs)
+                        + ",duration_ms=" + Math.max(0L, computeMs)
+                        + ",cpu_threads=" + Math.max(0, threads));
     }
 
     private void deliverStagedTranscription(String text, boolean staged, int attempt) {
@@ -1126,13 +1150,31 @@ public class RustInputMethodService extends InputMethodService {
 
 
     public void onAudioLevel(float level) {
-        if (micLevelView != null) {
+        if (isRecording && !recordingPaused && micLevelView != null) {
             mainHandler.post(() -> micLevelView.setLevel(level));
         }
     }
 
+    private void finishCaptureDiagnostics() {
+        if (recordingStartedElapsedMs < 0L) return;
+        long now = SystemClock.elapsedRealtime();
+        if (pauseStartedElapsedMs >= 0L) {
+            accumulatedPausedMs += Math.max(0L, now - pauseStartedElapsedMs);
+        }
+        DiagnosticLog.event(getFilesDir(), "timing",
+                "process=ime,duration_ms=" + Math.max(0L, now - recordingStartedElapsedMs)
+                        + ",paused_ms=" + Math.max(0L, accumulatedPausedMs));
+        recordingStartedElapsedMs = -1L;
+        pauseStartedElapsedMs = -1L;
+        accumulatedPausedMs = 0L;
+    }
+
     private boolean isPauseAudioEnabled() {
         return new File(getFilesDir(), "pause_audio").exists();
+    }
+
+    private boolean isAutoStopEnabled() {
+        return new File(getFilesDir(), "auto_stop").exists();
     }
 
     /** "Record in background" is default ON; the marker file is the opt-out. */

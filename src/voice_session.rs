@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -6,7 +6,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use jni::objects::{GlobalRef, JObject, JValue};
 use jni::JNIEnv;
 
-use crate::audio_finalization::append_final_decode_silence;
+use crate::background_chunking::CaptureBuffer;
+use crate::background_transcription::{BackgroundTranscriber, Completion};
 use crate::engine;
 
 pub const OWNER_IME: u8 = 1;
@@ -34,10 +35,33 @@ const SPEECH_MARGIN: f32 = 0.08;
 const AUTO_STOP_SILENCE_MS: u64 = 2000;
 /// If no speech is ever detected, auto-stop after this long.
 const AUTO_STOP_NO_SPEECH_MS: u64 = 8000;
+/// Interactive voice panels must never leave an unnoticed microphone capture
+/// running indefinitely. The long-recording foreground service has its own
+/// explicit ten-minute lifecycle and notification controls.
+const MAX_INTERACTIVE_SESSION_MS: u64 = 10 * 60 * 1000;
+const LEVEL_UPDATE_MS: u64 = 100;
+const AUTO_STOP_MONITOR_MS: u64 = 250;
+const MANUAL_MONITOR_MS: u64 = 1000;
+const CAPTURE_HEALTH_MONITOR_MS: u64 = 250;
 const DIGITAL_ZERO_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn has_two_seconds_of_digital_zero(since_last_nonzero: Duration) -> bool {
     since_last_nonzero >= DIGITAL_ZERO_TIMEOUT
+}
+
+fn should_finish_interactive_session(
+    auto_stop: bool,
+    paused: bool,
+    speech_started: bool,
+    silence: Duration,
+    no_speech: Duration,
+    total: Duration,
+) -> bool {
+    total >= Duration::from_millis(MAX_INTERACTIVE_SESSION_MS)
+        || (auto_stop
+            && !paused
+            && ((speech_started && silence >= Duration::from_millis(AUTO_STOP_SILENCE_MS))
+                || (!speech_started && no_speech >= Duration::from_millis(AUTO_STOP_NO_SPEECH_MS))))
 }
 
 pub struct SendStream(#[allow(dead_code)] pub cpal::Stream);
@@ -47,27 +71,27 @@ unsafe impl Sync for SendStream {}
 /// Speech/silence tracking shared between the audio callback and the
 /// auto-stop monitor thread.
 struct Endpointing {
-    last_voice: Mutex<Instant>,
-    noise_floor: Mutex<f32>,
+    /// Milliseconds since this capture started. The audio callback has a
+    /// single writer, so an atomic avoids taking a mutex on every block.
+    last_voice_ms: AtomicU64,
     speech_started: AtomicBool,
 }
 
 pub struct VoiceSessionState {
     pub stream: Option<SendStream>,
-    pub audio_buffer: Arc<Mutex<Vec<f32>>>,
+    audio_buffer: Arc<Mutex<CaptureBuffer>>,
     pub jvm: Arc<jni::JavaVM>,
     pub target_ref: GlobalRef,
-    pub last_level_sent: Arc<Mutex<std::time::Instant>>,
     /// True while the current recording runs; flipped off on stop/cancel so
     /// the auto-stop monitor (if any) exits.
     pub session_active: Arc<AtomicBool>,
-    /// Drops callback samples while the IME is paused. Android's native audio
-    /// backend does not reliably implement Stream::pause(), so capture stays
-    /// open while the buffer and level meter are gated here.
+    /// Drops callback samples while the IME is paused. The native stream is
+    /// also suspended when supported; this gate is the reliable fallback.
     capture_paused: Arc<AtomicBool>,
     owner: u8,
     owns_session: Arc<AtomicBool>,
     inference_running: Arc<AtomicBool>,
+    background: Option<Arc<BackgroundTranscriber>>,
 }
 
 fn notify_status(env: &mut JNIEnv, obj: &JObject, msg: &str) {
@@ -96,6 +120,19 @@ fn notify_text(env: &mut JNIEnv, obj: &JObject, text: &str) {
     }
 }
 
+fn notify_metrics(env: &mut JNIEnv, obj: &JObject, audio_ms: u64, compute_ms: u64) {
+    let _ = env.call_method(
+        obj,
+        "onTranscriptionMetrics",
+        "(JJI)V",
+        &[
+            JValue::Long(audio_ms as i64),
+            JValue::Long(compute_ms as i64),
+            JValue::Int(engine::active_thread_count()),
+        ],
+    );
+}
+
 pub fn init_session(env: JNIEnv, target: JObject, owner: u8) -> VoiceSessionState {
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Off),
@@ -107,15 +144,15 @@ pub fn init_session(env: JNIEnv, target: JObject, owner: u8) -> VoiceSessionStat
 
     let state = VoiceSessionState {
         stream: None,
-        audio_buffer: Arc::new(Mutex::new(Vec::new())),
+        audio_buffer: Arc::new(Mutex::new(CaptureBuffer::default())),
         jvm: vm_arc.clone(),
         target_ref: target_ref.clone(),
-        last_level_sent: Arc::new(Mutex::new(std::time::Instant::now())),
         session_active: Arc::new(AtomicBool::new(false)),
         capture_paused: Arc::new(AtomicBool::new(false)),
         owner,
         owns_session: Arc::new(AtomicBool::new(false)),
         inference_running: Arc::new(AtomicBool::new(false)),
+        background: None,
     };
 
     // Load engine in background
@@ -186,7 +223,12 @@ fn start_recording_impl(
         buffer_size: cpal::BufferSize::Default,
     };
 
-    state.audio_buffer.lock().unwrap().clear();
+    state.audio_buffer.lock().unwrap().reset();
+    let background = Arc::new(BackgroundTranscriber::start(
+        state.jvm.clone(),
+        state.target_ref.clone(),
+    ));
+    state.background = Some(background.clone());
     let buffer_clone = state.audio_buffer.clone();
     state.capture_paused.store(false, Ordering::SeqCst);
     let capture_paused = state.capture_paused.clone();
@@ -196,10 +238,10 @@ fn start_recording_impl(
     let session_active = Arc::new(AtomicBool::new(true));
     state.session_active = session_active.clone();
 
+    let capture_started = Instant::now();
     let endpoint = if auto_stop {
         Some(Arc::new(Endpointing {
-            last_voice: Mutex::new(Instant::now()),
-            noise_floor: Mutex::new(0.0),
+            last_voice_ms: AtomicU64::new(0),
             speech_started: AtomicBool::new(false),
         }))
     } else {
@@ -208,62 +250,89 @@ fn start_recording_impl(
 
     let jvm = state.jvm.clone();
     let target_ref = state.target_ref.clone();
-    let last_sent = state.last_level_sent.clone();
     let endpoint_cb = endpoint.clone();
-    let health_last_callback = Arc::new(Mutex::new(Instant::now()));
-    let health_last_callback_data = health_last_callback.clone();
-    let health_last_nonzero = Arc::new(Mutex::new(Instant::now()));
-    let health_last_nonzero_data = health_last_nonzero.clone();
+    // Only the foreground service needs the native capture-health watchdog.
+    // Avoid two contended mutex updates per audio callback for the ordinary
+    // IME and popup paths.
+    let health_callback_count = gate.map(|_| Arc::new(AtomicU64::new(0)));
+    let health_callback_count_data = health_callback_count.clone();
+    let health_nonzero_count = gate.map(|_| Arc::new(AtomicU64::new(0)));
+    let health_nonzero_count_data = health_nonzero_count.clone();
     let error_jvm = state.jvm.clone();
     let error_target = state.target_ref.clone();
     let error_generation = gate.map(|(generation, _)| generation);
     let error_active = state.session_active.clone();
     let error_owns_session = state.owns_session.clone();
+    let error_inference_running = state.inference_running.clone();
+    let error_background = background.clone();
     let error_owner = state.owner;
 
     if start_is_cancelled(&mut env, state, gate) {
         state.session_active.store(false, Ordering::SeqCst);
+        stop_background_worker(state);
         release_owned_session(state);
         return 1;
     }
 
+    let mut noise_floor = 0.0f32;
+    let mut last_level_sent = Instant::now();
     let stream = device.build_input_stream(
         &config,
         move |data: &[f32], _: &_| {
-            *health_last_callback_data.lock().unwrap() = Instant::now();
-            if data.iter().any(|sample| sample.abs() > f32::EPSILON) {
-                *health_last_nonzero_data.lock().unwrap() = Instant::now();
+            if let Some(callback_count) = &health_callback_count_data {
+                callback_count.fetch_add(1, Ordering::Relaxed);
             }
             if capture_paused.load(Ordering::SeqCst) {
                 return;
             }
-            buffer_clone.lock().unwrap().extend_from_slice(data);
-
-            // compute RMS
+            // Compute RMS and the capture-health signal in one pass.
             let mut sum = 0.0f32;
+            let mut has_nonzero = false;
             for &x in data {
                 sum += x * x;
+                has_nonzero |= x.abs() > f32::EPSILON;
+            }
+            if has_nonzero {
+                if let Some(nonzero_count) = &health_nonzero_count_data {
+                    nonzero_count.fetch_add(1, Ordering::Relaxed);
+                }
             }
             let rms = (sum / (data.len().max(1) as f32)).sqrt();
             let level = (rms * 6.0).clamp(0.0, 1.0);
+            let is_speech = level > MIN_SPEECH_LEVEL && level > noise_floor + SPEECH_MARGIN;
 
-            if let Some(ep) = &endpoint_cb {
-                let floor = *ep.noise_floor.lock().unwrap();
-                let is_speech = level > MIN_SPEECH_LEVEL && level > floor + SPEECH_MARGIN;
-                if is_speech {
-                    *ep.last_voice.lock().unwrap() = Instant::now();
-                    ep.speech_started.store(true, Ordering::SeqCst);
-                } else {
-                    // Slowly adapt the noise floor while no speech is present.
-                    let mut nf = ep.noise_floor.lock().unwrap();
-                    *nf = *nf * 0.95 + level * 0.05;
+            let chunk =
+                buffer_clone
+                    .lock()
+                    .unwrap()
+                    .push(data, is_speech, engine::active_chunk_plan());
+            if let Some(chunk) = chunk {
+                if let Err(chunk) = background.submit(chunk) {
+                    // The worker is process-private and expected to live until
+                    // stop/cancel. Restore the exact audio if it ever exits
+                    // early so final fallback still receives every sample.
+                    buffer_clone.lock().unwrap().restore_front(chunk);
                 }
             }
 
+            if let Some(ep) = &endpoint_cb {
+                if is_speech {
+                    ep.last_voice_ms.store(
+                        capture_started.elapsed().as_millis() as u64,
+                        Ordering::Relaxed,
+                    );
+                    ep.speech_started.store(true, Ordering::SeqCst);
+                } else {
+                    // Slowly adapt the noise floor while no speech is present.
+                    noise_floor = noise_floor * 0.95 + level * 0.05;
+                }
+            } else if !is_speech {
+                noise_floor = noise_floor * 0.95 + level * 0.05;
+            }
+
             // throttle updates
-            let mut last = last_sent.lock().unwrap();
-            if last.elapsed() >= std::time::Duration::from_millis(50) {
-                *last = std::time::Instant::now();
+            if last_level_sent.elapsed() >= Duration::from_millis(LEVEL_UPDATE_MS) {
+                last_level_sent = Instant::now();
 
                 if let Ok(mut env) = jvm.attach_current_thread() {
                     let obj = target_ref.as_obj();
@@ -285,8 +354,15 @@ fn start_recording_impl(
                 }
             } else {
                 log::error!("Stream error: {}", error);
-                if error_owns_session.swap(false, Ordering::SeqCst) {
-                    release_session_owner(error_owner);
+                error_active.store(false, Ordering::SeqCst);
+                if let Some(completion) = error_background.cancel() {
+                    error_inference_running.store(false, Ordering::SeqCst);
+                    if error_owns_session.swap(false, Ordering::SeqCst) {
+                        release_session_owner(error_owner);
+                    }
+                    std::thread::spawn(move || {
+                        let _ = completion.recv();
+                    });
                 }
             }
         },
@@ -297,11 +373,13 @@ fn start_recording_impl(
         Ok(s) => {
             if start_is_cancelled(&mut env, state, gate) {
                 state.session_active.store(false, Ordering::SeqCst);
+                stop_background_worker(state);
                 release_owned_session(state);
                 return 1;
             }
             if let Err(e) = s.play() {
                 state.session_active.store(false, Ordering::SeqCst);
+                stop_background_worker(state);
                 release_owned_session(state);
                 notify_status(
                     &mut env,
@@ -314,53 +392,103 @@ fn start_recording_impl(
             notify_status(&mut env, state.target_ref.as_obj(), "Listening...");
 
             if let Some((generation, _)) = gate {
+                let health_callback_count = health_callback_count
+                    .expect("foreground capture health callback counter exists");
+                let health_nonzero_count =
+                    health_nonzero_count.expect("foreground capture health audio counter exists");
                 let session_active = state.session_active.clone();
                 let jvm = state.jvm.clone();
                 let target_ref = state.target_ref.clone();
-                std::thread::spawn(move || loop {
-                    std::thread::sleep(Duration::from_millis(250));
-                    if !session_active.load(Ordering::SeqCst) {
-                        return;
-                    }
-                    let callback_stalled =
-                        health_last_callback.lock().unwrap().elapsed() >= Duration::from_secs(2);
-                    let digital_zero = has_two_seconds_of_digital_zero(
-                        health_last_nonzero.lock().unwrap().elapsed(),
-                    );
-                    if (callback_stalled || digital_zero)
-                        && session_active.swap(false, Ordering::SeqCst)
-                    {
-                        if let Ok(mut callback_env) = jvm.attach_current_thread() {
-                            let _ = callback_env.call_method(
-                                target_ref.as_obj(),
-                                "onNativeCaptureError",
-                                "(J)V",
-                                &[JValue::Long(generation)],
-                            );
+                std::thread::spawn(move || {
+                    let mut callback_seen = 0;
+                    let mut nonzero_seen = 0;
+                    let mut callback_changed = Instant::now();
+                    let mut nonzero_changed = Instant::now();
+                    loop {
+                        std::thread::sleep(Duration::from_millis(CAPTURE_HEALTH_MONITOR_MS));
+                        if !session_active.load(Ordering::SeqCst) {
+                            return;
                         }
-                        return;
+                        let callbacks = health_callback_count.load(Ordering::Relaxed);
+                        if callbacks != callback_seen {
+                            callback_seen = callbacks;
+                            callback_changed = Instant::now();
+                        }
+                        let nonzero = health_nonzero_count.load(Ordering::Relaxed);
+                        if nonzero != nonzero_seen {
+                            nonzero_seen = nonzero;
+                            nonzero_changed = Instant::now();
+                        }
+                        let callback_stalled = callback_changed.elapsed() >= Duration::from_secs(2);
+                        let digital_zero =
+                            has_two_seconds_of_digital_zero(nonzero_changed.elapsed());
+                        if (callback_stalled || digital_zero)
+                            && session_active.swap(false, Ordering::SeqCst)
+                        {
+                            if let Ok(mut callback_env) = jvm.attach_current_thread() {
+                                let _ = callback_env.call_method(
+                                    target_ref.as_obj(),
+                                    "onNativeCaptureError",
+                                    "(J)V",
+                                    &[JValue::Long(generation)],
+                                );
+                            }
+                            return;
+                        }
                     }
                 });
             }
 
-            if let Some(ep) = endpoint {
-                let jvm = state.jvm.clone();
-                let target_ref = state.target_ref.clone();
-                let started_at = Instant::now();
-                std::thread::spawn(move || loop {
-                    std::thread::sleep(Duration::from_millis(100));
+            let jvm = state.jvm.clone();
+            let target_ref = state.target_ref.clone();
+            let capture_paused = state.capture_paused.clone();
+            let monitor_interval = if endpoint.is_some() {
+                AUTO_STOP_MONITOR_MS
+            } else {
+                MANUAL_MONITOR_MS
+            };
+            std::thread::spawn(move || {
+                let mut no_speech_since = Instant::now();
+                loop {
+                    std::thread::sleep(Duration::from_millis(monitor_interval));
                     if !session_active.load(Ordering::SeqCst) {
                         return;
                     }
-                    let speech = ep.speech_started.load(Ordering::SeqCst);
-                    let silence = ep.last_voice.lock().unwrap().elapsed();
-                    let done = (speech && silence >= Duration::from_millis(AUTO_STOP_SILENCE_MS))
-                        || (!speech
-                            && started_at.elapsed()
-                                >= Duration::from_millis(AUTO_STOP_NO_SPEECH_MS));
-                    if done {
+                    let paused = capture_paused.load(Ordering::SeqCst);
+                    if paused {
+                        // Pausing is user-controlled, so it must suspend the
+                        // silence timer as well as audio buffering.
+                        no_speech_since = Instant::now();
+                        if let Some(ep) = &endpoint {
+                            ep.last_voice_ms.store(
+                                capture_started.elapsed().as_millis() as u64,
+                                Ordering::Relaxed,
+                            );
+                        }
+                    }
+                    let speech = endpoint
+                        .as_ref()
+                        .is_some_and(|ep| ep.speech_started.load(Ordering::SeqCst));
+                    let silence = endpoint
+                        .as_ref()
+                        .map(|ep| {
+                            Duration::from_millis(
+                                (capture_started.elapsed().as_millis() as u64)
+                                    .saturating_sub(ep.last_voice_ms.load(Ordering::Relaxed)),
+                            )
+                        })
+                        .unwrap_or_default();
+                    if should_finish_interactive_session(
+                        endpoint.is_some(),
+                        paused,
+                        speech,
+                        silence,
+                        no_speech_since.elapsed(),
+                        capture_started.elapsed(),
+                    ) {
                         // Claim the session so a simultaneous manual stop and
-                        // this monitor can't both fire.
+                        // this monitor can't both fire. Auto-stop always
+                        // transcribes; it never discards captured speech.
                         if session_active.swap(false, Ordering::SeqCst) {
                             if let Ok(mut env) = jvm.attach_current_thread() {
                                 let _ =
@@ -369,12 +497,13 @@ fn start_recording_impl(
                         }
                         return;
                     }
-                });
-            }
+                }
+            });
             0
         }
         Err(e) => {
             state.session_active.store(false, Ordering::SeqCst);
+            stop_background_worker(state);
             release_owned_session(state);
             notify_status(
                 &mut env,
@@ -410,29 +539,28 @@ pub fn end_recording_capture(state: &mut VoiceSessionState) -> bool {
     state.capture_paused.store(false, Ordering::SeqCst);
     state.stream = None;
 
-    !state.audio_buffer.lock().unwrap().is_empty()
+    state.audio_buffer.lock().unwrap().has_audio()
 }
 
 pub fn transcribe_recording(mut env: JNIEnv, state: &mut VoiceSessionState) {
-    // Move the captured samples into inference instead of duplicating the
-    // entire recording. This also clears the process-held capture buffer at
-    // the capture/inference boundary.
-    let mut buffer = std::mem::take(&mut *state.audio_buffer.lock().unwrap());
+    let (tail, total_samples) = {
+        let mut capture = state.audio_buffer.lock().unwrap();
+        (capture.take_tail(), capture.total_samples())
+    };
 
     // Guard against an empty buffer. Permission is checked by each Android
     // entry point before capture; an empty callback stream is not proof that
     // permission was denied.
-    if buffer.is_empty() {
+    if total_samples == 0 {
         notify_status(
             &mut env,
             state.target_ref.as_obj(),
             "Error: no audio was captured. Try again.",
         );
+        stop_background_worker(state);
         release_owned_session(state);
         return;
     }
-
-    append_final_decode_silence(&mut buffer);
 
     let jvm = state.jvm.clone();
     let target_ref = state.target_ref.clone();
@@ -440,6 +568,27 @@ pub fn transcribe_recording(mut env: JNIEnv, state: &mut VoiceSessionState) {
     let owns_session = state.owns_session.clone();
     let inference_running = state.inference_running.clone();
     inference_running.store(true, Ordering::SeqCst);
+
+    let Some(background) = state.background.take() else {
+        notify_status(
+            &mut env,
+            target_ref.as_obj(),
+            "Error: transcription worker unavailable",
+        );
+        inference_running.store(false, Ordering::SeqCst);
+        release_owned_session(state);
+        return;
+    };
+    let Some(completion) = background.finish(tail, total_samples) else {
+        notify_status(
+            &mut env,
+            target_ref.as_obj(),
+            "Error: transcription was already finalized",
+        );
+        inference_running.store(false, Ordering::SeqCst);
+        release_owned_session(state);
+        return;
+    };
 
     notify_status(&mut env, target_ref.as_obj(), "Transcribing...");
 
@@ -456,29 +605,23 @@ pub fn transcribe_recording(mut env: JNIEnv, state: &mut VoiceSessionState) {
         };
         let obj = target_ref.as_obj();
 
-        // Wait for engine if somehow still loading
-        if engine::get_engine().is_none() {
-            if let Err(_) = engine::ensure_loaded(&mut env, obj) {
-                if owns_session.swap(false, Ordering::SeqCst) {
-                    release_session_owner(owner);
+        match completion.recv() {
+            Ok(Completion::Finished {
+                text,
+                audio_ms,
+                compute_ms,
+            }) => {
+                notify_metrics(&mut env, obj, audio_ms, compute_ms);
+                match text {
+                    Ok(text) => {
+                        notify_status(&mut env, obj, "Ready");
+                        notify_text(&mut env, obj, &text);
+                    }
+                    Err(e) => notify_status(&mut env, obj, &format!("Error: {}", e)),
                 }
-                inference_running.store(false, Ordering::SeqCst);
-                return;
             }
-        }
-
-        if let Some(eng_arc) = engine::get_engine() {
-            let res = engine::transcribe_shared(&eng_arc, buffer);
-
-            match res {
-                Ok(text) => {
-                    notify_status(&mut env, obj, "Ready");
-                    notify_text(&mut env, obj, &text);
-                }
-                Err(e) => notify_status(&mut env, obj, &format!("Error: {}", e)),
-            }
-        } else {
-            notify_status(&mut env, obj, "Error: model not loaded");
+            Ok(Completion::Cancelled) => {}
+            Err(_) => notify_status(&mut env, obj, "Error: transcription worker stopped"),
         }
         inference_running.store(false, Ordering::SeqCst);
         if owns_session.swap(false, Ordering::SeqCst) {
@@ -492,15 +635,27 @@ pub fn stop_recording(env: JNIEnv, state: &mut VoiceSessionState) {
     transcribe_recording(env, state);
 }
 
-/// Pause or resume buffering without discarding samples already recorded.
-/// Keeping the Android stream open avoids backend-specific pause failures;
-/// callback samples and level updates are ignored while this flag is set.
+/// Pause or resume without discarding samples already recorded. Buffering is
+/// always gated; supported Android backends also suspend the microphone stream.
 pub fn set_recording_paused(state: &mut VoiceSessionState, paused: bool) -> bool {
     if state.stream.is_none() || !state.session_active.load(Ordering::SeqCst) {
         return false;
     }
-    state.capture_paused.store(paused, Ordering::SeqCst);
-    true
+    let stream = state.stream.as_ref().unwrap();
+    if paused {
+        // Gate the callback first, then ask the native backend to suspend the
+        // AudioRecord stream. If a vendor backend rejects pause, capture stays
+        // reliable and the callback remains gated; supported devices stop the
+        // microphone hardware until Resume.
+        state.capture_paused.store(true, Ordering::SeqCst);
+        let _ = stream.0.pause();
+        true
+    } else if stream.0.play().is_ok() {
+        state.capture_paused.store(false, Ordering::SeqCst);
+        true
+    } else {
+        false
+    }
 }
 
 pub fn cancel_recording(mut env: JNIEnv, state: &mut VoiceSessionState) {
@@ -512,8 +667,19 @@ pub fn cleanup_session(state: &mut VoiceSessionState) {
     state.session_active.store(false, Ordering::SeqCst);
     state.capture_paused.store(false, Ordering::SeqCst);
     state.stream = None;
-    state.audio_buffer.lock().unwrap().clear();
-    if !state.inference_running.load(Ordering::SeqCst) {
+    state.audio_buffer.lock().unwrap().reset();
+    if let Some(background) = state.background.take() {
+        state.inference_running.store(false, Ordering::SeqCst);
+        // A cancelled capture has no pending result. Let a replacement editor
+        // claim capture ownership immediately; an in-flight native run remains
+        // safely serialized by the engine mutex while it winds down.
+        release_owned_session(state);
+        if let Some(completion) = background.cancel() {
+            std::thread::spawn(move || {
+                let _ = completion.recv();
+            });
+        }
+    } else if !state.inference_running.load(Ordering::SeqCst) {
         release_owned_session(state);
     }
 }
@@ -521,6 +687,16 @@ pub fn cleanup_session(state: &mut VoiceSessionState) {
 fn release_owned_session(state: &VoiceSessionState) {
     if state.owns_session.swap(false, Ordering::SeqCst) {
         release_session_owner(state.owner);
+    }
+}
+
+fn stop_background_worker(state: &mut VoiceSessionState) {
+    if let Some(background) = state.background.take() {
+        if let Some(completion) = background.cancel() {
+            std::thread::spawn(move || {
+                let _ = completion.recv();
+            });
+        }
     }
 }
 
@@ -536,6 +712,34 @@ mod tests {
         )));
         assert!(has_two_seconds_of_digital_zero(Duration::from_secs(2)));
         assert!(has_two_seconds_of_digital_zero(Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn interactive_endpointing_suspends_silence_while_paused_but_keeps_hard_cap() {
+        assert!(should_finish_interactive_session(
+            true,
+            false,
+            true,
+            Duration::from_millis(AUTO_STOP_SILENCE_MS),
+            Duration::ZERO,
+            Duration::from_secs(5),
+        ));
+        assert!(!should_finish_interactive_session(
+            true,
+            true,
+            true,
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+        ));
+        assert!(should_finish_interactive_session(
+            false,
+            true,
+            false,
+            Duration::ZERO,
+            Duration::ZERO,
+            Duration::from_millis(MAX_INTERACTIVE_SESSION_MS),
+        ));
     }
 
     #[test]

@@ -9,6 +9,7 @@
 
 use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicI32, AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use jni::objects::{GlobalRef, JObject};
@@ -29,6 +30,34 @@ const MODEL_TRANSLATE_FILE: &str = "model_translate";
 /// Optional file in filesDir with the CPU thread count for inference.
 /// Absent/invalid/0 = default (all cores).
 const MODEL_THREADS_FILE: &str = "model_threads";
+static ACTIVE_THREADS: AtomicI32 = AtomicI32::new(0);
+const CHUNK_PLAN_UNKNOWN: u8 = 0;
+const CHUNK_PLAN_CONFORMER: u8 = 1;
+const CHUNK_PLAN_WHISPER: u8 = 2;
+static ACTIVE_CHUNK_PLAN: AtomicU8 = AtomicU8::new(CHUNK_PLAN_UNKNOWN);
+
+/// Settings captured once for a complete user transcription. Background
+/// chunks share this object so a mid-recording settings edit cannot change
+/// only the later part of the message.
+pub(crate) struct TranscriptionJob {
+    run_ext: Option<transcribe_cpp::RunExtension>,
+    corrections: Option<Vec<crate::personal_corrections::Rule>>,
+    text: String,
+}
+
+impl TranscriptionJob {
+    pub(crate) fn clear_text(&mut self) {
+        self.text.clear();
+    }
+
+    pub(crate) fn finish(self) -> String {
+        if let Some(rules) = self.corrections.as_deref() {
+            crate::personal_corrections::apply(&self.text, rules)
+        } else {
+            self.text
+        }
+    }
+}
 
 /// A loaded transcribe.cpp session plus the options applied to every run.
 pub struct Engine {
@@ -120,6 +149,7 @@ impl Engine {
             ..Default::default()
         };
         let session = model.session_with(&options).map_err(|e| e.to_string())?;
+        ACTIVE_THREADS.store(threads, Ordering::Relaxed);
         Ok(Engine {
             session,
             language,
@@ -140,6 +170,12 @@ impl Engine {
     /// Transcribes 16 kHz mono f32 samples to text. Long input is transcribed
     /// in short quiet-point chunks so full-attention models remain bounded.
     pub fn transcribe(&mut self, samples: Vec<f32>) -> Result<String, String> {
+        let mut job = self.begin_transcription();
+        self.transcribe_into(&mut job, &samples)?;
+        Ok(job.finish())
+    }
+
+    pub(crate) fn begin_transcription(&self) -> TranscriptionJob {
         // Snapshot once per complete transcription. Editing the list while a
         // long recording is being decoded therefore cannot change only the
         // later chunks. Unsupported models never read or receive the prompt.
@@ -151,32 +187,35 @@ impl Engine {
         // Exact personal corrections are model-independent, including for
         // Parakeet. Snapshot them beside the Whisper prompt so one long
         // transcription cannot mix old and new settings across chunks.
-        let corrections = crate::personal_corrections::load(&self.files_dir);
-        let run_ext = self.run_extension(prompt);
-        let text = if samples.len() <= self.chunk_plan.max_run_samples() {
-            self.run(&samples, &run_ext)?
-        } else {
-            let mut text = String::new();
-            let mut rest: &[f32] = &samples;
-            while !rest.is_empty() {
-                let take = self.chunk_plan.next_chunk_len(rest);
-                let piece = self.run(&rest[..take], &run_ext)?;
-                let piece = piece.trim();
-                if !piece.is_empty() {
-                    if !text.is_empty() {
-                        text.push(' ');
-                    }
-                    text.push_str(piece);
-                }
-                rest = &rest[take..];
-            }
-            text
-        };
-        if let Some(rules) = corrections.as_deref() {
-            Ok(crate::personal_corrections::apply(&text, rules))
-        } else {
-            Ok(text)
+        TranscriptionJob {
+            corrections: crate::personal_corrections::load(&self.files_dir),
+            run_ext: self.run_extension(prompt),
+            text: String::new(),
         }
+    }
+
+    /// Adds one or more bounded model runs to an existing complete-message
+    /// job. The input may itself be long (the final fallback path relies on
+    /// that), so the same quiet-point plan remains the last line of defence.
+    pub(crate) fn transcribe_into(
+        &mut self,
+        job: &mut TranscriptionJob,
+        samples: &[f32],
+    ) -> Result<(), String> {
+        let mut rest = samples;
+        while !rest.is_empty() {
+            let take = self.chunk_plan.next_chunk_len(rest);
+            let piece = self.run(&rest[..take], &job.run_ext)?;
+            let piece = piece.trim();
+            if !piece.is_empty() {
+                if !job.text.is_empty() {
+                    job.text.push(' ');
+                }
+                job.text.push_str(piece);
+            }
+            rest = &rest[take..];
+        }
+        Ok(())
     }
 
     fn run_extension(&self, prompt: Option<String>) -> Option<transcribe_cpp::RunExtension> {
@@ -249,6 +288,27 @@ pub fn get_engine() -> Option<Arc<Mutex<Engine>>> {
     GLOBAL_ENGINE.lock().unwrap().clone()
 }
 
+/// Returns the currently loaded model family's safe offline chunking plan.
+/// `None` while the model is still loading keeps capture in one lossless tail;
+/// the next audio callback starts background chunking once loading completes.
+pub(crate) fn active_chunk_plan() -> Option<crate::long_audio_chunking::Plan> {
+    match ACTIVE_CHUNK_PLAN.load(Ordering::Acquire) {
+        CHUNK_PLAN_CONFORMER => Some(crate::long_audio_chunking::Plan::for_conformer()),
+        CHUNK_PLAN_WHISPER => Some(crate::long_audio_chunking::Plan::for_whisper()),
+        _ => None,
+    }
+}
+
+fn install_engine(engine: Engine) {
+    let plan = if engine.chunk_plan == crate::long_audio_chunking::Plan::for_whisper() {
+        CHUNK_PLAN_WHISPER
+    } else {
+        CHUNK_PLAN_CONFORMER
+    };
+    *GLOBAL_ENGINE.lock().unwrap() = Some(Arc::new(Mutex::new(engine)));
+    ACTIVE_CHUNK_PLAN.store(plan, Ordering::Release);
+}
+
 /// Runs a transcription on the shared engine. Two layers of hardening keep a
 /// single bad run from freezing every later one (the symptom would be an IME
 /// stuck at "Processing" until its process dies, since notify callbacks stop
@@ -291,7 +351,15 @@ pub fn reset() {
         state = cvar.wait(state).unwrap();
     }
     *GLOBAL_ENGINE.lock().unwrap() = None;
+    ACTIVE_THREADS.store(0, Ordering::Relaxed);
+    ACTIVE_CHUNK_PLAN.store(CHUNK_PLAN_UNKNOWN, Ordering::Release);
     *state = LoadState::Idle;
+}
+
+/// Thread count used by the loaded session. Exposed only for content-free,
+/// opt-in performance diagnostics.
+pub fn active_thread_count() -> i32 {
+    ACTIVE_THREADS.load(Ordering::Relaxed)
 }
 
 fn notify_status(env: &mut JNIEnv, obj: &JObject, msg: &str) {
@@ -393,20 +461,19 @@ pub fn ensure_loaded_from_thread(
     }
 }
 
-/// Inference thread count: the number of performance cores, capped at 4.
+/// Energy-conscious inference thread count: performance cores, capped at 2.
 ///
 /// Phone SoCs are heterogeneous: fast cores paired with slow efficiency
 /// cores. ggml synchronizes all threads after each operation, so a thread
 /// on a slow core stalls the whole pool, and using every core is slower
 /// than using only the fast ones. Cores are classified by their maximum
 /// frequency from sysfs: within 70% of the fastest core counts as fast.
-/// The count is capped at 4 because grabbing every fast core leaves none
-/// for the rest of the system (audio pipeline, the app playing the sound),
-/// and any preempted worker stalls the pool at the next op barrier; past
-/// 4 threads the matmuls are memory-bound on phone-class SoCs anyway, and
-/// more threads mainly build up heat. If sysfs is unreadable, falls back
-/// to a conservative 4. The `model_threads` config file (user-settable in
-/// the Models screen) overrides the heuristic.
+/// The count is capped at 2 because the Pixel 6a power benchmark showed that
+/// four threads saved only about 0.1 seconds on an 11-second utterance while
+/// consuming about 41% more process CPU time than two. Users can still opt in
+/// to a higher value in the Models screen when latency matters more than
+/// battery life. If sysfs is unreadable, the same conservative cap applies.
+/// The `model_threads` config file overrides the heuristic.
 fn performance_core_count() -> i32 {
     let mut freqs: Vec<u64> = Vec::new();
     for i in 0..64 {
@@ -422,7 +489,7 @@ fn performance_core_count() -> i32 {
     match freqs.iter().max() {
         Some(&max) if max > 0 => {
             let fast = freqs.iter().filter(|&&f| f * 10 >= max * 7).count();
-            let threads = fast.clamp(1, 4);
+            let threads = balanced_thread_count(fast);
             log::info!(
                 "cpu clusters {:?} kHz -> {} performance cores -> {} threads",
                 freqs,
@@ -433,9 +500,13 @@ fn performance_core_count() -> i32 {
         }
         _ => std::thread::available_parallelism()
             .map(|n| n.get())
-            .unwrap_or(4)
-            .min(4) as i32,
+            .unwrap_or(2)
+            .min(2) as i32,
     }
+}
+
+fn balanced_thread_count(performance_cores: usize) -> i32 {
+    performance_cores.clamp(1, 2) as i32
 }
 
 /// Reads a single-value config file (trimmed); `None` if absent or empty.
@@ -479,7 +550,7 @@ fn do_load(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
         ) {
             Ok(engine) => {
                 let status = engine.ready_status;
-                *GLOBAL_ENGINE.lock().unwrap() = Some(Arc::new(Mutex::new(engine)));
+                install_engine(engine);
                 notify_status(env, context, status);
                 return Ok(());
             }
@@ -508,7 +579,7 @@ fn do_load(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
     match Engine::load(&path, language, translate, threads, files_dir) {
         Ok(engine) => {
             let status = engine.ready_status;
-            *GLOBAL_ENGINE.lock().unwrap() = Some(Arc::new(Mutex::new(engine)));
+            install_engine(engine);
             notify_status(env, context, status);
             Ok(())
         }
@@ -520,5 +591,19 @@ fn do_load(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
             notify_status(env, context, &format!("Error: {}", msg));
             Err(msg)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::balanced_thread_count;
+
+    #[test]
+    fn automatic_inference_balances_latency_and_battery() {
+        assert_eq!(balanced_thread_count(0), 1);
+        assert_eq!(balanced_thread_count(1), 1);
+        assert_eq!(balanced_thread_count(2), 2);
+        assert_eq!(balanced_thread_count(4), 2);
+        assert_eq!(balanced_thread_count(8), 2);
     }
 }

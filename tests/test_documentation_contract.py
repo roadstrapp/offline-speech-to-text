@@ -146,10 +146,15 @@ class DocumentationContractTest(unittest.TestCase):
     def test_capture_buffers_move_into_inference_without_full_copy(self):
         voice = (ROOT / "src/voice_session.rs").read_text()
         recognizer = (ROOT / "src/recog_service.rs").read_text()
-        self.assertIn("std::mem::take(&mut *state.audio_buffer.lock().unwrap())", voice)
-        self.assertIn("std::mem::take(&mut *shared.audio_buffer.lock().unwrap())", recognizer)
-        self.assertIn("health_last_nonzero", voice)
+        background = (ROOT / "src/background_chunking.rs").read_text()
+        self.assertIn("capture.take_tail()", voice)
+        self.assertIn("capture.take_tail()", recognizer)
+        self.assertIn("self.samples.split_off(take)", background)
+        self.assertIn("std::mem::take(&mut self.samples)", background)
+        self.assertNotIn("data.to_vec()", voice + recognizer + background)
+        self.assertIn("health_nonzero_count", voice)
         self.assertNotIn("health_nonzero = Arc::new(AtomicBool", voice)
+        self.assertNotIn("health_last_nonzero = Arc::new(Mutex", voice)
         for owner in ("OWNER_IME", "OWNER_ACTIVITY", "OWNER_FOREGROUND",
                       "OWNER_RECOGNITION_SERVICE"):
             self.assertIn(owner, voice + recognizer)

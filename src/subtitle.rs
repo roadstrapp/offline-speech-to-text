@@ -20,6 +20,7 @@ use crossbeam_channel;
 use jni::objects::{JClass, JObject};
 use jni::JNIEnv;
 use once_cell::sync::Lazy;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -65,6 +66,9 @@ const FINAL_TAIL_SAMPLES: usize = 3_200;
 const SPEECH_RMS: f32 = 0.004;
 /// Segments shorter than this are dropped as noise (0.25 s).
 const MIN_SEGMENT_SAMPLES: usize = 4_000;
+/// JNI is private to the service, but keep malformed lengths from allocating
+/// an unbounded transfer buffer if Java/native versions ever diverge.
+const MAX_INPUT_BLOCK_SAMPLES: usize = SAMPLE_RATE;
 
 struct Job {
     samples: Vec<f32>,
@@ -75,10 +79,12 @@ struct Job {
 }
 
 struct LiveSubtitleState {
+    /// Reused JNI transfer buffer; avoids allocating every ~64 ms audio block.
+    input_scratch: Vec<f32>,
     /// Current un-finalized speech segment.
     segment: Vec<f32>,
     /// Rolling pre-speech audio, prepended once speech starts.
-    preroll: Vec<f32>,
+    preroll: VecDeque<f32>,
     has_speech: bool,
     /// Consecutive quiet samples at the tail of `segment`.
     silence_run: usize,
@@ -123,8 +129,9 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_LiveSubtitleService_ini
     let rtf_milli = Arc::new(AtomicU32::new(0));
 
     *LIVE_STATE.lock().unwrap() = Some(LiveSubtitleState {
-        segment: Vec::new(),
-        preroll: Vec::new(),
+        input_scratch: Vec::with_capacity(1024),
+        segment: Vec::with_capacity(MAX_SEGMENT_SAMPLES),
+        preroll: VecDeque::with_capacity(PREROLL_SAMPLES),
         has_speech: false,
         silence_run: 0,
         samples_since_tick: 0,
@@ -271,12 +278,26 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_LiveSubtitleService_pus
     data: jni::objects::JFloatArray,
     length: jni::sys::jint,
 ) {
-    let len = length as usize;
-    if len == 0 {
+    if length <= 0 {
         return;
     }
-    let mut input = vec![0.0f32; len];
+    let len = length as usize;
+    if len > MAX_INPUT_BLOCK_SAMPLES {
+        return;
+    }
+
+    let mut input = {
+        let mut guard = LIVE_STATE.lock().unwrap();
+        let Some(state) = guard.as_mut() else {
+            return;
+        };
+        std::mem::take(&mut state.input_scratch)
+    };
+    input.resize(len, 0.0);
     if env.get_float_array_region(&data, 0, &mut input).is_err() {
+        if let Some(state) = LIVE_STATE.lock().unwrap().as_mut() {
+            state.input_scratch = input;
+        }
         return;
     }
 
@@ -285,6 +306,12 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_LiveSubtitleService_pus
         Some(s) => s,
         None => return,
     };
+    push_audio_block(state, &input);
+    state.input_scratch = input;
+}
+
+fn push_audio_block(state: &mut LiveSubtitleState, input: &[f32]) {
+    let len = input.len();
 
     let stream_pos = state.total_pushed.fetch_add(len as u64, Ordering::SeqCst) + len as u64;
 
@@ -295,17 +322,14 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_LiveSubtitleService_pus
         if is_sound {
             // Speech begins: seed the segment with the pre-roll so the first
             // word isn't clipped.
-            state.segment = std::mem::take(&mut state.preroll);
+            state.segment.reserve(state.preroll.len() + input.len());
+            state.segment.extend(state.preroll.drain(..));
             state.segment.extend_from_slice(&input);
             state.has_speech = true;
             state.silence_run = 0;
             state.samples_since_tick = state.segment.len();
         } else {
-            state.preroll.extend_from_slice(&input);
-            let excess = state.preroll.len().saturating_sub(PREROLL_SAMPLES);
-            if excess > 0 {
-                state.preroll.drain(..excess);
-            }
+            crate::bounded_preroll::append(&mut state.preroll, input, PREROLL_SAMPLES);
             return;
         }
     } else {
@@ -320,7 +344,8 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_LiveSubtitleService_pus
 
     let silence_done = state.silence_run >= FINALIZE_SILENCE_SAMPLES;
     if silence_done || state.segment.len() >= MAX_SEGMENT_SAMPLES {
-        let mut samples = std::mem::take(&mut state.segment);
+        let mut samples =
+            std::mem::replace(&mut state.segment, Vec::with_capacity(MAX_SEGMENT_SAMPLES));
         if silence_done {
             // Drop most of the trailing silence; keep a short tail.
             let keep = samples.len() - state.silence_run + FINAL_TAIL_SAMPLES;

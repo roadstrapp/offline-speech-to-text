@@ -21,8 +21,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         gradle_properties = (ROOT / "gradle.properties").read_text()
         workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
         self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
-        self.assertIn("versionCode = 35", gradle)
-        self.assertIn('versionName = "0.6.3"', gradle)
+        self.assertIn("versionCode = 36", gradle)
+        self.assertIn('versionName = "0.7.0"', gradle)
         self.assertIn('providers.gradleProperty("includeBundledModel")', gradle)
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: false', gradle)
         self.assertIn('ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,', gradle)
@@ -188,7 +188,12 @@ class ReleaseConfigurationTest(unittest.TestCase):
                       source)
         native = (ROOT / "src/voice_session.rs").read_text()
         self.assertIn("capture_paused.load(Ordering::SeqCst)", native)
-        self.assertIn("capture_paused.store(paused, Ordering::SeqCst)", native)
+        self.assertIn("capture_paused.store(true, Ordering::SeqCst)", native)
+        self.assertIn("capture_paused.store(false, Ordering::SeqCst)", native)
+        self.assertIn("stream.0.pause()", native)
+        self.assertIn("MAX_INTERACTIVE_SESSION_MS", native)
+        self.assertIn("startRecording(isAutoStopEnabled())", source)
+        self.assertNotIn("setKeepScreenOn(recording)", source)
 
         window_hidden = source[
             source.index("public void onWindowHidden()") : source.index("public void onStartInput(")
@@ -253,6 +258,49 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("voice_session::cleanup_session(state);", native_ime)
         self.assertNotIn("Check microphone permissions", voice)
         self.assertIn("Error: no audio was captured. Try again.", voice)
+
+    def test_cancelled_capture_releases_ownership_before_native_inference_winds_down(self):
+        voice = (ROOT / "src/voice_session.rs").read_text()
+        service = (ROOT / "src/recog_service.rs").read_text()
+        wrapper = (ROOT / "app/src/main/java/dev/notune/transcribe/VoiceRecognitionService.java").read_text()
+        voice_cancel = voice[voice.index("pub fn cleanup_session"):
+                             voice.index("fn release_owned_session")]
+        service_cancel = service[
+            service.index("Java_dev_notune_transcribe_VoiceRecognitionService_cancelNative"):
+            service.index("Java_dev_notune_transcribe_VoiceRecognitionService_destroyNative")]
+        self.assertLess(voice_cancel.index("release_owned_session(state)"),
+                        voice_cancel.index("background.cancel()"))
+        self.assertLess(service_cancel.index("clear_session(&shared)"),
+                        service_cancel.index("std::thread::spawn"))
+        self.assertGreaterEqual(service_cancel.count("clear_session(&shared)"), 2)
+        self.assertIn("model access stays", service_cancel)
+        start = wrapper[wrapper.index("protected void onStartListening"):
+                        wrapper.index("private void startListeningFromCallerAudio")]
+        self.assertLess(start.index("cancelNative();"), start.index("mCallback = callback;"))
+        self.assertIn("private volatile Callback mCallback;", wrapper)
+        self.assertIn("if (callback != mCallback) return;", wrapper)
+        self.assertIn("if (mCallback == cb) mCallback = null;", wrapper)
+
+    def test_capture_and_live_subtitle_power_hot_paths_are_bounded(self):
+        popup = (ROOT / "app/src/main/java/dev/notune/transcribe/RecognizeActivity.java").read_text()
+        subtitles_java = (ROOT / "app/src/main/java/dev/notune/transcribe/LiveSubtitleService.java").read_text()
+        voice = (ROOT / "src/voice_session.rs").read_text()
+        service = (ROOT / "src/recog_service.rs").read_text()
+        subtitles = (ROOT / "src/subtitle.rs").read_text()
+
+        self.assertNotIn("FLAG_KEEP_SCREEN_ON", popup)
+        self.assertNotIn("FLAG_KEEP_SCREEN_ON", subtitles_java)
+        self.assertNotIn("Log.d(", subtitles_java)
+        self.assertIn("MANUAL_MONITOR_MS: u64 = 1000", voice)
+        self.assertIn("AUTO_STOP_MONITOR_MS: u64 = 250", voice)
+        self.assertIn("health_callback_count", voice)
+        self.assertNotIn("last_level_sent: Arc<Mutex", voice)
+        self.assertIn("ENDPOINT_MONITOR_MS: u64 = 250", service)
+        self.assertIn("struct AudioAnalyzer", service)
+        self.assertNotIn("last_level_sent: Mutex", service)
+        self.assertIn("input_scratch: Vec<f32>", subtitles)
+        self.assertIn("preroll: VecDeque<f32>", subtitles)
+        self.assertNotIn("let mut input = vec!", subtitles)
 
     def test_android_8_and_9_paths_guard_newer_platform_apis(self):
         activity = (ROOT / "app/src/main/java/dev/notune/transcribe/LiveSubtitleActivity.java").read_text()
@@ -525,17 +573,17 @@ class ReleaseConfigurationTest(unittest.TestCase):
 
     def test_microphone_finalization_preserves_audio_and_adds_decoder_tail(self):
         helper = (ROOT / "src/audio_finalization.rs").read_text()
-        voice = (ROOT / "src/voice_session.rs").read_text()
-        service = (ROOT / "src/recog_service.rs").read_text()
+        background = (ROOT / "src/background_transcription.rs").read_text()
         self.assertIn("FINAL_DECODE_SILENCE_MS: usize = 500", helper)
         self.assertIn("if samples.is_empty()", helper)
         self.assertIn("samples.resize", helper)
-        self.assertEqual(1, voice.count("append_final_decode_silence(&mut buffer)"))
-        self.assertEqual(1, service.count("append_final_decode_silence(&mut buffer)"))
-        self.assertLess(voice.index("if buffer.is_empty()"),
-                        voice.index("append_final_decode_silence(&mut buffer)"))
-        self.assertLess(service.index("if buffer.len() < 3200"),
-                        service.index("append_final_decode_silence(&mut buffer)"))
+        self.assertIn("append_final_decode_silence(&mut audio)", background)
+        self.assertIn("audio.truncate(original_len)", background)
+        self.assertIn("append_final_decode_silence(&mut complete)", background)
+        self.assertLess(background.index("let original_len = audio.len()"),
+                        background.index("append_final_decode_silence(&mut audio)"))
+        self.assertLess(background.index("append_final_decode_silence(&mut audio)"),
+                        background.index("audio.truncate(original_len)"))
 
     def test_fixed_amber_palette_and_launcher_icon_have_no_blue_fallback(self):
         color_files = [
@@ -579,6 +627,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("COMPACT_TO_BYTES = 48L * 1024L", diagnostic)
         self.assertIn("existingSize + line.length <= MAX_BYTES", diagnostic)
         self.assertIn("channel.position(existingSize)", diagnostic)
+        for metric in ("audio_ms", "paused_ms", "cpu_threads"):
+            self.assertIn('case "' + metric + '":', diagnostic)
         self.assertIn('R.id.btn_source', source)
         self.assertIn('R.id.btn_license', source)
         self.assertIn('Intent.ACTION_VIEW', source)
@@ -920,8 +970,11 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("VerifiedModelProvenance.isVerified", activity)
         self.assertIn('? ModelDescriptor.Capability.SUPPORTED', catalog)
         self.assertIn('model.supports(transcribe_cpp::Feature::InitialPrompt)', engine)
-        self.assertLess(engine.index("let prompt = if self.supports_initial_prompt"),
-                        engine.index("if samples.len() <= self.chunk_plan.max_run_samples()"))
+        prompt_snapshot = engine.index("let prompt = if self.supports_initial_prompt")
+        self.assertLess(prompt_snapshot,
+                        engine.index("TranscriptionJob {", prompt_snapshot))
+        self.assertIn("let mut job = self.begin_transcription()", engine)
+        self.assertIn("self.transcribe_into(&mut job, &samples)?", engine)
         self.assertIn("custom-term list", native_terms)
         self.assertNotIn("log::", native_terms)
         self.assertIn('@+id/personal_corrections_enabled', editor_layout)
@@ -944,9 +997,9 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn('NUMBER_MISMATCH', corrections)
         self.assertNotIn('DiagnosticLog', corrections)
         self.assertIn('personal_corrections::load(&self.files_dir)', engine)
-        self.assertIn('personal_corrections::apply(&text, rules)', engine)
+        self.assertIn('personal_corrections::apply(&self.text, rules)', engine)
         self.assertLess(engine.index('personal_corrections::load(&self.files_dir)'),
-                        engine.index('if samples.len() <= self.chunk_plan.max_run_samples()'))
+                        engine.index('pub(crate) fn transcribe_into'))
         self.assertIn('is_protected_token', native_corrections)
         self.assertIn('inside_double_quote', native_corrections)
         self.assertNotIn('log::', native_corrections)

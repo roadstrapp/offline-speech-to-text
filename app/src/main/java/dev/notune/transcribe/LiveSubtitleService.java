@@ -88,12 +88,10 @@ public class LiveSubtitleService extends Service {
             int code = intent.getIntExtra("code", 0);
             Intent data = intent.getParcelableExtra("data");
             
-            Log.d(TAG, "Received start command. Code: " + code + ", Data: " + data);
-            
             if (code != 0 && data != null) {
                 startSubtitleSession(code, data);
             } else {
-                Log.e(TAG, "Missing or invalid extras for media projection. Code: " + code + ", Data: " + data);
+                Log.e(TAG, "Missing or invalid media projection extras");
                 stopSelf();
             }
         } else if (ACTION_STOP.equals(intent.getAction())) {
@@ -188,8 +186,7 @@ public class LiveSubtitleService extends Service {
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 layoutFlag,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | 
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN |
-                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT);
 
         params.gravity = Gravity.BOTTOM;
@@ -247,7 +244,6 @@ public class LiveSubtitleService extends Service {
 
     @RequiresApi(Build.VERSION_CODES.Q)
     private void startAudioCapture() {
-        Log.d(TAG, "Starting audio capture. MediaProjection: " + mMediaProjection);
         if (mMediaProjection == null) {
             Log.e(TAG, "MediaProjection is null, cannot capture audio");
             return;
@@ -300,8 +296,6 @@ public class LiveSubtitleService extends Service {
             }
             
             isRecording = true;
-            Log.d(TAG, "AudioRecord started successfully");
-            
             mAudioThread = new Thread(this::audioLoop);
             mAudioThread.start();
             
@@ -312,20 +306,12 @@ public class LiveSubtitleService extends Service {
     }
 
     private void audioLoop() {
-        Log.d(TAG, "Starting audio loop");
         int bufferSize = 1024; // Process in small chunks
         short[] buffer = new short[bufferSize];
         float[] floatBuffer = new float[bufferSize];
-        int totalRead = 0;
-
         while (isRecording) {
             int read = mAudioRecord.read(buffer, 0, bufferSize);
             if (read > 0) {
-                totalRead += read;
-                if (totalRead % (16000 * 5) < read) { // Log approx every 5 seconds of audio
-                    Log.d(TAG, "Reading audio... Total samples: " + totalRead);
-                }
-                
                 // Convert short to float
                 for (int i = 0; i < read; i++) {
                     floatBuffer[i] = buffer[i] / 32768.0f;
@@ -346,7 +332,6 @@ public class LiveSubtitleService extends Service {
                 }
             }
         }
-        Log.d(TAG, "Audio loop finished");
     }
 
     // Transcript state: finalized text plus the partial hypothesis for the

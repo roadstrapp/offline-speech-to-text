@@ -101,6 +101,8 @@ Offline Speech to Text currently reports ready, beginning-of-speech, RMS, end-of
 
 When the user enables exact personal-dictionary corrections, Offline Speech to Text applies them once to the final assembled transcript before returning it through any activity, recognition-service, file, subtitle, long-recording, or IME surface. Integrators do not need a separate correction pass. Whisper recognition hints affect only capable Whisper backends; exact corrections are post-processing and therefore also work with Parakeet. Neither mode exposes dictionary contents to callers or diagnostic logs.
 
+Long caller-audio sessions remain one ordinary recognition request. OSTT may decode completed, model-aware chunks while the pipe is still open, but it retains their source audio and ordering internally and calls the standard final `onResults` only after the writer closes or the caller stops listening. Do not enable `EXTRA_SEGMENTED_SESSION` or concatenate partial callbacks for this optimization. `cancel()` discards the staged work; a failed speculative chunk is retried from the retained complete recording before OSTT reports an error.
+
 ### Scoped Kotlin session
 
 The following core is intentionally scoped to an API 33+ activity that is visible, already has `RECORD_AUDIO`, already resolved an eligible component, and already passed the capability preflight above. It uses only public Android APIs. The caller supplies `isOriginCurrent` so a late result cannot enter a different account, conversation, editor, or draft revision.

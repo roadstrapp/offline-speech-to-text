@@ -746,6 +746,19 @@ public final class BehaviorTest {
         assertEquals(true, first.contains("app_start process=app"),
                 "allowlisted metadata is recorded while enabled");
 
+        DiagnosticLog.event(filesDir.toFile(), "timing",
+                "process=ime,audio_ms=11000,duration_ms=900,cpu_threads=2");
+        DiagnosticLog.event(filesDir.toFile(), "timing",
+                "process=ime,duration_ms=12000,paused_ms=1500");
+        assertEquals(true, DiagnosticLog.awaitIdleForTest(5_000),
+                "content-free power diagnostics drain");
+        String metrics = Files.readString(filesDir.resolve("diagnostic.log"),
+                StandardCharsets.UTF_8);
+        assertEquals(true, metrics.contains("audio_ms=11000,duration_ms=900,cpu_threads=2"),
+                "inference power metadata is allowlisted");
+        assertEquals(true, metrics.contains("duration_ms=12000,paused_ms=1500"),
+                "capture power metadata is allowlisted");
+
         DiagnosticLog.event(filesDir.toFile(), "transcript", "secret words");
         DiagnosticLog.event(filesDir.toFile(), "ime_state", "editor=secret words");
         DiagnosticLog.event(filesDir.toFile(), "ime_state", "state=secret");

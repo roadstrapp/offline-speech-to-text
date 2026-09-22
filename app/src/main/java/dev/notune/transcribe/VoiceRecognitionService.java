@@ -47,7 +47,7 @@ public class VoiceRecognitionService extends RecognitionService {
     }
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private Callback mCallback;
+    private volatile Callback mCallback;
 
     @Override
     public void onCreate() {
@@ -61,6 +61,16 @@ public class VoiceRecognitionService extends RecognitionService {
 
     @Override
     protected void onStartListening(Intent recognizerIntent, Callback callback) {
+        // Android can deliver a replacement request before the dead caller's
+        // cancellation reaches us (for example during a fast app/editor
+        // switch). Retire native work first so the new request never receives
+        // a false ERROR_AUDIO from the stale process-wide owner.
+        mCallback = null;
+        try {
+            cancelNative();
+        } catch (Throwable t) {
+            Log.e(TAG, "stale-session cleanup failed", t);
+        }
         mCallback = callback;
 
         ParcelFileDescriptor callerAudio = callerAudioSource(recognizerIntent);
@@ -173,6 +183,7 @@ public class VoiceRecognitionService extends RecognitionService {
 
     @Override
     protected void onStopListening(Callback callback) {
+        if (callback != mCallback) return;
         try {
             stopListening();
         } catch (Throwable t) {
@@ -182,6 +193,8 @@ public class VoiceRecognitionService extends RecognitionService {
 
     @Override
     protected void onCancel(Callback callback) {
+        if (callback != mCallback) return;
+        mCallback = null;
         try {
             cancelNative();
         } catch (Throwable t) {
@@ -202,56 +215,56 @@ public class VoiceRecognitionService extends RecognitionService {
     // --- Callbacks invoked from native code (any thread) ---------------------
 
     public void onReadyForSpeech() {
+        Callback cb = mCallback;
+        if (cb == null) return;
         mainHandler.post(() -> {
-            Callback cb = mCallback;
-            if (cb == null) return;
             try { cb.readyForSpeech(new Bundle()); } catch (RemoteException ignored) {}
         });
     }
 
     public void onBeginningOfSpeech() {
+        Callback cb = mCallback;
+        if (cb == null) return;
         mainHandler.post(() -> {
-            Callback cb = mCallback;
-            if (cb == null) return;
             try { cb.beginningOfSpeech(); } catch (RemoteException ignored) {}
         });
     }
 
     public void onRmsChanged(float rmsdB) {
+        Callback cb = mCallback;
+        if (cb == null) return;
         mainHandler.post(() -> {
-            Callback cb = mCallback;
-            if (cb == null) return;
             try { cb.rmsChanged(rmsdB); } catch (RemoteException ignored) {}
         });
     }
 
     public void onEndOfSpeech() {
+        Callback cb = mCallback;
+        if (cb == null) return;
         mainHandler.post(() -> {
-            Callback cb = mCallback;
-            if (cb == null) return;
             try { cb.endOfSpeech(); } catch (RemoteException ignored) {}
         });
     }
 
     public void onResults(String text) {
+        Callback cb = mCallback;
+        if (cb == null) return;
         mainHandler.post(() -> {
-            Callback cb = mCallback;
-            if (cb == null) return;
             ArrayList<String> hypotheses = new ArrayList<>();
             hypotheses.add(text);
             Bundle bundle = new Bundle();
             bundle.putStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION, hypotheses);
             try { cb.results(bundle); } catch (RemoteException ignored) {}
-            mCallback = null;
+            if (mCallback == cb) mCallback = null;
         });
     }
 
     public void onError(int errorCode) {
+        Callback cb = mCallback;
+        if (cb == null) return;
         mainHandler.post(() -> {
-            Callback cb = mCallback;
-            if (cb == null) return;
             try { cb.error(errorCode); } catch (RemoteException ignored) {}
-            mCallback = null;
+            if (mCallback == cb) mCallback = null;
         });
     }
 
@@ -259,6 +272,14 @@ public class VoiceRecognitionService extends RecognitionService {
     public void onStatusUpdate(String status) {
         DiagnosticLog.event(getFilesDir(), "service_state",
                 "state=" + NativeStatus.diagnosticLabel(status));
+    }
+
+    /** Content-free timing emitted only when the user opted into diagnostics. */
+    public void onTranscriptionMetrics(long audioMs, long computeMs, int threads) {
+        DiagnosticLog.event(getFilesDir(), "timing",
+                "process=service,audio_ms=" + Math.max(0L, audioMs)
+                        + ",duration_ms=" + Math.max(0L, computeMs)
+                        + ",cpu_threads=" + Math.max(0, threads));
     }
 
     private void safeError(int errorCode) {

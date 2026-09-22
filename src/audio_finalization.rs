@@ -5,12 +5,18 @@
 const FINAL_DECODE_SILENCE_MS: usize = 500;
 const MODEL_SAMPLE_RATE_HZ: usize = 16_000;
 
+pub(crate) const fn final_decode_silence_samples() -> usize {
+    MODEL_SAMPLE_RATE_HZ * FINAL_DECODE_SILENCE_MS / 1000
+}
+
 pub(crate) fn append_final_decode_silence(samples: &mut Vec<f32>) {
     if samples.is_empty() {
         return;
     }
-    let silence_samples = MODEL_SAMPLE_RATE_HZ * FINAL_DECODE_SILENCE_MS / 1000;
-    samples.resize(samples.len().saturating_add(silence_samples), 0.0);
+    samples.resize(
+        samples.len().saturating_add(final_decode_silence_samples()),
+        0.0,
+    );
 }
 
 #[cfg(test)]
@@ -27,7 +33,7 @@ mod tests {
         assert_eq!(&samples[..original.len()], original.as_slice());
         assert_eq!(
             samples.len(),
-            original.len() + MODEL_SAMPLE_RATE_HZ * FINAL_DECODE_SILENCE_MS / 1000
+            original.len() + final_decode_silence_samples()
         );
         assert!(samples[original.len()..]
             .iter()

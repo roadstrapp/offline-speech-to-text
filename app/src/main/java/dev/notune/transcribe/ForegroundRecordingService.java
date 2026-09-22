@@ -423,6 +423,13 @@ public final class ForegroundRecordingService extends Service {
     }
 
     public void onAudioLevel(float ignored) { }
+    /** Content-free timing emitted only when the user opted into diagnostics. */
+    public void onTranscriptionMetrics(long audioMs, long computeMs, int threads) {
+        DiagnosticLog.event(getFilesDir(), "timing",
+                "process=service,audio_ms=" + Math.max(0L, audioMs)
+                        + ",duration_ms=" + Math.max(0L, computeMs)
+                        + ",cpu_threads=" + Math.max(0, threads));
+    }
     public void onAutoStop() {
         main.post(() -> {
             if (destroyed) return;

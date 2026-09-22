@@ -1,6 +1,9 @@
 pub mod assets;
 pub mod audio;
 mod audio_finalization;
+mod background_chunking;
+mod background_transcription;
+mod bounded_preroll;
 pub mod custom_terms;
 pub mod engine;
 pub mod foreground_recording;

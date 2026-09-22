@@ -1,0 +1,3 @@
+Faster long dictation with model-aware background processing while you speak.
+
+Long recordings now finish sooner without dropping audio: OSTT keeps the original recording until the final result and automatically retries the complete message if background processing cannot finish. Rapid app or editor changes also release an old recording immediately, avoiding false microphone errors when the next transcription starts.

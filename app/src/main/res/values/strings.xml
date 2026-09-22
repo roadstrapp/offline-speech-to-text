@@ -53,7 +53,7 @@
     <string name="setting_record_background_desc">Keep recording when the voice keyboard is hidden; the text is inserted when you return</string>
 
     <string name="setting_auto_stop">Stop after silence</string>
-    <string name="setting_auto_stop_desc">End the voice input popup automatically ~2 seconds after you stop speaking</string>
+    <string name="setting_auto_stop_desc">Stop and transcribe the voice keyboard or popup ~2 seconds after you finish speaking</string>
 
     <string name="setting_recognize_panel_position">Voice panel position</string>
     <string name="setting_recognize_panel_position_desc">Bottom is roomier. A side uses less of the current app and is easier to reach one-handed.</string>
@@ -162,7 +162,7 @@
     <string name="models_translate_desc">For models that support it (e.g. Whisper): speech in any language becomes English text, including in live subtitles. Ignored by other models.</string>
     <string name="btn_models">Manage speech models</string>
     <string name="models_threads_section">CPU threads</string>
-    <string name="models_threads_desc">“Automatic” is recommended. Try another value only if transcription is slow.</string>
+    <string name="models_threads_desc">“Automatic” balances speed and battery use. Choose more threads only when lower latency matters more than power.</string>
     <string name="models_threads_auto">Automatic</string>
     <string name="models_recommended_section">Recommended for this device</string>
     <string name="models_catalog_section">All compatible models</string>
@@ -175,10 +175,10 @@
     <string name="models_family_parakeet">Fast CPU transcription. The recommended v3 model covers 25 European languages; primeLine is tuned for German at the same size and speed. Most other variants are English-only. No speech translation.</string>
     <string name="models_family_whisper">Broad multilingual coverage, language detection, optional English translation, and personal-dictionary hints. Larger models trade speed and memory for accuracy.</string>
     <string name="models_family_canary">Multilingual transcription and speech translation. Larger variants need substantially more memory.</string>
-    <string name="models_family_moonshine">Compact English models, including streaming variants. OSTT’s keyboard still records first, then transcribes.</string>
+    <string name="models_family_moonshine">Compact English models, including streaming variants. OSTT processes safe completed pieces while you continue speaking and inserts the ordered result after you stop.</string>
     <string name="models_family_gigaam">Russian-focused transcription with compact CTC and RNN-T variants.</string>
     <string name="models_family_medasr">Compact English medical-speech specialist. Prefer a general family for ordinary dictation.</string>
-    <string name="models_family_nemotron">Streaming-oriented models; the multilingual variant supports language prompting. OSTT’s keyboard still records first, then transcribes.</string>
+    <string name="models_family_nemotron">Streaming-oriented models; the multilingual variant supports language prompting. OSTT processes safe completed pieces while you continue speaking and inserts the ordered result after you stop.</string>
     <string name="models_family_specialist">Specialist model family. Language and feature support varies by model; review its source details before choosing it over the main recommendation.</string>
     <string name="models_size_compact">Compact</string>
     <string name="models_size_phone">Phone-friendly</string>
@@ -195,7 +195,7 @@
     <string name="models_goal_translate">Translate speech to English</string>
     <string name="models_goal_quality">Higher accuracy, slower</string>
     <string name="models_guide_section">How to choose</string>
-    <string name="models_guide_body">Parakeet is the fast default for 25 European languages. Whisper covers more languages and can translate to English; larger Whisper models usually improve accuracy but use more memory and run slower. Streaming-labelled models help streaming apps, but this keyboard records then transcribes. Specialist families may target particular languages or domains—check their source page. Size guide: under 128 MB is compact; 128–768 MB is phone-friendly; 768 MB–2 GB is demanding; over 2 GB is mainly for high-memory devices.</string>
+    <string name="models_guide_body">Parakeet is the fast default for 25 European languages. Whisper covers more languages and can translate to English; larger Whisper models usually improve accuracy but use more memory and run slower. For long dictation, OSTT begins processing completed pieces while recording continues, then inserts one ordered final result after you stop. Specialist families may target particular languages or domains—check their source page. Size guide: under 128 MB is compact; 128–768 MB is phone-friendly; 768 MB–2 GB is demanding; over 2 GB is mainly for high-memory devices.</string>
     <string name="models_recommendation_checking">Checking compatibility…</string>
     <string name="models_recommendation_ready">%1$s · %2$s · verified</string>
     <string name="models_recommendation_ready_details">%1$s · %2$s · %3$s · about %4$s RAM</string>
@@ -319,7 +319,7 @@
     <string name="section_privacy_about">Privacy &amp; About</string>
     <string name="privacy_about_body">Audio and transcription stay on this device. No transcription history is kept and no analytics is used. Network access begins only after you choose a model download or open a source link.</string>
     <string name="setting_diagnostic_logging">Diagnostic logging</string>
-    <string name="setting_diagnostic_logging_desc">Off by default. When enabled, stores only app, model, timing, resource, error-code, lifecycle, keyboard, and notification metadata in private app storage, capped at 64 KB. It never includes audio, recognized text, editor text, prompts, or dictionary content.</string>
+    <string name="setting_diagnostic_logging_desc">Off by default. When enabled, stores only app, model, capture/pause duration, inference duration, CPU-thread count, resource, error-code, lifecycle, keyboard, and notification metadata in private app storage, capped at 64 KB. It never includes audio, recognized text, editor text, prompts, or dictionary content.</string>
     <string name="diagnostic_log_clear">Clear diagnostic log</string>
     <string name="diagnostic_log_clear_desc">Deletes all retained diagnostic metadata immediately.</string>
     <string name="diagnostic_log_cleared">Diagnostic log deleted</string>

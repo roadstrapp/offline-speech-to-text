@@ -175,6 +175,9 @@ public final class DiagnosticLog {
                     break;
                 case "elapsed_ms":
                 case "duration_ms":
+                case "audio_ms":
+                case "paused_ms":
+                case "cpu_threads":
                 case "memory_kb":
                     safe = value.matches("[0-9]{1,12}");
                     break;

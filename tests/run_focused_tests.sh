@@ -66,9 +66,17 @@ rustc --edition 2021 --test "$ROOT/tests/LongAudioChunkingTest.rs" \
   -o "$OUT/long_audio_chunking_test"
 "$OUT/long_audio_chunking_test"
 
+rustc --edition 2021 --test "$ROOT/tests/BackgroundChunkingTest.rs" \
+  -o "$OUT/background_chunking_test"
+"$OUT/background_chunking_test"
+
 rustc --edition 2021 --test "$ROOT/src/audio_finalization.rs" \
   -o "$OUT/audio_finalization_test"
 "$OUT/audio_finalization_test"
+
+rustc --edition 2021 --test "$ROOT/src/bounded_preroll.rs" \
+  -o "$OUT/bounded_preroll_test"
+"$OUT/bounded_preroll_test"
 
 rustc --edition 2021 --test "$ROOT/tests/CustomTermsTest.rs" \
   -o "$OUT/custom_terms_test"

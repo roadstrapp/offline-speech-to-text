@@ -11,17 +11,18 @@
 use std::fs::File;
 use std::io::{ErrorKind, Read};
 use std::os::fd::FromRawFd;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use jni::objects::{GlobalRef, JClass, JObject};
+use jni::objects::{GlobalRef, JClass, JObject, JValue};
 use jni::sys::jint;
 use jni::JNIEnv;
 use once_cell::sync::Lazy;
 
-use crate::audio_finalization::append_final_decode_silence;
+use crate::background_chunking::CaptureBuffer;
+use crate::background_transcription::{BackgroundTranscriber, Completion};
 use crate::engine;
 use crate::voice_session::{
     claim_session_owner, release_session_owner, SendStream, OWNER_RECOGNITION_SERVICE,
@@ -44,7 +45,8 @@ const NO_SPEECH_TIMEOUT_MS: u64 = 7000;
 /// Hard cap on a single utterance (the engine internally chunks long audio).
 const MAX_SESSION_MS: u64 = 60000;
 /// Throttle interval for `rmsChanged` UI callbacks.
-const LEVEL_UPDATE_MS: u64 = 50;
+const LEVEL_UPDATE_MS: u64 = 100;
+const ENDPOINT_MONITOR_MS: u64 = 250;
 
 // --- Caller-supplied audio (RecognizerIntent.EXTRA_AUDIO_SOURCE) --------------
 /// Rate the model runs at; caller audio is resampled to it.
@@ -68,10 +70,11 @@ const ERROR_NO_MATCH: i32 = 7;
 /// finaliser. Deliberately does NOT hold the cpal stream, to avoid an Arc cycle
 /// (the stream's callback holds an `Arc<Endpoint>`).
 struct Endpoint {
-    audio_buffer: Mutex<Vec<f32>>,
-    last_voice: Mutex<Instant>,
-    noise_floor: Mutex<f32>,
-    last_level_sent: Mutex<Instant>,
+    audio_buffer: Mutex<CaptureBuffer>,
+    background: Arc<BackgroundTranscriber>,
+    /// Milliseconds since `started_at`; this avoids timing mutexes in the
+    /// latency-sensitive audio callback.
+    last_voice_ms: AtomicU64,
     speech_started: AtomicBool,
     finalized: AtomicBool,
     cancelled: AtomicBool,
@@ -82,6 +85,22 @@ struct Endpoint {
     caller_endpointed: bool,
     jvm: Arc<jni::JavaVM>,
     target: GlobalRef,
+}
+
+/// Analysis state has exactly one producer per session: either the microphone
+/// callback or the caller-audio reader. It therefore stays local and lock-free.
+struct AudioAnalyzer {
+    noise_floor: f32,
+    last_level_sent: Instant,
+}
+
+impl AudioAnalyzer {
+    fn new() -> Self {
+        Self {
+            noise_floor: 0.0,
+            last_level_sent: Instant::now(),
+        }
+    }
 }
 
 struct Session {
@@ -109,6 +128,19 @@ fn call_results(env: &mut JNIEnv, obj: &JObject, text: &str) {
     if let Ok(jtxt) = env.new_string(text) {
         let _ = env.call_method(obj, "onResults", "(Ljava/lang/String;)V", &[(&jtxt).into()]);
     }
+}
+
+fn call_metrics(env: &mut JNIEnv, obj: &JObject, audio_ms: u64, compute_ms: u64) {
+    let _ = env.call_method(
+        obj,
+        "onTranscriptionMetrics",
+        "(JJI)V",
+        &[
+            JValue::Long(audio_ms as i64),
+            JValue::Long(compute_ms as i64),
+            JValue::Int(engine::active_thread_count()),
+        ],
+    );
 }
 
 // --- JNI entry points ---------------------------------------------------------
@@ -179,9 +211,10 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
     };
 
     let cb_shared = shared.clone();
+    let mut analyzer = AudioAnalyzer::new();
     let stream = device.build_input_stream(
         &config,
-        move |data: &[f32], _: &_| audio_callback(&cb_shared, data),
+        move |data: &[f32], _: &_| audio_callback(&cb_shared, data, &mut analyzer),
         |e| log::error!("RecognitionService stream error: {}", e),
         None,
     );
@@ -299,17 +332,44 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
     _env: JNIEnv,
     _class: JClass,
 ) {
-    let mut guard = SESSION.lock().unwrap();
-    let mut release = true;
-    if let Some(session) = guard.as_ref() {
-        session.shared.cancelled.store(true, Ordering::SeqCst);
-        session.shared.finalized.store(true, Ordering::SeqCst);
-        *session.stream.lock().unwrap() = None;
-        release = !session.shared.inference_running.load(Ordering::SeqCst);
+    let session = SESSION
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|session| (session.shared.clone(), session.stream.clone()));
+    let Some((shared, stream)) = session else {
+        return;
+    };
+    shared.cancelled.store(true, Ordering::SeqCst);
+    if shared
+        .finalized
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        // The caller may disappear just after EOF moved the request into
+        // finalization. The cancellation flag above suppresses that old
+        // result; detach its process-wide ownership as well so a replacement
+        // request does not see a false ERROR_AUDIO while native inference
+        // finishes behind the engine mutex.
+        clear_session(&shared);
+        return;
     }
-    if release {
-        *guard = None;
-        release_session_owner(OWNER_RECOGNITION_SERVICE);
+    shared.inference_running.store(true, Ordering::SeqCst);
+    *stream.lock().unwrap() = None;
+    let completion = shared.background.cancel();
+    // Cancellation has no result to protect. Release capture ownership now so
+    // an app/editor switch can start its replacement request immediately. A
+    // non-interruptible native run may still wind down, but model access stays
+    // serialized by the engine mutex and must not masquerade as an audio or
+    // permission failure for the next caller.
+    clear_session(&shared);
+    if let Some(completion) = completion {
+        std::thread::spawn(move || {
+            let _ = completion.recv();
+            shared.inference_running.store(false, Ordering::SeqCst);
+        });
+    } else {
+        shared.inference_running.store(false, Ordering::SeqCst);
     }
 }
 
@@ -347,11 +407,11 @@ fn begin_session(
     }
 
     let now = Instant::now();
+    let background = Arc::new(BackgroundTranscriber::start(jvm.clone(), target.clone()));
     let shared = Arc::new(Endpoint {
-        audio_buffer: Mutex::new(Vec::new()),
-        last_voice: Mutex::new(now),
-        noise_floor: Mutex::new(0.0),
-        last_level_sent: Mutex::new(now),
+        audio_buffer: Mutex::new(CaptureBuffer::default()),
+        background,
+        last_voice_ms: AtomicU64::new(0),
         speech_started: AtomicBool::new(false),
         finalized: AtomicBool::new(false),
         cancelled: AtomicBool::new(false),
@@ -432,6 +492,7 @@ fn read_caller_audio(
     let mut carry: Vec<u8> = Vec::new();
     let mut mono: Vec<f32> = Vec::new();
     let mut frames: Vec<f32> = Vec::new();
+    let mut analyzer = AudioAnalyzer::new();
 
     while wait_readable(fd, &shared) {
         match source.read(&mut raw) {
@@ -446,7 +507,7 @@ fn read_caller_audio(
                 frames.clear();
                 resampler.push(&mono, &mut frames);
                 if !frames.is_empty() {
-                    audio_callback(&shared, &frames);
+                    audio_callback(&shared, &frames, &mut analyzer);
                 }
             }
             Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
@@ -684,12 +745,10 @@ mod tests {
 
 // --- Audio + endpointing ------------------------------------------------------
 
-fn audio_callback(shared: &Arc<Endpoint>, data: &[f32]) {
+fn audio_callback(shared: &Arc<Endpoint>, data: &[f32], analyzer: &mut AudioAnalyzer) {
     if shared.finalized.load(Ordering::SeqCst) {
         return;
     }
-
-    shared.audio_buffer.lock().unwrap().extend_from_slice(data);
 
     // RMS -> smoothed level in 0..1 (same scaling as voice_session).
     let mut sum = 0.0f32;
@@ -699,11 +758,25 @@ fn audio_callback(shared: &Arc<Endpoint>, data: &[f32]) {
     let rms = (sum / (data.len().max(1) as f32)).sqrt();
     let level = (rms * 6.0).clamp(0.0, 1.0);
 
-    let floor = *shared.noise_floor.lock().unwrap();
-    let is_speech = level > MIN_SPEECH_LEVEL && level > floor + SPEECH_MARGIN;
+    let is_speech = level > MIN_SPEECH_LEVEL && level > analyzer.noise_floor + SPEECH_MARGIN;
+
+    let chunk =
+        shared
+            .audio_buffer
+            .lock()
+            .unwrap()
+            .push(data, is_speech, engine::active_chunk_plan());
+    if let Some(chunk) = chunk {
+        if let Err(chunk) = shared.background.submit(chunk) {
+            shared.audio_buffer.lock().unwrap().restore_front(chunk);
+        }
+    }
 
     if is_speech {
-        *shared.last_voice.lock().unwrap() = Instant::now();
+        shared.last_voice_ms.store(
+            shared.started_at.elapsed().as_millis() as u64,
+            Ordering::Relaxed,
+        );
         // First detected speech -> notify beginningOfSpeech exactly once.
         if shared
             .speech_started
@@ -716,15 +789,12 @@ fn audio_callback(shared: &Arc<Endpoint>, data: &[f32]) {
         }
     } else {
         // Slowly adapt the noise floor while no speech is present.
-        let mut nf = shared.noise_floor.lock().unwrap();
-        *nf = *nf * 0.95 + level * 0.05;
+        analyzer.noise_floor = analyzer.noise_floor * 0.95 + level * 0.05;
     }
 
     // Throttled mic-level updates for the keyboard's waveform UI.
-    let mut last = shared.last_level_sent.lock().unwrap();
-    if last.elapsed() >= Duration::from_millis(LEVEL_UPDATE_MS) {
-        *last = Instant::now();
-        drop(last);
+    if analyzer.last_level_sent.elapsed() >= Duration::from_millis(LEVEL_UPDATE_MS) {
+        analyzer.last_level_sent = Instant::now();
         if let Ok(mut env) = shared.jvm.attach_current_thread() {
             call_rms(&mut env, shared.target.as_obj(), level * 10.0);
         }
@@ -733,7 +803,7 @@ fn audio_callback(shared: &Arc<Endpoint>, data: &[f32]) {
 
 fn endpoint_monitor(shared: Arc<Endpoint>, stream: Arc<Mutex<Option<SendStream>>>) {
     loop {
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(ENDPOINT_MONITOR_MS));
 
         if shared.cancelled.load(Ordering::SeqCst) || shared.finalized.load(Ordering::SeqCst) {
             return;
@@ -741,7 +811,10 @@ fn endpoint_monitor(shared: Arc<Endpoint>, stream: Arc<Mutex<Option<SendStream>>
 
         let elapsed = shared.started_at.elapsed();
         let speech = shared.speech_started.load(Ordering::SeqCst);
-        let silence = shared.last_voice.lock().unwrap().elapsed();
+        let silence = Duration::from_millis(
+            (elapsed.as_millis() as u64)
+                .saturating_sub(shared.last_voice_ms.load(Ordering::Relaxed)),
+        );
 
         // A caller streaming its own audio decides when the utterance ends; only the hard cap,
         // which bounds how much audio a session may buffer, still applies to it.
@@ -775,8 +848,10 @@ fn finalize(shared: Arc<Endpoint>, stream: Arc<Mutex<Option<SendStream>>>) {
     // Stop the microphone (also drops the audio callback's Arc<Endpoint>).
     *stream.lock().unwrap() = None;
 
-    // Transfer ownership to inference without a full audio-buffer copy.
-    let mut buffer = std::mem::take(&mut *shared.audio_buffer.lock().unwrap());
+    let (tail, total_samples) = {
+        let mut capture = shared.audio_buffer.lock().unwrap();
+        (capture.take_tail(), capture.total_samples())
+    };
     let speech = shared.speech_started.load(Ordering::SeqCst);
 
     let mut env = match shared.jvm.attach_current_thread() {
@@ -794,34 +869,34 @@ fn finalize(shared: Arc<Endpoint>, stream: Arc<Mutex<Option<SendStream>>>) {
     }
 
     // ~0.2s minimum of audio to bother transcribing.
-    if buffer.len() < 3200 {
+    if total_samples < 3200 {
         if !shared.cancelled.load(Ordering::SeqCst) {
             call_error(&mut env, target, ERROR_NO_MATCH);
+        }
+        if let Some(completion) = shared.background.cancel() {
+            let _ = completion.recv();
         }
         shared.inference_running.store(false, Ordering::SeqCst);
         clear_session(&shared);
         return;
     }
 
-    // Give offline decoders right context for their final tokens without
-    // extending microphone capture or retaining any additional spoken audio.
-    append_final_decode_silence(&mut buffer);
-
-    if engine::get_engine().is_none() {
-        if engine::ensure_loaded(&mut env, target).is_err() {
-            if !shared.cancelled.load(Ordering::SeqCst) {
-                call_error(&mut env, target, ERROR_SERVER);
-            }
-            shared.inference_running.store(false, Ordering::SeqCst);
-            clear_session(&shared);
-            return;
+    let Some(completion) = shared.background.finish(tail, total_samples) else {
+        if !shared.cancelled.load(Ordering::SeqCst) {
+            call_error(&mut env, target, ERROR_SERVER);
         }
-    }
-
-    match engine::get_engine() {
-        Some(eng_arc) => {
-            let res = engine::transcribe_shared(&eng_arc, buffer);
-            match res {
+        shared.inference_running.store(false, Ordering::SeqCst);
+        clear_session(&shared);
+        return;
+    };
+    match completion.recv() {
+        Ok(Completion::Finished {
+            text,
+            audio_ms,
+            compute_ms,
+        }) => {
+            call_metrics(&mut env, target, audio_ms, compute_ms);
+            match text {
                 _ if shared.cancelled.load(Ordering::SeqCst) => {}
                 Ok(text) if !text.trim().is_empty() => call_results(&mut env, target, &text),
                 Ok(_) => call_error(&mut env, target, ERROR_NO_MATCH),
@@ -831,10 +906,11 @@ fn finalize(shared: Arc<Endpoint>, stream: Arc<Mutex<Option<SendStream>>>) {
                 }
             }
         }
-        None if !shared.cancelled.load(Ordering::SeqCst) => {
+        Ok(Completion::Cancelled) => {}
+        Err(_) if !shared.cancelled.load(Ordering::SeqCst) => {
             call_error(&mut env, target, ERROR_SERVER)
         }
-        None => {}
+        Err(_) => {}
     }
 
     shared.inference_running.store(false, Ordering::SeqCst);
