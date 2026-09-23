@@ -8,12 +8,17 @@ use std::collections::HashSet;
 use std::path::Path;
 
 pub(crate) const FILE_NAME: &str = "custom_terms";
-const MAX_FILE_BYTES: u64 = 4096;
-const MAX_TERMS: usize = 32;
+const MAX_FILE_BYTES: u64 = 65536;
+const MAX_TERMS: usize = 128;
 const MAX_TERM_CHARS: usize = 80;
 const MAX_PROMPT_BYTES: usize = 200;
 
 pub(crate) fn load_prompt(path: &Path) -> Option<String> {
+    let terms = load_terms(path)?;
+    compile_prompt(&terms)
+}
+
+pub(crate) fn load_terms(path: &Path) -> Option<Vec<String>> {
     let metadata = match std::fs::metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
@@ -26,13 +31,18 @@ pub(crate) fn load_prompt(path: &Path) -> Option<String> {
         Ok(raw) => raw,
         Err(_) => return None,
     };
-    match compile_prompt_text(&raw) {
-        Ok(prompt) => prompt,
-        Err(()) => None,
-    }
+    parse_terms(&raw).ok().filter(|terms| !terms.is_empty())
 }
 
+#[cfg(test)]
 pub(crate) fn compile_prompt_text(raw: &str) -> Result<Option<String>, ()> {
+    Ok(compile_prompt(&parse_terms(raw)?))
+}
+
+fn parse_terms(raw: &str) -> Result<Vec<String>, ()> {
+    if raw.len() as u64 > MAX_FILE_BYTES {
+        return Err(());
+    }
     let mut terms = Vec::new();
     let mut seen = HashSet::new();
     for line in raw.lines() {
@@ -54,12 +64,24 @@ pub(crate) fn compile_prompt_text(raw: &str) -> Result<Option<String>, ()> {
             }
         }
     }
-    if terms.is_empty() {
-        return Ok(None);
+    Ok(terms)
+}
+
+fn compile_prompt(terms: &[String]) -> Option<String> {
+    let mut prompt = String::new();
+    for term in terms {
+        let next_len = prompt.len() + if prompt.is_empty() { 0 } else { 2 } + term.len();
+        if next_len > MAX_PROMPT_BYTES {
+            break;
+        }
+        if !prompt.is_empty() {
+            prompt.push_str(", ");
+        }
+        prompt.push_str(term);
     }
-    let prompt = terms.join(", ");
-    if prompt.len() > MAX_PROMPT_BYTES {
-        return Err(());
+    if prompt.is_empty() {
+        None
+    } else {
+        Some(prompt)
     }
-    Ok(Some(prompt))
 }

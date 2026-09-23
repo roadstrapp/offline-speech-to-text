@@ -16,6 +16,8 @@
     <color name="colorOnTertiaryContainer">#261900</color>
     <color name="colorSurface">#F8F9FA</color>
     <color name="colorOnSurface">#212121</color>
+    <color name="colorSurfaceInverse">#29251E</color>
+    <color name="colorOnSurfaceInverse">#F2EEE6</color>
     <color name="colorSurfaceVariant">#F2E9D6</color>
     <color name="colorOnSurfaceVariant">#4B463D</color>
     <color name="colorSurfaceContainerLowest">#FFFFFF</color>

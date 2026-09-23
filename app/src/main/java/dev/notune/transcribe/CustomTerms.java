@@ -24,14 +24,14 @@ import java.util.Set;
  */
 final class CustomTerms {
     static final String FILE_NAME = "custom_terms";
-    static final int MAX_TERMS = 32;
+    static final int MAX_TERMS = 128;
     static final int MAX_TERM_CODE_POINTS = 80;
     // Whisper exposes a 223-token previous-context window. A byte-level BPE
     // cannot require more tokens than input bytes, so this leaves headroom for
     // Whisper's prompt marker while remaining deterministic without shipping
     // a second tokenizer in the Android UI process.
     static final int MAX_PROMPT_UTF8_BYTES = 200;
-    private static final int MAX_FILE_BYTES = 4096;
+    private static final int MAX_FILE_BYTES = 65536;
 
     enum Problem {
         TOO_MANY_TERMS,
@@ -94,13 +94,21 @@ final class CustomTerms {
             }
         }
 
-        String prompt = String.join(", ", terms);
-        if (prompt.getBytes(StandardCharsets.UTF_8).length > MAX_PROMPT_UTF8_BYTES) {
-            throw new InvalidTermsException(Problem.PROMPT_TOO_LONG);
-        }
         String stored = String.join("\n", terms);
         if (!stored.isEmpty()) stored += "\n";
-        return new Parsed(terms, stored, prompt);
+        if (stored.getBytes(StandardCharsets.UTF_8).length > MAX_FILE_BYTES) {
+            throw new InvalidTermsException(Problem.PROMPT_TOO_LONG);
+        }
+        // Whisper has a smaller prompt budget than the dictionary. Send a
+        // complete prefix of terms; Parakeet uses the entire list locally.
+        StringBuilder prompt = new StringBuilder();
+        for (String term : terms) {
+            String next = prompt.length() == 0 ? term : prompt + ", " + term;
+            if (next.getBytes(StandardCharsets.UTF_8).length > MAX_PROMPT_UTF8_BYTES) break;
+            prompt.setLength(0);
+            prompt.append(next);
+        }
+        return new Parsed(terms, stored, prompt.toString());
     }
 
     static Parsed read(File filesDir) throws IOException, InvalidTermsException {

@@ -30,11 +30,14 @@ public final class CustomTermsActivity extends AppCompatActivity {
     private TextView supportText;
     private TextView countText;
     private Button saveButton;
+    private boolean whisperPromptActive;
     private LinearLayout correctionsRows;
     private TextView correctionsCountText;
     private Button correctionsAddButton;
     private Button correctionsSaveButton;
     private MaterialSwitch correctionsEnabledSwitch;
+    private View correctionsContent;
+    private Button correctionsToggle;
     private boolean updatingCorrectionsSwitch;
 
     @Override
@@ -61,6 +64,10 @@ public final class CustomTermsActivity extends AppCompatActivity {
         correctionsAddButton = findViewById(R.id.personal_corrections_add);
         correctionsSaveButton = findViewById(R.id.personal_corrections_save);
         correctionsEnabledSwitch = findViewById(R.id.personal_corrections_enabled);
+        correctionsContent = findViewById(R.id.personal_corrections_content);
+        correctionsToggle = findViewById(R.id.personal_corrections_toggle);
+        correctionsToggle.setOnClickListener(view -> setCorrectionsVisible(
+                correctionsContent.getVisibility() != View.VISIBLE));
         correctionsAddButton.setOnClickListener(view -> addEmptyCorrectionRow());
         correctionsSaveButton.setOnClickListener(view -> saveCorrections());
         findViewById(R.id.personal_corrections_clear)
@@ -111,7 +118,7 @@ public final class CustomTermsActivity extends AppCompatActivity {
             // so the user can edit or clear it, but native code will ignore it.
             File file = new File(getFilesDir(), CustomTerms.FILE_NAME);
             try {
-                if (file.isFile() && file.length() <= 4096) {
+                if (file.isFile() && file.length() <= 65536) {
                     editor.setText(new String(
                             Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
                 }
@@ -123,9 +130,11 @@ public final class CustomTermsActivity extends AppCompatActivity {
     }
 
     private void loadCorrections() {
+        boolean hasSavedRules = false;
         try {
             PersonalCorrections.Parsed parsed = PersonalCorrections.read(getFilesDir());
             setCorrectionRows(parsed.rules);
+            hasSavedRules = !parsed.rules.isEmpty();
         } catch (IOException | PersonalCorrections.InvalidCorrectionsException error) {
             // Native inference also ignores an invalid restored file. Keep it
             // untouched until the user explicitly saves or clears new pairs.
@@ -137,7 +146,14 @@ public final class CustomTermsActivity extends AppCompatActivity {
         } catch (IOException error) {
             correctionsEnabledSwitch.setChecked(false);
         }
+        setCorrectionsVisible(hasSavedRules || correctionsEnabledSwitch.isChecked());
         updateCorrectionsValidation();
+    }
+
+    private void setCorrectionsVisible(boolean visible) {
+        correctionsContent.setVisibility(visible ? View.VISIBLE : View.GONE);
+        correctionsToggle.setText(visible
+                ? R.string.personal_corrections_hide : R.string.personal_corrections_show);
     }
 
     private void save() {
@@ -292,10 +308,13 @@ public final class CustomTermsActivity extends AppCompatActivity {
     private void updateValidation() {
         try {
             CustomTerms.Parsed parsed = CustomTerms.parse(editor.getText().toString());
-            countText.setText(getString(R.string.custom_terms_count,
-                    parsed.terms.size(), CustomTerms.MAX_TERMS,
-                    parsed.prompt.getBytes(StandardCharsets.UTF_8).length,
-                    CustomTerms.MAX_PROMPT_UTF8_BYTES));
+            countText.setText(whisperPromptActive
+                    ? getString(R.string.custom_terms_count_whisper,
+                            parsed.terms.size(), CustomTerms.MAX_TERMS,
+                            parsed.prompt.getBytes(StandardCharsets.UTF_8).length,
+                            CustomTerms.MAX_PROMPT_UTF8_BYTES)
+                    : getString(R.string.custom_terms_count,
+                            parsed.terms.size(), CustomTerms.MAX_TERMS));
             saveButton.setEnabled(true);
         } catch (CustomTerms.InvalidTermsException error) {
             countText.setText(problemMessage(error.problem));
@@ -328,12 +347,16 @@ public final class CustomTermsActivity extends AppCompatActivity {
             descriptor = null;
         }
         if (descriptor == null || descriptor.prompt == ModelDescriptor.Capability.UNKNOWN) {
+            whisperPromptActive = false;
             supportText.setText(R.string.custom_terms_support_unknown);
         } else if (descriptor.prompt == ModelDescriptor.Capability.SUPPORTED) {
+            whisperPromptActive = true;
             supportText.setText(R.string.custom_terms_support_whisper);
         } else {
+            whisperPromptActive = false;
             supportText.setText(R.string.custom_terms_support_unavailable);
         }
+        updateValidation();
     }
 
     private String correctionsProblemMessage(PersonalCorrections.Problem problem) {
@@ -371,8 +394,7 @@ public final class CustomTermsActivity extends AppCompatActivity {
                 return getString(R.string.custom_terms_error_control);
             case PROMPT_TOO_LONG:
             default:
-                return getString(R.string.custom_terms_error_budget,
-                        CustomTerms.MAX_PROMPT_UTF8_BYTES);
+                return getString(R.string.custom_terms_error_budget);
         }
     }
 

@@ -82,6 +82,10 @@ rustc --edition 2021 --test "$ROOT/tests/CustomTermsTest.rs" \
   -o "$OUT/custom_terms_test"
 "$OUT/custom_terms_test"
 
+rustc --edition 2021 --test "$ROOT/tests/PreferredTermsTest.rs" \
+  -o "$OUT/preferred_terms_test"
+"$OUT/preferred_terms_test"
+
 rustc --edition 2021 --test "$ROOT/tests/PersonalCorrectionsTest.rs" \
   -o "$OUT/personal_corrections_test"
 "$OUT/personal_corrections_test"

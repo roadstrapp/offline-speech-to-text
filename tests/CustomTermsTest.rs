@@ -21,18 +21,21 @@ fn empty_input_disables_the_prompt() {
 fn rejects_special_tokens_and_oversized_input() {
     assert!(custom_terms::compile_prompt_text("safe\n<|notimestamps|>").is_err());
     assert!(custom_terms::compile_prompt_text(&"x".repeat(81)).is_err());
-    let too_many = (0..33)
+    let too_many = (0..129)
         .map(|index| format!("word{index}"))
         .collect::<Vec<_>>()
         .join("\n");
     assert!(custom_terms::compile_prompt_text(&too_many).is_err());
-    assert!(custom_terms::compile_prompt_text(&format!(
-        "{}\n{}\n{}",
-        "a".repeat(70),
-        "b".repeat(70),
-        "c".repeat(70)
-    ))
-    .is_err());
+    assert_eq!(
+        custom_terms::compile_prompt_text(&format!(
+            "{}\n{}\n{}",
+            "a".repeat(70),
+            "b".repeat(70),
+            "c".repeat(70)
+        ))
+        .unwrap(),
+        Some(format!("{}, {}", "a".repeat(70), "b".repeat(70)))
+    );
 }
 
 #[test]
@@ -54,5 +57,6 @@ fn file_reader_fails_closed_without_exposing_content() {
     );
     std::fs::write(&file, "<|unsafe|>\n").unwrap();
     assert_eq!(custom_terms::load_prompt(&file), None);
+    assert_eq!(custom_terms::load_terms(&file), None);
     std::fs::remove_dir_all(root).unwrap();
 }

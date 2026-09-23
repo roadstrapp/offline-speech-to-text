@@ -21,8 +21,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         gradle_properties = (ROOT / "gradle.properties").read_text()
         workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
         self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
-        self.assertIn("versionCode = 37", gradle)
-        self.assertIn('versionName = "0.8.0"', gradle)
+        self.assertIn("versionCode = 38", gradle)
+        self.assertIn('versionName = "0.9.0"', gradle)
         self.assertIn('providers.gradleProperty("includeBundledModel")', gradle)
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: false', gradle)
         self.assertIn('ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,', gradle)
@@ -711,7 +711,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
             "colorOnPrimaryContainer", "colorSecondary", "colorOnSecondary",
             "colorSecondaryContainer", "colorOnSecondaryContainer", "colorTertiary",
             "colorOnTertiary", "colorTertiaryContainer", "colorOnTertiaryContainer",
-            "colorSurface", "colorOnSurface", "colorSurfaceVariant", "colorOnSurfaceVariant",
+            "colorSurface", "colorOnSurface", "colorSurfaceInverse", "colorOnSurfaceInverse",
+            "colorSurfaceVariant", "colorOnSurfaceVariant",
             "colorSurfaceContainerLowest", "colorSurfaceContainerLow", "colorSurfaceContainer",
             "colorSurfaceContainerHigh", "colorSurfaceContainerHighest", "colorOutline",
             "colorOutlineVariant",
@@ -737,9 +738,14 @@ class ReleaseConfigurationTest(unittest.TestCase):
                     ("colorOnTertiary", "colorTertiary"),
                     ("colorOnTertiaryContainer", "colorTertiaryContainer"),
                     ("colorOnSurface", "colorSurface"),
+                    ("colorOnSurfaceInverse", "colorSurfaceInverse"),
                     ("colorOnSurfaceVariant", "colorSurfaceVariant")):
                 self.assertGreaterEqual(self._contrast(palette[foreground], palette[background]), 4.5,
                                         f"{foreground} must contrast with {background}")
+            for role in ("colorSurfaceInverse", "colorOnSurfaceInverse"):
+                red, green, blue = (int(palette[role][index:index + 2], 16)
+                                    for index in (1, 3, 5))
+                self.assertGreaterEqual(red, blue, f"{role} must stay warm or neutral")
 
     def test_privacy_and_migration_copy_is_truthful(self):
         strings = ET.parse(ROOT / "app/src/main/res/values/strings.xml").getroot()
@@ -990,8 +996,17 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn('android:exported="false"', manifest)
         self.assertIn('@+id/card_custom_terms', layout)
         self.assertIn('@+id/custom_terms_editor', editor_layout)
+        self.assertIn('@+id/personal_corrections_toggle', editor_layout)
+        self.assertIn('@+id/personal_corrections_content', editor_layout)
+        self.assertIn('setCorrectionsVisible(hasSavedRules || correctionsEnabledSwitch.isChecked())', activity)
+        self.assertIn('whisperPromptActive', activity)
+        self.assertIn('R.string.custom_terms_count_whisper', activity)
         self.assertIn('android:scrollbars="none"', editor_layout)
-        self.assertIn("MAX_TERMS = 32", store)
+        self.assertIn('android:minHeight="144dp"', editor_layout)
+        self.assertIn('android:minLines="5"', editor_layout)
+        self.assertIn('Whisper uses the first words as hints; other models',
+                      (ROOT / "app/src/main/res/values/strings.xml").read_text())
+        self.assertIn("MAX_TERMS = 128", store)
         self.assertIn("MAX_PROMPT_UTF8_BYTES = 200", store)
         self.assertIn("StandardCopyOption.ATOMIC_MOVE", store)
         self.assertIn("Normalizer.Form.NFC", store)
@@ -1026,7 +1041,9 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn('NUMBER_MISMATCH', corrections)
         self.assertNotIn('DiagnosticLog', corrections)
         self.assertIn('personal_corrections::load(&self.files_dir)', engine)
-        self.assertIn('personal_corrections::apply(&self.text, rules)', engine)
+        self.assertIn('personal_corrections::apply_with_ranges(&self.text, rules)', engine)
+        self.assertIn('preferred_terms: if self.supports_initial_prompt', engine)
+        self.assertIn('preferred_terms::apply_with_protected(&text, terms, &protected)', engine)
         self.assertLess(engine.index('personal_corrections::load(&self.files_dir)'),
                         engine.index('pub(crate) fn transcribe_into'))
         self.assertIn('is_protected_token', native_corrections)

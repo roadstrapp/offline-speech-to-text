@@ -83,11 +83,21 @@ pub(crate) fn parse(raw: &str) -> Result<Vec<Rule>, ()> {
     Ok(rules)
 }
 
+#[cfg(test)]
 pub(crate) fn apply(text: &str, rules: &[Rule]) -> String {
+    apply_with_ranges(text, rules).0
+}
+
+/// Return replacement ranges so later spelling cleanup preserves exact rules.
+pub(crate) fn apply_with_ranges(
+    text: &str,
+    rules: &[Rule],
+) -> (String, Vec<std::ops::Range<usize>>) {
     if text.is_empty() || rules.is_empty() {
-        return text.to_string();
+        return (text.to_string(), Vec::new());
     }
     let mut result = String::with_capacity(text.len());
+    let mut protected = Vec::new();
     let mut offset = 0;
     let mut inside_double_quote = false;
     let mut inside_straight_single_quote = false;
@@ -154,17 +164,19 @@ pub(crate) fn apply(text: &str, rules: &[Rule]) -> String {
             rules.iter().find_map(|rule| match_rule(text, offset, rule))
         };
         if let Some((consumed, written)) = replacement {
+            let start = result.len();
             result.push_str(written);
+            protected.push(start..result.len());
             offset += consumed;
             if result.len() > text.len().saturating_add(MAX_TOTAL_EXPANSION_BYTES) {
-                return text.to_string();
+                return (text.to_string(), Vec::new());
             }
         } else {
             result.push(current);
             offset += current.len_utf8();
         }
     }
-    result
+    (result, protected)
 }
 
 fn match_rule<'a>(text: &str, offset: usize, rule: &'a Rule) -> Option<(usize, &'a str)> {

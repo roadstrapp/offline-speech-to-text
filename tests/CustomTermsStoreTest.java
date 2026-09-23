@@ -26,9 +26,12 @@ public final class CustomTermsStoreTest {
         assertProblem(CustomTerms.Problem.SPECIAL_TOKEN, "safe\n<|notimestamps|>");
         assertProblem(CustomTerms.Problem.INVALID_CONTROL, "safe\u0001unsafe");
         assertProblem(CustomTerms.Problem.TERM_TOO_LONG, repeat("x", 81));
-        assertProblem(CustomTerms.Problem.TOO_MANY_TERMS, numberedTerms(33));
-        assertProblem(CustomTerms.Problem.PROMPT_TOO_LONG,
+        assertProblem(CustomTerms.Problem.TOO_MANY_TERMS, numberedTerms(129));
+        CustomTerms.Parsed longList = CustomTerms.parse(
                 repeat("a", 70) + "\n" + repeat("b", 70) + "\n" + repeat("c", 70));
+        assertEquals(repeat("a", 70) + ", " + repeat("b", 70), longList.prompt,
+                "Whisper uses a complete bounded prefix");
+        assertEquals(3, longList.terms.size(), "Parakeet keeps all terms");
     }
 
     private static void writesAreNormalizedAtomicAndClearable() throws Exception {

@@ -1,0 +1,3 @@
+Add a simpler personal dictionary: enter preferred words once, without listing every misrecognition. Whisper uses bounded recognition hints; Parakeet and other models conservatively correct very close spellings of single words after transcription. Exact correction pairs remain available for phrases and larger errors.
+
+Make the dictionary screen denser and clarify what each model can do. Use warm, high-contrast confirmation colors in light and dark themes.

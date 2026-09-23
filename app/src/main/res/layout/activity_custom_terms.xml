@@ -61,8 +61,8 @@
                     android:layout_height="wrap_content"
                     android:gravity="top|start"
                     android:inputType="textMultiLine|textCapSentences"
-                    android:minHeight="192dp"
-                    android:minLines="8"
+                    android:minHeight="144dp"
+                    android:minLines="5"
                     android:padding="12dp" />
             </com.google.android.material.textfield.TextInputLayout>
 
@@ -106,10 +106,27 @@
                 android:textAppearance="?attr/textAppearanceBodySmall"
                 android:textColor="?attr/colorOnSurfaceVariant" />
 
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/personal_corrections_toggle"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:gravity="start|center_vertical"
+                android:minHeight="48dp"
+                android:text="@string/personal_corrections_show" />
+
+            <LinearLayout
+                android:id="@+id/personal_corrections_content"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="24dp"
+                android:layout_marginTop="8dp"
                 android:text="@string/personal_corrections_title"
                 android:textAppearance="?attr/textAppearanceTitleMedium" />
 
@@ -185,6 +202,7 @@
                 android:text="@string/personal_corrections_privacy"
                 android:textAppearance="?attr/textAppearanceBodySmall"
                 android:textColor="?attr/colorOnSurfaceVariant" />
+            </LinearLayout>
         </LinearLayout>
     </ScrollView>
 </LinearLayout>

@@ -30,6 +30,8 @@
     <color name="colorOnTertiaryContainer">#FFE2A4</color>
     <color name="colorSurface">#000000</color>
     <color name="colorOnSurface">#ECECEC</color>
+    <color name="colorSurfaceInverse">#F2EEE6</color>
+    <color name="colorOnSurfaceInverse">#29251E</color>
     <color name="colorSurfaceVariant">#2A261F</color>
     <color name="colorOnSurfaceVariant">#D4C5AA</color>
     <color name="colorSurfaceContainerLowest">#000000</color>

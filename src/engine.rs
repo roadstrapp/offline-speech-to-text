@@ -35,16 +35,24 @@ static ACTIVE_THREADS: AtomicI32 = AtomicI32::new(0);
 /// Settings captured once for a complete user transcription.
 pub(crate) struct TranscriptionJob {
     run_ext: Option<transcribe_cpp::RunExtension>,
+    preferred_terms: Option<Vec<String>>,
     corrections: Option<Vec<crate::personal_corrections::Rule>>,
     text: String,
 }
 
 impl TranscriptionJob {
     pub(crate) fn finish(self) -> String {
-        if let Some(rules) = self.corrections.as_deref() {
-            crate::personal_corrections::apply(&self.text, rules)
+        // Explicit user corrections take precedence over a close-spelling
+        // guess: apply them to the raw model result before preferred words.
+        let (text, protected) = if let Some(rules) = self.corrections.as_deref() {
+            crate::personal_corrections::apply_with_ranges(&self.text, rules)
         } else {
-            self.text
+            (self.text, Vec::new())
+        };
+        if let Some(terms) = self.preferred_terms.as_deref() {
+            crate::preferred_terms::apply_with_protected(&text, terms, &protected)
+        } else {
+            text
         }
     }
 }
@@ -198,6 +206,11 @@ impl Engine {
         // Parakeet. Snapshot them beside the Whisper prompt.
         TranscriptionJob {
             corrections: crate::personal_corrections::load(&self.files_dir),
+            preferred_terms: if self.supports_initial_prompt {
+                None // Whisper already receives its bounded native prompt.
+            } else {
+                crate::custom_terms::load_terms(&self.custom_terms_path)
+            },
             run_ext: self.run_extension(prompt),
             text: String::new(),
         }

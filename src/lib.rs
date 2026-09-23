@@ -12,6 +12,7 @@ mod long_audio;
 pub mod main_activity;
 pub mod models;
 pub mod personal_corrections;
+pub mod preferred_terms;
 pub mod recog_service;
 pub mod recognize;
 pub mod subtitle;
