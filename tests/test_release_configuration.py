@@ -21,8 +21,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         gradle_properties = (ROOT / "gradle.properties").read_text()
         workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
         self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
-        self.assertIn("versionCode = 38", gradle)
-        self.assertIn('versionName = "0.9.0"', gradle)
+        self.assertIn("versionCode = 39", gradle)
+        self.assertIn('versionName = "0.10.0"', gradle)
         self.assertIn('providers.gradleProperty("includeBundledModel")', gradle)
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: false', gradle)
         self.assertIn('ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,', gradle)
@@ -1004,7 +1004,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn('android:scrollbars="none"', editor_layout)
         self.assertIn('android:minHeight="144dp"', editor_layout)
         self.assertIn('android:minLines="5"', editor_layout)
-        self.assertIn('Whisper uses the first words as hints; other models',
+        self.assertIn('Whisper uses the first terms as hints; other models',
                       (ROOT / "app/src/main/res/values/strings.xml").read_text())
         self.assertIn("MAX_TERMS = 128", store)
         self.assertIn("MAX_PROMPT_UTF8_BYTES = 200", store)

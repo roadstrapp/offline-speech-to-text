@@ -1,0 +1,3 @@
+Preferred phrases now work with Parakeet and other non-Whisper models: exact matches use your chosen spelling and capitalization, including names such as White Noise. The preferred-word list also handles close versions of Nostr and a few common spoken forms of npub.
+
+This stays private and on-device. Larger or ambiguous recognition errors still need an optional exact correction; OSTT does not rewrite text based on broad sound-alike guesses.

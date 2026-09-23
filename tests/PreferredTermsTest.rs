@@ -37,6 +37,56 @@ fn leaves_ambiguous_or_distant_words_and_phrase_hints_alone() {
 }
 
 #[test]
+fn recovers_short_nostr_names_without_general_phonetic_rewriting() {
+    let terms = &["White Noise", "Marmot", "npub", "Nostr"];
+    assert_eq!(
+        apply("Noster and enpop belong to Marmot on Nostr", terms),
+        "Nostr and npub belong to Marmot on Nostr"
+    );
+    assert_eq!(apply("enpub and noster", terms), "npub and Nostr");
+    assert_eq!(apply("en pop, N pub", terms), "npub, npub");
+    assert_eq!(apply("en pop", &["npub", "En Pop"]), "En Pop");
+    assert_eq!(apply("enpop", &["npub", "Enpop"]), "Enpop");
+    assert_eq!(apply("Noster", &["Nostr", "Noster"]), "Noster");
+    assert_eq!(
+        apply(
+            "The proper word is Noster, not enpob or enpops",
+            &["Marmot"]
+        ),
+        "The proper word is Noster, not enpob or enpops"
+    );
+    assert_eq!(
+        apply("enpob enpops import report", terms),
+        "enpob enpops import report"
+    );
+    assert_eq!(
+        apply("https://enpop.dev user@noster.dev \"enpop\" enpop42", terms),
+        "https://enpop.dev user@noster.dev \"enpop\" enpop42"
+    );
+}
+
+#[test]
+fn exact_preferred_phrases_restore_spelling_without_guessing_phrases() {
+    let terms = &["White Noise", "Marmot Protocol"];
+    assert_eq!(
+        apply("white noise works with marmot protocol.", terms),
+        "White Noise works with Marmot Protocol."
+    );
+    assert_eq!(
+        apply("white noice and white\nnoise", terms),
+        "white noice and white\nnoise"
+    );
+    assert_eq!(
+        apply(
+            "\"white noise\" https://white.noise/dev white noise@example.com",
+            terms
+        ),
+        "\"white noise\" https://white.noise/dev white noise@example.com"
+    );
+    assert_eq!(apply("prewhite noise42", terms), "prewhite noise42");
+}
+
+#[test]
 fn protects_quotes_urls_emails_numbers_and_repetition() {
     let terms = &["HeliBoard", "Parakeet"];
     assert_eq!(
@@ -85,6 +135,18 @@ fn explicit_corrections_win_over_similar_preferred_words() {
         preferred_terms::apply_with_protected(&corrected, &["HeliBoard".to_string()], &protected),
         "éclair HeliBord, HeliBoard"
     );
+    let rules = personal_corrections::parse("enpop => Enpop\n").unwrap();
+    let (corrected, protected) = personal_corrections::apply_with_ranges("enpop", &rules);
+    assert_eq!(
+        preferred_terms::apply_with_protected(&corrected, &["npub".to_string()], &protected),
+        "Enpop"
+    );
+    let rules = personal_corrections::parse("white noise => white-noise\n").unwrap();
+    let (corrected, protected) = personal_corrections::apply_with_ranges("white noise", &rules);
+    assert_eq!(
+        preferred_terms::apply_with_protected(&corrected, &["White Noise".to_string()], &protected),
+        "white-noise"
+    );
 }
 
 #[test]
@@ -105,5 +167,25 @@ fn long_transcripts_are_processed_without_changing_unrelated_words() {
     assert_eq!(
         result,
         format!("{}HeliBoard", "ordinary words ".repeat(2000))
+    );
+}
+
+#[test]
+fn many_phrases_do_not_change_unrelated_long_transcripts() {
+    let input = format!("{}white noise", "ordinary words ".repeat(2000));
+    let terms = (0..127)
+        .map(|index| {
+            format!(
+                "BrandName{}{} Feature",
+                (b'a' + (index / 26) as u8) as char,
+                (b'a' + (index % 26) as u8) as char
+            )
+        })
+        .chain(std::iter::once("White Noise".to_string()))
+        .collect::<Vec<_>>();
+    let result = preferred_terms::apply(&input, &terms);
+    assert_eq!(
+        result,
+        format!("{}White Noise", "ordinary words ".repeat(2000))
     );
 }

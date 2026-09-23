@@ -15,6 +15,13 @@ struct Word {
     folded: Vec<char>,
 }
 
+struct Phrase {
+    written: String,
+    folded: String,
+    char_count: usize,
+    is_alias: bool,
+}
+
 #[cfg(test)]
 pub(crate) fn apply(text: &str, terms: &[String]) -> String {
     apply_with_protected(text, terms, &[])
@@ -29,22 +36,52 @@ pub(crate) fn apply_with_protected(
         return text.to_string();
     }
     let mut words = Vec::new();
+    let mut phrases = Vec::new();
     let mut seen = HashSet::new();
     for term in terms {
-        if !term.chars().all(char::is_alphabetic) {
-            continue; // Phrases and punctuation need explicit correction pairs.
-        }
         let folded = term.to_lowercase();
-        if seen.insert(folded.clone()) {
+        if !seen.insert(folded.clone()) {
+            continue;
+        }
+        if term.chars().all(char::is_alphabetic) {
             words.push(Word {
                 written: term.clone(),
                 folded: folded.chars().collect(),
             });
+            if folded == "npub" {
+                // Decoder output may split the spoken prefix into two words.
+                // Keep these forms tied to the user's explicit npub entry.
+                for heard in ["en pub", "en pop", "n pub", "n pop"] {
+                    phrases.push(Phrase {
+                        written: term.clone(),
+                        folded: heard.to_string(),
+                        char_count: heard.chars().count(),
+                        is_alias: true,
+                    });
+                }
+            }
+        } else if term.contains(' ')
+            && term.split(' ').count() >= 2
+            && term
+                .split(' ')
+                .all(|part| !part.is_empty() && part.chars().all(char::is_alphabetic))
+        {
+            // Exact multiword spelling/case is safe to restore without
+            // guessing whether an unrelated phrase was spoken.
+            phrases.push(Phrase {
+                written: term.clone(),
+                char_count: term.chars().count(),
+                folded,
+                is_alias: false,
+            });
         }
     }
-    if words.is_empty() {
+    if words.is_empty() && phrases.is_empty() {
         return text.to_string();
     }
+    // Longer exact phrases win; a user's exact phrase always beats a known
+    // spoken alias of the same length.
+    phrases.sort_by_key(|phrase| (std::cmp::Reverse(phrase.char_count), phrase.is_alias));
 
     let mut output = String::with_capacity(text.len());
     let mut offset = 0;
@@ -111,6 +148,19 @@ pub(crate) fn apply_with_protected(
             output.push_str(candidate);
             continue;
         }
+        if let Some((phrase_end, written)) =
+            match_phrase(text, start, &phrases, protected.get(protected_index))
+        {
+            output.push_str(written);
+            if output.len() > text.len().saturating_add(MAX_EXPANSION_BYTES) {
+                return text.to_string();
+            }
+            token_start = text[start..phrase_end]
+                .rfind(' ')
+                .map_or(token_start, |relative| start + relative + 1);
+            offset = phrase_end;
+            continue;
+        }
         let folded: Vec<char> = candidate.to_lowercase().chars().collect();
         let mut exact = None;
         let mut nearby = None;
@@ -120,11 +170,25 @@ pub(crate) fn apply_with_protected(
                 exact = Some(word.written.as_str());
                 break;
             }
+            // A few spoken identifier forms are too different from their
+            // spelling for edit distance to recover. Keep these aliases
+            // explicit and conditional on the user listing that identifier;
+            // a general phonetic rewrite would change ordinary words.
+            if known_spoken_alias(&folded, &word.folded) {
+                if nearby.is_some() {
+                    ambiguous = true;
+                } else {
+                    nearby = Some(word.written.as_str());
+                }
+                continue;
+            }
             // Three common leading letters and the same ending make a one-
             // edit typo a useful guess without treating short ordinary words
-            // as interchangeable. Never stem or change grammatical suffixes.
-            if word.folded.len() < 6
-                || folded.len() < 6
+            // as interchangeable. Five-letter preferred names can recover
+            // an inserted vowel (Noster -> Nostr); shorter words still need
+            // an explicit spoken alias. Never change grammatical suffixes.
+            if word.folded.len() < 5
+                || folded.len() < 5
                 || word.folded.get(..3) != folded.get(..3)
                 || word.folded.last() != folded.last()
                 || word.folded.len().abs_diff(folded.len()) > 1
@@ -148,6 +212,68 @@ pub(crate) fn apply_with_protected(
         }
     }
     output
+}
+
+fn match_phrase<'a>(
+    text: &str,
+    start: usize,
+    phrases: &'a [Phrase],
+    next_protected: Option<&Range<usize>>,
+) -> Option<(usize, &'a str)> {
+    for phrase in phrases {
+        let tail = &text[start..];
+        if tail.len() < phrase.char_count {
+            continue;
+        }
+        let first = tail.chars().next()?;
+        let expected_first = phrase.folded.chars().next()?;
+        if first.is_ascii()
+            && expected_first.is_ascii()
+            && !first.eq_ignore_ascii_case(&expected_first)
+        {
+            continue;
+        }
+        let mut end = 0;
+        let mut seen = 0;
+        for (relative, ch) in tail.char_indices() {
+            if seen == phrase.char_count {
+                break;
+            }
+            seen += 1;
+            end = relative + ch.len_utf8();
+        }
+        if seen != phrase.char_count
+            || text[start..start + end].to_lowercase() != phrase.folded
+            || text[start + end..]
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_alphanumeric() || ch == '_')
+            || next_protected.is_some_and(|range| range.start < start + end)
+            || phrase_has_protected_token(text, start, start + end)
+        {
+            continue;
+        }
+        return Some((start + end, phrase.written.as_str()));
+    }
+    None
+}
+
+fn phrase_has_protected_token(text: &str, start: usize, end: usize) -> bool {
+    if protected_token(text, start) {
+        return true;
+    }
+    text[start..end]
+        .match_indices(' ')
+        .any(|(relative, _)| protected_token(text, start + relative + 1))
+}
+
+fn known_spoken_alias(candidate: &[char], preferred: &[char]) -> bool {
+    // Speech models may render the name of the Nostr public-key prefix as
+    // "enpub" or "enpop". These are whole-token aliases, not a general
+    // English sound-alike rule. They apply only when npub is in the user's
+    // private preferred-word list and only outside protected text.
+    preferred == ['n', 'p', 'u', 'b']
+        && (candidate == ['e', 'n', 'p', 'u', 'b'] || candidate == ['e', 'n', 'p', 'o', 'p'])
 }
 
 fn one_edit_away(a: &[char], b: &[char]) -> bool {
