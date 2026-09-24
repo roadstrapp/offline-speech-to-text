@@ -45,6 +45,9 @@ fn recovers_short_nostr_names_without_general_phonetic_rewriting() {
     );
     assert_eq!(apply("enpub and noster", terms), "npub and Nostr");
     assert_eq!(apply("en pop, N pub", terms), "npub, npub");
+    assert_eq!(apply("M pups", terms), "npub");
+    assert_eq!(apply("M pups", &["npub", "M pups"]), "M pups");
+    assert_eq!(apply("M pups", &["Nostr"]), "M pups");
     assert_eq!(apply("en pop", &["npub", "En Pop"]), "En Pop");
     assert_eq!(apply("enpop", &["npub", "Enpop"]), "Enpop");
     assert_eq!(apply("Noster", &["Nostr", "Noster"]), "Noster");
@@ -59,6 +62,9 @@ fn recovers_short_nostr_names_without_general_phonetic_rewriting() {
         apply("enpob enpops import report", terms),
         "enpob enpops import report"
     );
+    // A common word can be acoustically similar to a preferred name, but
+    // rewriting it without decoder evidence would silently corrupt speech.
+    assert_eq!(apply("mustard", terms), "mustard");
     assert_eq!(
         apply("https://enpop.dev user@noster.dev \"enpop\" enpop42", terms),
         "https://enpop.dev user@noster.dev \"enpop\" enpop42"
@@ -141,6 +147,12 @@ fn explicit_corrections_win_over_similar_preferred_words() {
         preferred_terms::apply_with_protected(&corrected, &["npub".to_string()], &protected),
         "Enpop"
     );
+    let rules = personal_corrections::parse("m pups => Many pups\n").unwrap();
+    let (corrected, protected) = personal_corrections::apply_with_ranges("M pups", &rules);
+    assert_eq!(
+        preferred_terms::apply_with_protected(&corrected, &["npub".to_string()], &protected),
+        "Many pups"
+    );
     let rules = personal_corrections::parse("white noise => white-noise\n").unwrap();
     let (corrected, protected) = personal_corrections::apply_with_ranges("white noise", &rules);
     assert_eq!(
@@ -167,6 +179,22 @@ fn long_transcripts_are_processed_without_changing_unrelated_words() {
     assert_eq!(
         result,
         format!("{}HeliBoard", "ordinary words ".repeat(2000))
+    );
+}
+
+#[test]
+fn long_transcripts_recover_explicit_nostr_aliases_without_rewriting_common_words() {
+    let input = format!(
+        "{}Noster, Marmot, and M pups work together; mustard remains mustard.",
+        "ordinary words ".repeat(2000)
+    );
+    let expected = format!(
+        "{}Nostr, Marmot, and npub work together; mustard remains mustard.",
+        "ordinary words ".repeat(2000)
+    );
+    assert_eq!(
+        apply(&input, &["White Noise", "Marmot", "npub", "Nostr"]),
+        expected
     );
 }
 

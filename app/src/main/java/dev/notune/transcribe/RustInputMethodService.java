@@ -932,6 +932,15 @@ public class RustInputMethodService extends InputMethodService {
         });
     }
 
+    /** Native endpointing callback; dispatch on the IME thread and preserve the editor. */
+    public void onAutoStop() {
+        mainHandler.post(() -> {
+            if (isRecording && !recordingPaused) {
+                stopForResult(false, false);
+            }
+        });
+    }
+
     private void updateUiState() {
         boolean recoveryPending = hasPendingTranscriptRecovery();
         boolean isWaiting = NativeStatus.isWaiting(lastStatus);

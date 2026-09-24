@@ -66,6 +66,10 @@ rustc --edition 2021 --test "$ROOT/tests/BackgroundChunkingTest.rs" \
   -o "$OUT/background_chunking_test"
 "$OUT/background_chunking_test"
 
+rustc --edition 2021 --test "$ROOT/tests/InteractiveEndpointingTest.rs" \
+  -o "$OUT/interactive_endpointing_test"
+"$OUT/interactive_endpointing_test"
+
 rustc --edition 2021 --test "$ROOT/tests/LongAudioTest.rs" \
   -o "$OUT/long_audio_test"
 "$OUT/long_audio_test"

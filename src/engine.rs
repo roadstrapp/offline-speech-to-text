@@ -195,8 +195,10 @@ impl Engine {
     }
 
     pub(crate) fn begin_transcription(&self) -> TranscriptionJob {
-        // Snapshot once per complete transcription. Unsupported models never
-        // read or receive the prompt.
+        // Snapshot once per complete transcription. Only models with prompt
+        // support receive a recognition hint, but every model can restore the
+        // spelling of a recognized preferred term after decoding. A prompt is
+        // not a guarantee that the decoder will use or retain a term.
         let prompt = if self.supports_initial_prompt {
             crate::custom_terms::load_prompt(&self.custom_terms_path)
         } else {
@@ -206,11 +208,7 @@ impl Engine {
         // Parakeet. Snapshot them beside the Whisper prompt.
         TranscriptionJob {
             corrections: crate::personal_corrections::load(&self.files_dir),
-            preferred_terms: if self.supports_initial_prompt {
-                None // Whisper already receives its bounded native prompt.
-            } else {
-                crate::custom_terms::load_terms(&self.custom_terms_path)
-            },
+            preferred_terms: crate::custom_terms::load_terms(&self.custom_terms_path),
             run_ext: self.run_extension(prompt),
             text: String::new(),
         }
@@ -590,7 +588,13 @@ fn do_load(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
     notify_status(env, context, "Checking assets...");
 
     let path = assets::extract_builtin_model(env, context).map_err(|e| {
-        let msg = format!("Asset error: {}", e);
+        // A compact first install intentionally has no bundled GGUF. Show the
+        // user what to do, not an internal asset-loader error in the keyboard.
+        let msg = if e.to_string() == assets::MISSING_BUNDLED_MODEL_ERROR {
+            "No speech model installed. Open the app to download one.".to_string()
+        } else {
+            format!("Asset error: {}", e)
+        };
         notify_status(env, context, &format!("Error: {}", msg));
         msg
     })?;

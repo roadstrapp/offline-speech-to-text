@@ -8,6 +8,7 @@ pub mod custom_terms;
 pub mod engine;
 pub mod foreground_recording;
 pub mod ime;
+mod interactive_endpointing;
 mod long_audio;
 pub mod main_activity;
 pub mod models;

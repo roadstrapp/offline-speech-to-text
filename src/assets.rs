@@ -13,6 +13,7 @@ const EXTRACTION_COMPLETE_MARKER: &str = ".extraction_complete";
 /// Model directory of the pre-GGUF (ONNX) app versions; deleted on sight so
 /// upgrades don't leave ~670 MB of dead files behind.
 const LEGACY_MODEL_DIR: &str = "parakeet-tdt-0.6b-v3-int8";
+pub(crate) const MISSING_BUNDLED_MODEL_ERROR: &str = "no bundled model is packaged in this build";
 
 /// Resolves the app's `filesDir` via the given Context.
 pub fn files_dir(env: &mut JNIEnv, context: &JObject) -> anyhow::Result<PathBuf> {
@@ -79,7 +80,7 @@ pub fn extract_builtin_model(env: &mut JNIEnv, context: &JObject) -> anyhow::Res
     // the native loader thread even when the Rust error is otherwise handled.
     if list_asset_children(env, &asset_manager_obj, BUILTIN_MODEL_DIR)?.is_empty() {
         let _ = std::fs::remove_dir_all(&model_dir);
-        anyhow::bail!("no bundled model is packaged in this build");
+        anyhow::bail!(MISSING_BUNDLED_MODEL_ERROR);
     }
 
     if let Err(error) =

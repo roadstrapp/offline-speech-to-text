@@ -9,6 +9,7 @@ use jni::JNIEnv;
 use crate::background_chunking::CaptureBuffer;
 use crate::background_transcription::{BackgroundTranscriber, Completion};
 use crate::engine;
+use crate::interactive_endpointing::should_finish_interactive_session;
 
 pub const OWNER_IME: u8 = 1;
 pub const OWNER_ACTIVITY: u8 = 2;
@@ -31,14 +32,6 @@ pub fn release_session_owner(owner: u8) {
 const MIN_SPEECH_LEVEL: f32 = 0.12;
 /// How far above the running noise floor a level must be to count as speech.
 const SPEECH_MARGIN: f32 = 0.08;
-/// Trailing silence after speech that triggers auto-stop.
-const AUTO_STOP_SILENCE_MS: u64 = 2000;
-/// If no speech is ever detected, auto-stop after this long.
-const AUTO_STOP_NO_SPEECH_MS: u64 = 8000;
-/// Interactive voice panels must never leave an unnoticed microphone capture
-/// running indefinitely. The long-recording foreground service has its own
-/// explicit ten-minute lifecycle and notification controls.
-const MAX_INTERACTIVE_SESSION_MS: u64 = 10 * 60 * 1000;
 const LEVEL_UPDATE_MS: u64 = 100;
 const AUTO_STOP_MONITOR_MS: u64 = 250;
 const MANUAL_MONITOR_MS: u64 = 1000;
@@ -47,21 +40,6 @@ const DIGITAL_ZERO_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn has_two_seconds_of_digital_zero(since_last_nonzero: Duration) -> bool {
     since_last_nonzero >= DIGITAL_ZERO_TIMEOUT
-}
-
-fn should_finish_interactive_session(
-    auto_stop: bool,
-    paused: bool,
-    speech_started: bool,
-    silence: Duration,
-    no_speech: Duration,
-    total: Duration,
-) -> bool {
-    total >= Duration::from_millis(MAX_INTERACTIVE_SESSION_MS)
-        || (auto_stop
-            && !paused
-            && ((speech_started && silence >= Duration::from_millis(AUTO_STOP_SILENCE_MS))
-                || (!speech_started && no_speech >= Duration::from_millis(AUTO_STOP_NO_SPEECH_MS))))
 }
 
 pub struct SendStream(#[allow(dead_code)] pub cpal::Stream);
@@ -75,6 +53,9 @@ struct Endpointing {
     /// single writer, so an atomic avoids taking a mutex on every block.
     last_voice_ms: AtomicU64,
     speech_started: AtomicBool,
+    /// The system microphone toggle supplies digital zero while access is
+    /// blocked. The no-speech timer must start only after real samples arrive.
+    audio_started: AtomicBool,
 }
 
 pub struct VoiceSessionState {
@@ -243,6 +224,7 @@ fn start_recording_impl(
         Some(Arc::new(Endpointing {
             last_voice_ms: AtomicU64::new(0),
             speech_started: AtomicBool::new(false),
+            audio_started: AtomicBool::new(false),
         }))
     } else {
         None
@@ -276,6 +258,7 @@ fn start_recording_impl(
 
     let mut noise_floor = 0.0f32;
     let mut last_level_sent = Instant::now();
+    let mut audio_started = false;
     let stream = device.build_input_stream(
         &config,
         move |data: &[f32], _: &_| {
@@ -293,6 +276,12 @@ fn start_recording_impl(
                 has_nonzero |= x.abs() > f32::EPSILON;
             }
             if has_nonzero {
+                if !audio_started {
+                    audio_started = true;
+                    if let Some(ep) = &endpoint_cb {
+                        ep.audio_started.store(true, Ordering::SeqCst);
+                    }
+                }
                 if let Some(nonzero_count) = &health_nonzero_count_data {
                     nonzero_count.fetch_add(1, Ordering::Relaxed);
                 }
@@ -301,7 +290,12 @@ fn start_recording_impl(
             let level = (rms * 6.0).clamp(0.0, 1.0);
             let is_speech = level > MIN_SPEECH_LEVEL && level > noise_floor + SPEECH_MARGIN;
 
-            buffer_clone.lock().unwrap().push(data);
+            // Do not buffer system-muted leading silence. Besides avoiding a
+            // false empty transcription, this prevents needless background
+            // inference and memory churn while the OS access prompt is open.
+            if audio_started {
+                buffer_clone.lock().unwrap().push(data);
+            }
 
             if let Some(ep) = &endpoint_cb {
                 if is_speech {
@@ -319,7 +313,8 @@ fn start_recording_impl(
             }
 
             // throttle updates
-            if last_level_sent.elapsed() >= Duration::from_millis(LEVEL_UPDATE_MS) {
+            if audio_started && last_level_sent.elapsed() >= Duration::from_millis(LEVEL_UPDATE_MS)
+            {
                 last_level_sent = Instant::now();
 
                 if let Ok(mut env) = jvm.attach_current_thread() {
@@ -443,9 +438,14 @@ fn start_recording_impl(
                         return;
                     }
                     let paused = capture_paused.load(Ordering::SeqCst);
-                    if paused {
+                    let waiting_for_audio = endpoint
+                        .as_ref()
+                        .is_some_and(|ep| !ep.audio_started.load(Ordering::SeqCst));
+                    if paused || waiting_for_audio {
                         // Pausing is user-controlled, so it must suspend the
-                        // silence timer as well as audio buffering.
+                        // silence timer as well as audio buffering. The same
+                        // applies while Android feeds digital zero with the
+                        // device-wide microphone toggle disabled.
                         no_speech_since = Instant::now();
                         if let Some(ep) = &endpoint {
                             ep.last_voice_ms.store(
@@ -469,6 +469,7 @@ fn start_recording_impl(
                     if should_finish_interactive_session(
                         endpoint.is_some(),
                         paused,
+                        !waiting_for_audio,
                         speech,
                         silence,
                         no_speech_since.elapsed(),
@@ -700,34 +701,6 @@ mod tests {
         )));
         assert!(has_two_seconds_of_digital_zero(Duration::from_secs(2)));
         assert!(has_two_seconds_of_digital_zero(Duration::from_secs(3)));
-    }
-
-    #[test]
-    fn interactive_endpointing_suspends_silence_while_paused_but_keeps_hard_cap() {
-        assert!(should_finish_interactive_session(
-            true,
-            false,
-            true,
-            Duration::from_millis(AUTO_STOP_SILENCE_MS),
-            Duration::ZERO,
-            Duration::from_secs(5),
-        ));
-        assert!(!should_finish_interactive_session(
-            true,
-            true,
-            true,
-            Duration::from_secs(30),
-            Duration::from_secs(30),
-            Duration::from_secs(30),
-        ));
-        assert!(should_finish_interactive_session(
-            false,
-            true,
-            false,
-            Duration::ZERO,
-            Duration::ZERO,
-            Duration::from_millis(MAX_INTERACTIVE_SESSION_MS),
-        ));
     }
 
     #[test]

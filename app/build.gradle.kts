@@ -10,6 +10,10 @@ plugins {
 // bundled-model build for controlled offline testing.
 val includeBundledModel = providers.gradleProperty("includeBundledModel")
     .orNull?.toBooleanStrictOrNull() ?: false
+// Opt-in side-by-side debug installation for IME/device tests. The default
+// debug and every release build retain the production application ID.
+val isolatedDebugPackage = providers.gradleProperty("isolatedDebugPackage")
+    .orNull?.toBooleanStrictOrNull() ?: false
 
 android {
     namespace = "dev.notune.transcribe"
@@ -19,8 +23,8 @@ android {
         applicationId = "app.offlinespeechtotext"
         minSdk = 26
         targetSdk = 35
-        versionCode = 39
-        versionName = "0.10.0"
+        versionCode = 40
+        versionName = "0.10.1"
         buildConfigField("boolean", "HAS_BUNDLED_MODEL", includeBundledModel.toString())
         ndk {
             abiFilters += "arm64-v8a"
@@ -45,6 +49,9 @@ android {
     }
 
     buildTypes {
+        debug {
+            if (isolatedDebugPackage) applicationIdSuffix = ".validation"
+        }
         release {
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("release")

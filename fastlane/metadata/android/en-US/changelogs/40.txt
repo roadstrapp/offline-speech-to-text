@@ -1,0 +1,3 @@
+Voice input now waits through Android's device-wide microphone unblock prompt instead of treating the blocked interval as a pause in speech.
+
+Fixed automatic stopping in the voice keyboard, improved the first-install message when no speech model is present, and made preferred-word spelling cleanup available across supported model families. Ordinary words are not automatically replaced with similar-sounding names.

@@ -51,7 +51,7 @@ pub(crate) fn apply_with_protected(
             if folded == "npub" {
                 // Decoder output may split the spoken prefix into two words.
                 // Keep these forms tied to the user's explicit npub entry.
-                for heard in ["en pub", "en pop", "n pub", "n pop"] {
+                for heard in ["en pub", "en pop", "n pub", "n pop", "m pups"] {
                     phrases.push(Phrase {
                         written: term.clone(),
                         folded: heard.to_string(),

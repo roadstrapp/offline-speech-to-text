@@ -21,8 +21,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         gradle_properties = (ROOT / "gradle.properties").read_text()
         workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
         self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
-        self.assertIn("versionCode = 39", gradle)
-        self.assertIn('versionName = "0.10.0"', gradle)
+        self.assertIn("versionCode = 40", gradle)
+        self.assertIn('versionName = "0.10.1"', gradle)
         self.assertIn('providers.gradleProperty("includeBundledModel")', gradle)
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: false', gradle)
         self.assertIn('ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,', gradle)
@@ -44,6 +44,31 @@ class ReleaseConfigurationTest(unittest.TestCase):
             lockfile,
             r'name = "transcribe-cpp-sys"\nversion = "0\.2\.3"',
         )
+
+    def test_isolated_device_validation_does_not_change_release_package(self):
+        gradle = (ROOT / "app/build.gradle.kts").read_text()
+        self.assertIn('providers.gradleProperty("isolatedDebugPackage")', gradle)
+        self.assertRegex(gradle, r'buildTypes\s*\{\s*debug\s*\{[^}]*applicationIdSuffix = "\.validation"')
+        self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
+        self.assertNotIn('applicationIdSuffix', gradle[gradle.index('release {'):])
+
+    def test_compact_missing_model_error_explains_recovery_to_keyboard_user(self):
+        assets = (ROOT / "src/assets.rs").read_text()
+        engine = (ROOT / "src/engine.rs").read_text()
+        self.assertIn('MISSING_BUNDLED_MODEL_ERROR', assets)
+        self.assertIn('"No speech model installed. Open the app to download one."', engine)
+        self.assertIn('e.to_string() == assets::MISSING_BUNDLED_MODEL_ERROR', engine)
+
+    def test_ime_system_mic_unmute_keeps_capture_and_native_autostop_has_a_callback(self):
+        native = (ROOT / "src/voice_session.rs").read_text()
+        endpoint = (ROOT / "src/interactive_endpointing.rs").read_text()
+        ime = (ROOT / "app/src/main/java/dev/notune/transcribe/RustInputMethodService.java").read_text()
+        self.assertIn("if audio_started {\n                buffer_clone.lock().unwrap().push(data);", native)
+        self.assertIn("let waiting_for_audio = endpoint", native)
+        self.assertIn("&& audio_started", endpoint)
+        self.assertIn('"onAutoStop", "()V"', native)
+        self.assertIn("public void onAutoStop()", ime)
+        self.assertIn("stopForResult(false, false);", ime[ime.index("public void onAutoStop()"):])
 
     def test_default_model_is_honestly_labeled_without_delivery_detail_in_readme(self):
         strings = ET.parse(ROOT / "app/src/main/res/values/strings.xml").getroot()
@@ -191,7 +216,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("capture_paused.store(true, Ordering::SeqCst)", native)
         self.assertIn("capture_paused.store(false, Ordering::SeqCst)", native)
         self.assertIn("stream.0.pause()", native)
-        self.assertIn("MAX_INTERACTIVE_SESSION_MS", native)
+        endpoint = (ROOT / "src/interactive_endpointing.rs").read_text()
+        self.assertIn("MAX_INTERACTIVE_SESSION_MS", endpoint)
         self.assertIn("startRecording(isAutoStopEnabled())", source)
         self.assertNotIn("setKeepScreenOn(recording)", source)
 
@@ -980,7 +1006,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("DefaultModelContract.BYTE_SIZE", source)
         self.assertIn("reloadModelNative(this)", source)
 
-    def test_custom_terms_are_bounded_private_and_model_gated(self):
+    def test_custom_terms_are_bounded_private_with_model_gated_hints(self):
         manifest = (ROOT / "app/src/main/AndroidManifest.xml").read_text()
         layout = (ROOT / "app/src/main/res/layout/activity_models.xml").read_text()
         editor_layout = (ROOT / "app/src/main/res/layout/activity_custom_terms.xml").read_text()
@@ -1004,7 +1030,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn('android:scrollbars="none"', editor_layout)
         self.assertIn('android:minHeight="144dp"', editor_layout)
         self.assertIn('android:minLines="5"', editor_layout)
-        self.assertIn('Whisper uses the first terms as hints; other models',
+        self.assertIn('All models restore exact and close spellings afterward',
                       (ROOT / "app/src/main/res/values/strings.xml").read_text())
         self.assertIn("MAX_TERMS = 128", store)
         self.assertIn("MAX_PROMPT_UTF8_BYTES = 200", store)
@@ -1042,7 +1068,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertNotIn('DiagnosticLog', corrections)
         self.assertIn('personal_corrections::load(&self.files_dir)', engine)
         self.assertIn('personal_corrections::apply_with_ranges(&self.text, rules)', engine)
-        self.assertIn('preferred_terms: if self.supports_initial_prompt', engine)
+        self.assertIn('preferred_terms: crate::custom_terms::load_terms(&self.custom_terms_path)', engine)
         self.assertIn('preferred_terms::apply_with_protected(&text, terms, &protected)', engine)
         self.assertLess(engine.index('personal_corrections::load(&self.files_dir)'),
                         engine.index('pub(crate) fn transcribe_into'))
