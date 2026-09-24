@@ -1,0 +1,3 @@
+English dictation now removes a standalone “uh” after recognition while preserving nearby words, sentence capitalization, and quoted speech. Other languages and filler-only results stay unchanged.
+
+For multilingual Parakeet, choose English under the model language setting to enable this English-only cleanup; Auto mode cannot reliably identify the language. Models, settings, and transcripts remain on your device.

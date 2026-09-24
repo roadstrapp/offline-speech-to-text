@@ -78,6 +78,10 @@ rustc --edition 2021 --test "$ROOT/src/audio_finalization.rs" \
   -o "$OUT/audio_finalization_test"
 "$OUT/audio_finalization_test"
 
+rustc --edition 2021 --test "$ROOT/src/english_fillers.rs" \
+  -o "$OUT/english_fillers_test"
+"$OUT/english_fillers_test"
+
 rustc --edition 2021 --test "$ROOT/src/bounded_preroll.rs" \
   -o "$OUT/bounded_preroll_test"
 "$OUT/bounded_preroll_test"

@@ -38,16 +38,22 @@ pub(crate) struct TranscriptionJob {
     preferred_terms: Option<Vec<String>>,
     corrections: Option<Vec<crate::personal_corrections::Rule>>,
     text: String,
+    english_output: bool,
 }
 
 impl TranscriptionJob {
     pub(crate) fn finish(self) -> String {
+        let raw_text = if self.english_output {
+            crate::english_fillers::remove_uh_owned(self.text)
+        } else {
+            self.text
+        };
         // Explicit user corrections take precedence over a close-spelling
         // guess: apply them to the raw model result before preferred words.
         let (text, protected) = if let Some(rules) = self.corrections.as_deref() {
-            crate::personal_corrections::apply_with_ranges(&self.text, rules)
+            crate::personal_corrections::apply_with_ranges(&raw_text, rules)
         } else {
-            (self.text, Vec::new())
+            (raw_text, Vec::new())
         };
         if let Some(terms) = self.preferred_terms.as_deref() {
             crate::preferred_terms::apply_with_protected(&text, terms, &protected)
@@ -62,6 +68,8 @@ pub struct Engine {
     session: transcribe_cpp::Session,
     language: Option<String>,
     task: transcribe_cpp::Task,
+    english_only_model: bool,
+    translates_to_english: bool,
     /// Family-specific decode options attached to every run; `None` for
     /// models that don't take the whisper run extension.
     run_ext: Option<transcribe_cpp::RunExtension>,
@@ -96,7 +104,8 @@ impl Engine {
         // Translation is gated on the model's capabilities: models without it
         // (e.g. Parakeet) silently keep transcribing, so the setting can stay
         // on while switching models.
-        let task = if translate && model.capabilities().supports_translate {
+        let capabilities = model.capabilities();
+        let task = if translate && capabilities.supports_translate {
             transcribe_cpp::Task::Translate
         } else {
             if translate {
@@ -128,6 +137,12 @@ impl Engine {
         );
         let supports_initial_prompt =
             is_whisper && model.supports(transcribe_cpp::Feature::InitialPrompt);
+        let english_only_model = capabilities.languages.len() == 1
+            && crate::english_fillers::is_english_tag(&capabilities.languages[0]);
+        // Whisper Turbo advertises translation despite being unreliable at
+        // producing English output; don't apply English-only cleanup there.
+        let translates_to_english =
+            task == transcribe_cpp::Task::Translate && !model.variant().contains("turbo");
         let run_ext = if is_whisper {
             Some(transcribe_cpp::RunExtension::Whisper(
                 transcribe_cpp::WhisperRunOptions {
@@ -175,6 +190,8 @@ impl Engine {
             session,
             language,
             task,
+            english_only_model,
+            translates_to_english,
             run_ext,
             supports_initial_prompt,
             custom_terms_path: files_dir.join(crate::custom_terms::FILE_NAME),
@@ -211,6 +228,7 @@ impl Engine {
             preferred_terms: crate::custom_terms::load_terms(&self.custom_terms_path),
             run_ext: self.run_extension(prompt),
             text: String::new(),
+            english_output: true,
         }
     }
 
@@ -232,13 +250,19 @@ impl Engine {
                 } else {
                     &samples[window.clone()]
                 };
-                let piece = self.run(audio, &job.run_ext)?;
-                assembled = crate::long_audio::stitch(&assembled, piece.trim());
+                let transcript = self.run(audio, &job.run_ext)?;
+                if !transcript.text.trim().is_empty() {
+                    job.english_output &= self.output_is_english(transcript.language.as_deref());
+                }
+                assembled = crate::long_audio::stitch(&assembled, transcript.text.trim());
             }
             append_piece(&mut job.text, &assembled);
         } else {
-            let piece = self.run(samples, &job.run_ext)?;
-            append_piece(&mut job.text, piece.trim());
+            let transcript = self.run(samples, &job.run_ext)?;
+            if !transcript.text.trim().is_empty() {
+                job.english_output &= self.output_is_english(transcript.language.as_deref());
+            }
+            append_piece(&mut job.text, transcript.text.trim());
         }
         Ok(())
     }
@@ -255,6 +279,15 @@ fn append_piece(target: &mut String, piece: &str) {
 }
 
 impl Engine {
+    fn output_is_english(&self, detected: Option<&str>) -> bool {
+        crate::english_fillers::known_english_output(
+            detected,
+            self.language.as_deref(),
+            self.english_only_model,
+            self.translates_to_english,
+        )
+    }
+
     fn run_extension(&self, prompt: Option<String>) -> Option<transcribe_cpp::RunExtension> {
         self.run_ext.clone().map(|extension| match extension {
             transcribe_cpp::RunExtension::Whisper(mut options) => {
@@ -276,7 +309,7 @@ impl Engine {
         &mut self,
         samples: &[f32],
         run_ext: &Option<transcribe_cpp::RunExtension>,
-    ) -> Result<String, String> {
+    ) -> Result<transcribe_cpp::Transcript, String> {
         loop {
             let opts = transcribe_cpp::RunOptions {
                 language: self.language.clone(),
@@ -285,7 +318,7 @@ impl Engine {
                 ..Default::default()
             };
             match self.session.run(samples, &opts) {
-                Ok(transcript) => return Ok(transcript.text),
+                Ok(transcript) => return Ok(transcript),
                 Err(transcribe_cpp::Error::Unsupported(msg)) if self.language.is_some() => {
                     let lang = self.language.take().unwrap();
                     self.language = lang.split_once('-').map(|(primary, _)| primary.to_string());
@@ -621,7 +654,7 @@ fn do_load(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::balanced_thread_count;
+    use super::{balanced_thread_count, TranscriptionJob};
 
     #[test]
     fn automatic_inference_balances_latency_and_battery() {
@@ -630,5 +663,18 @@ mod tests {
         assert_eq!(balanced_thread_count(2), 2);
         assert_eq!(balanced_thread_count(4), 2);
         assert_eq!(balanced_thread_count(8), 2);
+    }
+
+    #[test]
+    fn final_text_removes_fillers_only_from_known_english_output() {
+        let job = |english_output| TranscriptionJob {
+            run_ext: None,
+            preferred_terms: None,
+            corrections: None,
+            text: "I uh think so".to_string(),
+            english_output,
+        };
+        assert_eq!(job(true).finish(), "I think so");
+        assert_eq!(job(false).finish(), "I uh think so");
     }
 }

@@ -6,6 +6,7 @@ mod background_transcription;
 mod bounded_preroll;
 pub mod custom_terms;
 pub mod engine;
+mod english_fillers;
 pub mod foreground_recording;
 pub mod ime;
 mod interactive_endpointing;
