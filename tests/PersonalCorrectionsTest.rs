@@ -1,5 +1,7 @@
 #[path = "../src/personal_corrections.rs"]
 mod personal_corrections;
+#[path = "../src/transcript_guard.rs"]
+mod transcript_guard;
 
 #[test]
 fn exact_rules_are_case_insensitive_bounded_and_longest_first() {
@@ -67,4 +69,54 @@ fn invalid_or_disabled_files_fail_closed() {
     std::fs::write(root.join(personal_corrections::FILE_NAME), "bad data\n").unwrap();
     assert_eq!(personal_corrections::load(&root), None);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn protects_the_entire_match_and_literal_identifiers() {
+    let rules =
+        personal_corrections::parse("white noise => WhiteNoise\nmarmot => Marmot\n").unwrap();
+    for input in [
+        "white noise@example.com",
+        "white noise.dev",
+        "marmot.dev",
+        "`marmot`",
+        "white noise://host",
+        "white \"noise\"",
+        "‘marmot’",
+    ] {
+        assert_eq!(personal_corrections::apply(input, &rules), input);
+    }
+    assert_eq!(
+        personal_corrections::apply("l‘homme uses marmot, James’ marmot", &rules),
+        "l‘homme uses Marmot, James’ Marmot"
+    );
+}
+
+#[test]
+fn unicode_fold_expansion_and_multibyte_replacement_offsets_are_safe() {
+    let rules = personal_corrections::parse("İpek => Person\nwhite noise => WN\n").unwrap();
+    assert_eq!(
+        personal_corrections::apply("i\u{307}pek and white noise", &rules),
+        "Person and WN"
+    );
+    let input = "éclair white noise@example.com and white noise";
+    let (text, ranges) = personal_corrections::apply_with_ranges(input, &rules);
+    assert_eq!(text, "éclair white noise@example.com and WN");
+    assert_eq!(&text[ranges[0].clone()], "WN");
+}
+
+#[test]
+fn long_protected_tokens_and_many_quotes_remain_unchanged() {
+    let rules = personal_corrections::parse("marmot => Marmot\n").unwrap();
+    let input = format!(
+        "https://{} {} marmot",
+        "marmot".repeat(10000),
+        "‘marmot’ ".repeat(2000)
+    );
+    let expected = format!(
+        "https://{} {} Marmot",
+        "marmot".repeat(10000),
+        "‘marmot’ ".repeat(2000)
+    );
+    assert_eq!(personal_corrections::apply(&input, &rules), expected);
 }

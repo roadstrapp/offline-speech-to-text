@@ -546,6 +546,36 @@
                             android:layout_height="wrap_content"/>
                     </LinearLayout>
 
+                    <LinearLayout
+                        android:id="@+id/auto_stop_delay_controls"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:visibility="gone"
+                        android:layout_marginTop="4dp">
+
+                        <TextView
+                            android:id="@+id/label_auto_stop_delay"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:labelFor="@id/spinner_auto_stop_delay"
+                            android:text="@string/setting_auto_stop_delay"
+                            android:textAppearance="?attr/textAppearanceBodyMedium" />
+
+                        <Spinner
+                            android:id="@+id/spinner_auto_stop_delay"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:minHeight="48dp" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/setting_auto_stop_delay_desc"
+                            android:textAppearance="?attr/textAppearanceBodySmall"
+                            android:textColor="?attr/colorOnSurfaceVariant" />
+                    </LinearLayout>
+
                     <!-- Voice-input panel position -->
                     <LinearLayout
                         android:layout_width="match_parent"

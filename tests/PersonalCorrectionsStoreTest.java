@@ -11,6 +11,25 @@ public final class PersonalCorrectionsStoreTest {
         pairsAreValidatedWithoutUserSyntax();
         unsafeAmbiguousAndNumericChangesAreRejected();
         writesAndOptInAreAtomicAndClearable();
+        malformedUtf8IsRejectedWithoutChangingRules();
+    }
+
+    private static void malformedUtf8IsRejectedWithoutChangingRules() throws Exception {
+        Path root = Files.createTempDirectory("ostt-corrections-corrupt");
+        Path file = root.resolve(PersonalCorrections.FILE_NAME);
+        byte[] corrupt = {(byte) 0xFF};
+        PersonalCorrections.setEnabled(root.toFile(), true);
+        Files.write(file, corrupt);
+        try {
+            PersonalCorrections.read(root.toFile());
+            throw new AssertionError("malformed correction UTF-8 accepted");
+        } catch (java.io.IOException expected) {}
+        assertEquals(false, PersonalCorrections.reconcileEnabled(root.toFile()), "corrupt rules disabled");
+        assertEquals(false, PersonalCorrections.isEnabled(root.toFile()), "invalid opt-in reconciled");
+        assertEquals(true, Arrays.equals(corrupt, Files.readAllBytes(file)), "corrupt rules retained");
+        assertPairProblem(PersonalCorrections.Problem.INVALID_CONTROL, "source", "bad\uD800");
+        Files.delete(file);
+        Files.delete(root);
     }
 
     private static void pairsAreValidatedWithoutUserSyntax() throws Exception {

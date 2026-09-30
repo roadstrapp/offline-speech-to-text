@@ -19,4 +19,5 @@ pub mod recog_service;
 pub mod recognize;
 pub mod subtitle;
 pub mod transcribe_file;
+mod transcript_guard;
 pub mod voice_session;

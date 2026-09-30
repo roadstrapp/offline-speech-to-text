@@ -339,7 +339,7 @@ public class RustInputMethodService extends InputMethodService {
                 recordingSession.begin(getCurrentInputConnection(), editorGeneration);
                 recordingPaused = false;
                 processingResult = false;
-                startRecording(isAutoStopEnabled());
+                startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
                 updateRecordButtonUI(true);
             });
 
@@ -477,7 +477,7 @@ public class RustInputMethodService extends InputMethodService {
             }
             recordingSession.begin(getCurrentInputConnection(), editorGeneration);
             recordingPaused = false;
-            startRecording(isAutoStopEnabled());
+            startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
             updateRecordButtonUI(true);
         } finally {
             automaticStartInFlight = false;
@@ -902,7 +902,7 @@ public class RustInputMethodService extends InputMethodService {
     // Native methods
     private native void initNative(RustInputMethodService service);
     private native void cleanupNative();
-    private native void startRecording(boolean autoStop);
+    private native void startRecording(boolean autoStop, int trailingPauseMillis);
     private native void stopRecording();
     private native boolean finishRecording();
     private native void cancelRecording();

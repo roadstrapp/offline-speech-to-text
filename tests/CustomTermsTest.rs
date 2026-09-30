@@ -60,3 +60,22 @@ fn file_reader_fails_closed_without_exposing_content() {
     assert_eq!(custom_terms::load_terms(&file), None);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn one_loaded_list_keeps_prompt_and_cleanup_consistent_across_a_save() {
+    let root = std::env::temp_dir().join(format!("ostt-snapshot-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join("custom_terms");
+    std::fs::write(&file, "Before\n").unwrap();
+    let snapshot = custom_terms::load_terms(&file).unwrap();
+    std::fs::write(&file, "After\n").unwrap();
+    assert_eq!(
+        custom_terms::compile_prompt(&snapshot).as_deref(),
+        Some("Before")
+    );
+    assert_eq!(snapshot, vec!["Before"]);
+    assert_eq!(custom_terms::load_prompt(&file).as_deref(), Some("After"));
+    std::fs::write(&file, [0xff]).unwrap();
+    assert!(custom_terms::load_terms(&file).is_none());
+    std::fs::remove_dir_all(root).unwrap();
+}

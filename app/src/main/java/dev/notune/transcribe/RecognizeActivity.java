@@ -88,7 +88,7 @@ public class RecognizeActivity extends AppCompatActivity {
             audioPauser.request(this);
             pauseAudioActive = true;
         }
-        startRecording(isAutoStopEnabled());
+        startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
     }
 
     /** Stop capture and transcribe — used by both tap-to-stop and auto-stop. */
@@ -223,7 +223,7 @@ public class RecognizeActivity extends AppCompatActivity {
     // Native methods
     private native void initNative(RecognizeActivity activity);
     private native void cleanupNative();
-    private native void startRecording(boolean autoStop);
+    private native void startRecording(boolean autoStop, int trailingPauseMillis);
     private native void stopRecording();
     private native void cancelRecording();
 }

@@ -151,8 +151,16 @@ pub fn init_session(env: JNIEnv, target: JObject, owner: u8) -> VoiceSessionStat
 /// for trailing silence after speech (or a no-speech timeout) and invokes the
 /// Java-side `onAutoStop()` callback, which is expected to stop the recording
 /// the same way a manual tap would.
-pub fn start_recording(env: JNIEnv, state: &mut VoiceSessionState, auto_stop: bool) {
-    let _ = start_recording_impl(env, state, auto_stop, None);
+pub fn start_recording(
+    env: JNIEnv,
+    state: &mut VoiceSessionState,
+    auto_stop: bool,
+    trailing_pause_ms: i32,
+) {
+    // Snapshot once for this session. Changing settings cannot stop an active
+    // recording unexpectedly, and the audio callback performs no settings I/O.
+    let delay = crate::interactive_endpointing::resolve_silence_ms(trailing_pause_ms);
+    let _ = start_recording_impl(env, state, auto_stop, delay, None);
 }
 
 /// Start capture for the foreground service with cancellation fences around native setup.
@@ -162,13 +170,20 @@ pub fn start_recording_guarded(
     generation: i64,
     attempt: i64,
 ) -> i32 {
-    start_recording_impl(env, state, false, Some((generation, attempt)))
+    start_recording_impl(
+        env,
+        state,
+        false,
+        crate::interactive_endpointing::AUTO_STOP_SILENCE_MS,
+        Some((generation, attempt)),
+    )
 }
 
 fn start_recording_impl(
     mut env: JNIEnv,
     state: &mut VoiceSessionState,
     auto_stop: bool,
+    trailing_pause_ms: u64,
     gate: Option<(i64, i64)>,
 ) -> i32 {
     if start_is_cancelled(&mut env, state, gate) {
@@ -474,6 +489,7 @@ fn start_recording_impl(
                         silence,
                         no_speech_since.elapsed(),
                         capture_started.elapsed(),
+                        trailing_pause_ms,
                     ) {
                         // Claim the session so a simultaneous manual stop and
                         // this monitor can't both fire. Auto-stop always

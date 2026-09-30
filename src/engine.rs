@@ -216,8 +216,11 @@ impl Engine {
         // support receive a recognition hint, but every model can restore the
         // spelling of a recognized preferred term after decoding. A prompt is
         // not a guarantee that the decoder will use or retain a term.
+        let preferred_terms = crate::custom_terms::load_terms(&self.custom_terms_path);
         let prompt = if self.supports_initial_prompt {
-            crate::custom_terms::load_prompt(&self.custom_terms_path)
+            preferred_terms
+                .as_deref()
+                .and_then(crate::custom_terms::compile_prompt)
         } else {
             None
         };
@@ -225,7 +228,7 @@ impl Engine {
         // Parakeet. Snapshot them beside the Whisper prompt.
         TranscriptionJob {
             corrections: crate::personal_corrections::load(&self.files_dir),
-            preferred_terms: crate::custom_terms::load_terms(&self.custom_terms_path),
+            preferred_terms,
             run_ext: self.run_extension(prompt),
             text: String::new(),
             english_output: true,

@@ -1,9 +1,11 @@
 //! Conservative, local spelling cleanup for a preferred-word list.
 //!
 //! This is not Parakeet decoder bias: only a unique, very close spelling of
-//! a listed single word is changed after recognition. Exact correction pairs
+//! a listed single word is changed after recognition. Compound names restore
+//! only their exact spelling and case, with identical punctuation. Exact correction pairs
 //! remain available for larger or ambiguous recognition errors.
 
+use crate::transcript_guard::{match_folded, right_boundary, ProtectedText};
 use std::collections::HashSet;
 use std::ops::Range;
 
@@ -60,12 +62,7 @@ pub(crate) fn apply_with_protected(
                     });
                 }
             }
-        } else if term.contains(' ')
-            && term.split(' ').count() >= 2
-            && term
-                .split(' ')
-                .all(|part| !part.is_empty() && part.chars().all(char::is_alphabetic))
-        {
+        } else if exact_name(term) {
             // Exact multiword spelling/case is safe to restore without
             // guessing whether an unrelated phrase was spoken.
             phrases.push(Phrase {
@@ -85,35 +82,12 @@ pub(crate) fn apply_with_protected(
 
     let mut output = String::with_capacity(text.len());
     let mut offset = 0;
-    let mut token_start = 0;
-    let mut protected_index = 0;
-    let mut double_quote = false;
-    let mut single_quote = false;
+    let guard = ProtectedText::new(text, protected);
     while offset < text.len() {
         let ch = text[offset..].chars().next().unwrap();
-        if matches!(ch, '"' | '“' | '”') {
-            double_quote = if ch == '“' {
-                true
-            } else if ch == '”' {
-                false
-            } else {
-                !double_quote
-            };
-        } else if matches!(ch, '\'' | '‘' | '’') && !apostrophe_inside_word(text, offset, ch) {
-            single_quote = if ch == '‘' {
-                true
-            } else if ch == '’' {
-                false
-            } else {
-                !single_quote
-            };
-        }
         if !ch.is_alphabetic() {
             output.push(ch);
             offset += ch.len_utf8();
-            if ch.is_whitespace() {
-                token_start = offset;
-            }
             continue;
         }
         let start = offset;
@@ -125,12 +99,6 @@ pub(crate) fn apply_with_protected(
             offset += next.len_utf8();
         }
         let candidate = &text[start..offset];
-        while protected_index < protected.len() && protected[protected_index].end <= start {
-            protected_index += 1;
-        }
-        let explicit_replacement = protected
-            .get(protected_index)
-            .is_some_and(|range| range.start < offset);
         let joined_to_other_token = text[..start]
             .chars()
             .next_back()
@@ -139,26 +107,20 @@ pub(crate) fn apply_with_protected(
                 .chars()
                 .next()
                 .is_some_and(|value| value.is_alphanumeric() || value == '_');
-        if double_quote
-            || single_quote
-            || explicit_replacement
-            || joined_to_other_token
-            || protected_token(text, token_start)
-        {
+        if !guard.allows(start, offset) || joined_to_other_token {
             output.push_str(candidate);
             continue;
         }
-        if let Some((phrase_end, written)) =
-            match_phrase(text, start, &phrases, protected.get(protected_index))
-        {
+        if let Some((phrase_end, written)) = match_phrase(text, start, &phrases, &guard) {
             output.push_str(written);
             if output.len() > text.len().saturating_add(MAX_EXPANSION_BYTES) {
                 return text.to_string();
             }
-            token_start = text[start..phrase_end]
-                .rfind(' ')
-                .map_or(token_start, |relative| start + relative + 1);
             offset = phrase_end;
+            continue;
+        }
+        if compound_component(text, start, offset) {
+            output.push_str(candidate);
             continue;
         }
         let folded: Vec<char> = candidate.to_lowercase().chars().collect();
@@ -218,53 +180,56 @@ fn match_phrase<'a>(
     text: &str,
     start: usize,
     phrases: &'a [Phrase],
-    next_protected: Option<&Range<usize>>,
+    guard: &ProtectedText,
 ) -> Option<(usize, &'a str)> {
     for phrase in phrases {
-        let tail = &text[start..];
-        if tail.len() < phrase.char_count {
+        let Some(end) = match_folded(text, start, &phrase.folded) else {
             continue;
-        }
-        let first = tail.chars().next()?;
-        let expected_first = phrase.folded.chars().next()?;
-        if first.is_ascii()
-            && expected_first.is_ascii()
-            && !first.eq_ignore_ascii_case(&expected_first)
+        };
+        if right_boundary(text, end)
+            && guard.allows(start, end)
+            && !compound_component(text, start, end)
         {
-            continue;
+            return Some((end, phrase.written.as_str()));
         }
-        let mut end = 0;
-        let mut seen = 0;
-        for (relative, ch) in tail.char_indices() {
-            if seen == phrase.char_count {
-                break;
-            }
-            seen += 1;
-            end = relative + ch.len_utf8();
-        }
-        if seen != phrase.char_count
-            || text[start..start + end].to_lowercase() != phrase.folded
-            || text[start + end..]
-                .chars()
-                .next()
-                .is_some_and(|ch| ch.is_alphanumeric() || ch == '_')
-            || next_protected.is_some_and(|range| range.start < start + end)
-            || phrase_has_protected_token(text, start, start + end)
-        {
-            continue;
-        }
-        return Some((start + end, phrase.written.as_str()));
     }
     None
 }
 
-fn phrase_has_protected_token(text: &str, start: usize, end: usize) -> bool {
-    if protected_token(text, start) {
+fn exact_name(term: &str) -> bool {
+    let chars: Vec<char> = term.chars().collect();
+    chars.iter().enumerate().all(|(index, ch)| {
+        ch.is_alphabetic()
+            || (matches!(ch, ' ' | '-' | '\'' | '‘' | '’')
+                && index > 0
+                && index + 1 < chars.len()
+                && chars[index - 1].is_alphabetic()
+                && chars[index + 1].is_alphabetic())
+    })
+}
+
+fn compound_component(text: &str, start: usize, end: usize) -> bool {
+    let before = text[..start].chars().next_back();
+    if before == Some('-') || text[end..].starts_with('-') {
         return true;
     }
-    text[start..end]
-        .match_indices(' ')
-        .any(|(relative, _)| protected_token(text, start + relative + 1))
+    // A possessive suffix may follow a corrected name, but neither half of
+    // an unknown apostrophe-joined name is a fuzzy spelling candidate.
+    if matches!(before, Some('\'' | '‘' | '’')) {
+        let prefix = &text[..start - before.unwrap().len_utf8()];
+        if prefix.chars().next_back().is_some_and(char::is_alphabetic) {
+            return true;
+        }
+    }
+    if let Some(quote @ ('\'' | '‘' | '’')) = text[end..].chars().next() {
+        let tail = &text[end + quote.len_utf8()..];
+        if tail.chars().next().is_some_and(char::is_alphabetic)
+            && !(tail.starts_with('s') && right_boundary(tail, 1))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn known_spoken_alias(candidate: &[char], preferred: &[char]) -> bool {
@@ -318,41 +283,4 @@ fn one_edit_away(a: &[char], b: &[char]) -> bool {
         }
     }
     true
-}
-
-fn apostrophe_inside_word(text: &str, offset: usize, ch: char) -> bool {
-    text[..offset]
-        .chars()
-        .next_back()
-        .is_some_and(char::is_alphabetic)
-        && text[offset + ch.len_utf8()..]
-            .chars()
-            .next()
-            .is_some_and(char::is_alphabetic)
-}
-
-fn protected_token(text: &str, start: usize) -> bool {
-    let end = text[start..]
-        .find(char::is_whitespace)
-        .map_or(text.len(), |i| start + i);
-    let token = &text[start..end];
-    let folded = token.to_lowercase();
-    let mut chars = token.chars().peekable();
-    let mut previous = None;
-    let mut dotted_identifier = false;
-    while let Some(value) = chars.next() {
-        if value == '.'
-            && previous.is_some_and(char::is_alphanumeric)
-            && chars.peek().is_some_and(|next| next.is_alphanumeric())
-        {
-            dotted_identifier = true;
-            break;
-        }
-        previous = Some(value);
-    }
-    token.contains("://")
-        || token.contains('@')
-        || token.contains('`')
-        || folded.starts_with("www.")
-        || dotted_identifier
 }

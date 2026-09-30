@@ -145,7 +145,9 @@ public class MainActivity extends AppCompatActivity {
         bindMarkerSwitch(R.id.switch_pause_audio, "pause_audio", false);
         // Record-in-background defaults to ON; its marker file is the opt-out.
         bindMarkerSwitch(R.id.switch_record_background, "stop_on_hide", true);
-        bindMarkerSwitch(R.id.switch_auto_stop, "auto_stop", false);
+        setupAutoStopDelay();
+        bindMarkerSwitch(R.id.switch_auto_stop, "auto_stop", false,
+                findViewById(R.id.auto_stop_delay_controls));
         setupRecognizePanelPosition();
 
         CompoundButton diagnosticSwitch = findViewById(R.id.switch_diagnostic_logging);
@@ -232,6 +234,32 @@ public class MainActivity extends AppCompatActivity {
         // verified download or import completes.
         maybeStartNativeModelLoad();
         showInitialModelSetupIfNeeded();
+    }
+
+    private void setupAutoStopDelay() {
+        Spinner spinner = findViewById(R.id.spinner_auto_stop_delay);
+        ArrayAdapter<CharSequence> adapter = ArrayAdapter.createFromResource(
+                this, R.array.auto_stop_delays, android.R.layout.simple_spinner_item);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinner.setAdapter(adapter);
+        final int[] savedPosition = {AutoStopDelay.positionOf(AutoStopDelay.get(getFilesDir()))};
+        spinner.setSelection(savedPosition[0], false);
+        spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (position == savedPosition[0]) return;
+                try {
+                    AutoStopDelay.set(getFilesDir(), AutoStopDelay.atPosition(position));
+                    savedPosition[0] = position;
+                } catch (IOException e) {
+                    spinner.setSelection(savedPosition[0], false);
+                    snackbar(getString(R.string.setting_save_failed));
+                }
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) { }
+        });
     }
 
     private void setupRecognizePanelPosition() {
@@ -670,9 +698,17 @@ public class MainActivity extends AppCompatActivity {
      * file's presence means the switch is OFF (used for default-on settings).
      */
     private void bindMarkerSwitch(int switchId, String fileName, boolean inverted) {
+        bindMarkerSwitch(switchId, fileName, inverted, null);
+    }
+
+    private void bindMarkerSwitch(int switchId, String fileName, boolean inverted,
+                                  View dependentControl) {
         CompoundButton sw = findViewById(switchId);
         File marker = new File(getFilesDir(), fileName);
         sw.setChecked(marker.exists() != inverted);
+        if (dependentControl != null) {
+            dependentControl.setVisibility(sw.isChecked() ? View.VISIBLE : View.GONE);
+        }
         sw.setOnCheckedChangeListener((buttonView, isChecked) -> {
             boolean shouldExist = isChecked != inverted;
             if (shouldExist) {
@@ -683,6 +719,9 @@ public class MainActivity extends AppCompatActivity {
                 }
             } else {
                 marker.delete();
+            }
+            if (dependentControl != null) {
+                dependentControl.setVisibility(isChecked ? View.VISIBLE : View.GONE);
             }
         });
     }

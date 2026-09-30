@@ -5,6 +5,7 @@
 //! language boundary. Invalid data is ignored as a whole; it is never logged.
 
 use std::collections::HashSet;
+use std::io::Read;
 use std::path::Path;
 
 pub(crate) const FILE_NAME: &str = "custom_terms";
@@ -13,6 +14,7 @@ const MAX_TERMS: usize = 128;
 const MAX_TERM_CHARS: usize = 80;
 const MAX_PROMPT_BYTES: usize = 200;
 
+#[cfg(test)]
 pub(crate) fn load_prompt(path: &Path) -> Option<String> {
     let terms = load_terms(path)?;
     compile_prompt(&terms)
@@ -27,10 +29,12 @@ pub(crate) fn load_terms(path: &Path) -> Option<Vec<String>> {
     if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES {
         return None;
     }
-    let raw = match std::fs::read_to_string(path) {
-        Ok(raw) => raw,
-        Err(_) => return None,
-    };
+    let mut raw = String::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(MAX_FILE_BYTES + 1)
+        .read_to_string(&mut raw)
+        .ok()?;
     parse_terms(&raw).ok().filter(|terms| !terms.is_empty())
 }
 
@@ -67,7 +71,7 @@ fn parse_terms(raw: &str) -> Result<Vec<String>, ()> {
     Ok(terms)
 }
 
-fn compile_prompt(terms: &[String]) -> Option<String> {
+pub(crate) fn compile_prompt(terms: &[String]) -> Option<String> {
     let mut prompt = String::new();
     for term in terms {
         let next_len = prompt.len() + if prompt.is_empty() { 0 } else { 2 } + term.len();

@@ -53,7 +53,15 @@
     <string name="setting_record_background_desc">Keep recording when the voice keyboard is hidden; the text is inserted when you return</string>
 
     <string name="setting_auto_stop">Stop after silence</string>
-    <string name="setting_auto_stop_desc">Stop and transcribe the voice keyboard or popup ~2 seconds after you finish speaking</string>
+    <string name="setting_auto_stop_desc">Stop and transcribe after a pause in the voice keyboard or popup</string>
+    <string name="setting_auto_stop_delay">Pause before stopping</string>
+    <string name="setting_auto_stop_delay_desc">Longer pauses give you more thinking time and delay the result. Applies from the next recording.</string>
+    <string name="setting_save_failed">Could not save this setting. Your previous choice is kept.</string>
+    <string-array name="auto_stop_delays">
+        <item>2 seconds (default)</item>
+        <item>3 seconds</item>
+        <item>5 seconds</item>
+    </string-array>
 
     <string name="setting_recognize_panel_position">Voice panel position</string>
     <string name="setting_recognize_panel_position_desc">Bottom is roomier. A side uses less of the current app and is easier to reach one-handed.</string>
@@ -337,4 +345,5 @@
     <string name="source_link">Source</string>
     <string name="license_link">Licenses</string>
     <string name="about_version">Version %1$s (%2$d) · App source MIT · Default model CC BY 4.0</string>
+    <string name="custom_terms_load_failed">The saved dictionary could not be loaded. It stays unchanged until you save or clear it.</string>
 </resources>

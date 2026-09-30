@@ -2,6 +2,8 @@
 mod personal_corrections;
 #[path = "../src/preferred_terms.rs"]
 mod preferred_terms;
+#[path = "../src/transcript_guard.rs"]
+mod transcript_guard;
 
 fn apply(input: &str, terms: &[&str]) -> String {
     preferred_terms::apply(
@@ -216,4 +218,43 @@ fn many_phrases_do_not_change_unrelated_long_transcripts() {
         result,
         format!("{}White Noise", "ordinary words ".repeat(2000))
     );
+}
+
+#[test]
+fn possessives_and_curly_contractions_do_not_hide_later_words() {
+    assert_eq!(
+        apply("James' helibord and l‘homme uses helibord", &["HeliBoard"]),
+        "James' HeliBoard and l‘homme uses HeliBoard"
+    );
+}
+
+#[test]
+fn restores_exact_compound_names_without_fuzzy_components() {
+    let terms = &["Wi-Fi", "O’Reilly", "Jean-Luc", "Parakeet"];
+    assert_eq!(
+        apply("wi-fi, o’reilly and jean-luc", terms),
+        "Wi-Fi, O’Reilly and Jean-Luc"
+    );
+    assert_eq!(
+        apply("wi-fi42 o'reilly jean-lucas parakeat-like", terms),
+        "wi-fi42 o'reilly jean-lucas parakeat-like"
+    );
+    assert_eq!(
+        apply("‘o’reilly’ `wi-fi` \"jean-luc\"", terms),
+        "‘o’reilly’ `wi-fi` \"jean-luc\""
+    );
+}
+
+#[test]
+fn spaced_quotes_and_unknown_compound_names_stay_literal() {
+    for text in [
+        "' helibord '",
+        "‘ helibord ’",
+        "name’helibord",
+        "helibord’name",
+        "helibord-name",
+    ] {
+        assert_eq!(apply(text, &["HeliBoard"]), text);
+    }
+    assert_eq!(apply("helibord’s", &["HeliBoard"]), "HeliBoard’s");
 }

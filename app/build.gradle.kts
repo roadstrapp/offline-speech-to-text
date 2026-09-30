@@ -23,8 +23,9 @@ android {
         applicationId = "app.offlinespeechtotext"
         minSdk = 26
         targetSdk = 35
-        versionCode = 41
-        versionName = "0.11.0"
+        versionCode = 43
+        versionName = "0.12.0"
+        testInstrumentationRunner = "dev.notune.transcribe.AutoStopDeviceInstrumentation"
         buildConfigField("boolean", "HAS_BUNDLED_MODEL", includeBundledModel.toString())
         ndk {
             abiFilters += "arm64-v8a"
@@ -47,6 +48,8 @@ android {
             }
         }
     }
+
+    testBuildType = "release"
 
     buildTypes {
         debug {

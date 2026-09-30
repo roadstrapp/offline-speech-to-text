@@ -1,0 +1,1 @@
+Personal dictionary: exact names such as Wi-Fi and O’Reilly, safer quote/email/code protection, one consistent list per transcription, and safer concurrent saves. Choose a 2, 3 or 5 second trailing pause when Auto-stop is enabled. Existing defaults, offline processing and installed models are preserved.

@@ -13,6 +13,9 @@ PYTHON=${PYTHON_BIN:-python3}
     tests.test_documentation_contract -v
 )
 javac -d "$OUT" \
+  "$ROOT/app/src/main/java/dev/notune/transcribe/AutoStopDelay.java" \
+  "$ROOT/tests/AutoStopDelayTest.java" \
+  "$ROOT/app/src/main/java/dev/notune/transcribe/DictionaryFiles.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/CustomTerms.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/PersonalCorrections.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/StoredThemeMode.java" \
@@ -46,6 +49,7 @@ javac -d "$OUT" \
   "$ROOT/tests/PersonalCorrectionsStoreTest.java" \
   "$ROOT/tests/PendingTranscriptRecordTest.java"
 java -ea -cp "$OUT" dev.notune.transcribe.BehaviorTest
+java -ea -cp "$OUT" dev.notune.transcribe.AutoStopDelayTest
 java -ea -cp "$OUT" dev.notune.transcribe.ModelDownloadBoundaryTest
 java -ea -cp "$OUT" dev.notune.transcribe.ModelImportTaskTest
 java -ea -cp "$OUT" dev.notune.transcribe.CustomTermsStoreTest

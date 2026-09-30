@@ -1,12 +1,10 @@
 package dev.notune.transcribe;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.charset.CharacterCodingException;
 import java.nio.file.Files;
-import java.nio.file.StandardCopyOption;
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -137,7 +135,7 @@ final class PersonalCorrections {
         if (file.length() > MAX_FILE_BYTES) {
             throw new InvalidCorrectionsException(Problem.SIDE_TOO_LONG);
         }
-        return parse(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
+        return parse(DictionaryFiles.read(file, MAX_FILE_BYTES));
     }
 
     static Parsed write(File filesDir, String raw)
@@ -163,7 +161,7 @@ final class PersonalCorrections {
         if (!isEnabled(filesDir)) return false;
         try {
             if (!read(filesDir).rules.isEmpty()) return true;
-        } catch (InvalidCorrectionsException ignored) {
+        } catch (InvalidCorrectionsException | CharacterCodingException ignored) {
             // Native parsing also rejects the complete file. Keep UI and
             // runtime state aligned without exposing rule content.
         }
@@ -176,30 +174,12 @@ final class PersonalCorrections {
             writeAtomically(filesDir, ENABLED_FILE_NAME, "1\n");
         } else {
             Files.deleteIfExists(new File(filesDir, ENABLED_FILE_NAME).toPath());
-            Files.deleteIfExists(new File(filesDir, ENABLED_FILE_NAME + ".tmp").toPath());
         }
     }
 
     private static void writeAtomically(File filesDir, String name, String value)
             throws IOException {
-        File target = new File(filesDir, name);
-        File temporary = new File(filesDir, name + ".tmp");
-        if (value.isEmpty()) {
-            Files.deleteIfExists(temporary.toPath());
-            Files.deleteIfExists(target.toPath());
-            return;
-        }
-        try (FileOutputStream output = new FileOutputStream(temporary, false)) {
-            output.write(value.getBytes(StandardCharsets.UTF_8));
-            output.getFD().sync();
-        }
-        try {
-            Files.move(temporary.toPath(), target.toPath(),
-                    StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        } catch (AtomicMoveNotSupportedException error) {
-            Files.move(temporary.toPath(), target.toPath(),
-                    StandardCopyOption.REPLACE_EXISTING);
-        }
+        DictionaryFiles.write(filesDir, name, value);
     }
 
     private static String normalize(String value) {
@@ -224,7 +204,7 @@ final class PersonalCorrections {
         for (int offset = 0; offset < value.length();) {
             int codePoint = value.codePointAt(offset);
             offset += Character.charCount(codePoint);
-            if (Character.isISOControl(codePoint)
+            if ((codePoint >= 0xD800 && codePoint <= 0xDFFF) || Character.isISOControl(codePoint)
                     || codePoint == '"' || codePoint == '\''
                     || codePoint == 0x2018 || codePoint == 0x2019
                     || codePoint == 0x201C || codePoint == 0x201D) {

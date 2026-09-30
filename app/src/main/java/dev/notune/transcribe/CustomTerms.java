@@ -1,12 +1,8 @@
 package dev.notune.transcribe;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.AtomicMoveNotSupportedException;
-import java.nio.file.Files;
-import java.nio.file.StandardCopyOption;
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -78,7 +74,7 @@ final class CustomTerms {
             }
             for (int offset = 0; offset < term.length();) {
                 int codePoint = term.codePointAt(offset);
-                if (Character.isISOControl(codePoint)) {
+                if (Character.isISOControl(codePoint) || (codePoint >= 0xD800 && codePoint <= 0xDFFF)) {
                     throw new InvalidTermsException(Problem.INVALID_CONTROL);
                 }
                 offset += Character.charCount(codePoint);
@@ -117,30 +113,12 @@ final class CustomTerms {
         if (file.length() > MAX_FILE_BYTES) {
             throw new InvalidTermsException(Problem.PROMPT_TOO_LONG);
         }
-        return parse(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
+        return parse(DictionaryFiles.read(file, MAX_FILE_BYTES));
     }
 
     static Parsed write(File filesDir, String raw) throws IOException, InvalidTermsException {
         Parsed parsed = parse(raw);
-        File target = new File(filesDir, FILE_NAME);
-        File temporary = new File(filesDir, FILE_NAME + ".tmp");
-        if (parsed.terms.isEmpty()) {
-            Files.deleteIfExists(temporary.toPath());
-            Files.deleteIfExists(target.toPath());
-            return parsed;
-        }
-
-        try (FileOutputStream output = new FileOutputStream(temporary, false)) {
-            output.write(parsed.storedText.getBytes(StandardCharsets.UTF_8));
-            output.getFD().sync();
-        }
-        try {
-            Files.move(temporary.toPath(), target.toPath(),
-                    StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        } catch (AtomicMoveNotSupportedException error) {
-            Files.move(temporary.toPath(), target.toPath(),
-                    StandardCopyOption.REPLACE_EXISTING);
-        }
+        DictionaryFiles.write(filesDir, FILE_NAME, parsed.storedText);
         return parsed;
     }
 

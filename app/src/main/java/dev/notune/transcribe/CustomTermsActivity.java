@@ -113,14 +113,14 @@ public final class CustomTermsActivity extends AppCompatActivity {
             editor.setText(parsed.storedText);
             editor.setSelection(editor.length());
         } catch (IOException | CustomTerms.InvalidTermsException error) {
+            snackbar(getString(R.string.custom_terms_load_failed));
             // Preserve recoverability if an older or externally restored file
             // does not meet the current bounds: show its bounded raw contents
             // so the user can edit or clear it, but native code will ignore it.
             File file = new File(getFilesDir(), CustomTerms.FILE_NAME);
             try {
                 if (file.isFile() && file.length() <= 65536) {
-                    editor.setText(new String(
-                            Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
+                    editor.setText(DictionaryFiles.read(file, 65536));
                 }
             } catch (IOException ignored) {
                 editor.setText("");

@@ -33,10 +33,11 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_RustInputMethodService_
     env: JNIEnv,
     _class: JClass,
     auto_stop: jboolean,
+    trailing_pause_ms: jni::sys::jint,
 ) {
     let mut guard = IME_STATE.lock().unwrap();
     if let Some(state) = guard.as_mut() {
-        voice_session::start_recording(env, state, auto_stop != JNI_FALSE);
+        voice_session::start_recording(env, state, auto_stop != JNI_FALSE, trailing_pause_ms);
     }
 }
 
