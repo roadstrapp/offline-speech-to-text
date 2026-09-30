@@ -15,10 +15,12 @@ import java.nio.file.Files;
 /** Finite release-APK smoke test; never opens a saved transcript or dictionary. */
 public final class AutoStopDeviceInstrumentation extends Instrumentation {
     private Activity current;
+    private boolean failFixture;
 
     @Override
     public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
+        failFixture = arguments != null && "true".equals(arguments.getString("fixture_failure"));
         start();
     }
 
@@ -32,10 +34,12 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         boolean hadDelay = delayFile.exists();
         boolean wasEnabled = enabledFile.exists();
         int code = Activity.RESULT_OK;
+        boolean settingsTouched = false;
         try {
-            testDictionaryFiles();
             if (hadDelay) savedDelay = Files.readAllBytes(delayFile.toPath());
             check(savedDelay == null || savedDelay.length <= 16, "unexpected delay fixture");
+            testDictionaryFiles();
+            settingsTouched = true;
             Files.deleteIfExists(enabledFile.toPath());
             AutoStopDelay.set(directory, 2000);
             launchMain();
@@ -91,10 +95,23 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         } finally {
             try {
                 closeCurrent();
-                if (hadDelay && savedDelay != null) Files.write(delayFile.toPath(), savedDelay);
-                else Files.deleteIfExists(delayFile.toPath());
-                if (wasEnabled) enabledFile.createNewFile();
-                else Files.deleteIfExists(enabledFile.toPath());
+                if (settingsTouched) {
+                    if (hadDelay) Files.write(delayFile.toPath(), savedDelay);
+                    else Files.deleteIfExists(delayFile.toPath());
+                    if (wasEnabled) enabledFile.createNewFile();
+                    else Files.deleteIfExists(enabledFile.toPath());
+                }
+                if (failFixture) {
+                    check(!settingsTouched && code == Activity.RESULT_CANCELED,
+                            "failure injection did not run before mutation");
+                    check(delayFile.exists() == hadDelay && enabledFile.exists() == wasEnabled,
+                            "failed fixture changed setting presence");
+                    if (hadDelay) check(java.util.Arrays.equals(savedDelay,
+                            Files.readAllBytes(delayFile.toPath())), "failed fixture changed setting bytes");
+                    code = Activity.RESULT_OK;
+                    result.clear();
+                    result.putString("checks", "injected storage-fixture failure preserves original settings");
+                }
             } catch (Throwable cleanup) {
                 code = Activity.RESULT_CANCELED;
                 result.putString("cleanup", "settings restoration failed");
@@ -122,6 +139,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
                     "corrupt bytes modified");
             CustomTerms.write(root.toFile(), "Restored");
             check(CustomTerms.read(root.toFile()).terms.get(0).equals("Restored"), "replacement failed");
+            if (failFixture) throw new AssertionError("injected storage-fixture failure");
         } finally {
             try (java.util.stream.Stream<java.nio.file.Path> files = Files.list(root)) {
                 for (java.nio.file.Path file : (Iterable<java.nio.file.Path>) files::iterator) {
