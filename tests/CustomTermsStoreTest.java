@@ -7,10 +7,26 @@ import java.nio.file.Path;
 public final class CustomTermsStoreTest {
     public static void main(String[] args) throws Exception {
         normalizationIsStableAndCaseInsensitiveDuplicatesAreRemoved();
+        unicodePromptBudgetIncludesOnlyCompleteTerms();
         unsafeOrOversizedListsAreRejected();
         writesAreNormalizedAtomicAndClearable();
         corruptReadsPreserveBytes();
         concurrentSavesPublishCompleteFiles();
+    }
+
+    private static void unicodePromptBudgetIncludesOnlyCompleteTerms() throws Exception {
+        String first = repeat("é", 40); // 80 UTF-8 bytes.
+        String second = repeat("😀", 29) + "é"; // 118 UTF-8 bytes.
+        CustomTerms.Parsed parsed = CustomTerms.parse(first + "\n" + second + "\nlast");
+        assertEquals(first + ", " + second, parsed.prompt,
+                "complete Unicode terms fill exactly the 200-byte budget");
+        assertEquals(200, parsed.prompt.getBytes(StandardCharsets.UTF_8).length,
+                "prompt budget counts bytes, including the separator");
+        assertEquals(3, parsed.terms.size(), "prompt cutoff keeps the complete dictionary");
+
+        parsed = CustomTerms.parse(repeat("😀", 51) + "\nSmall");
+        assertEquals("", parsed.prompt, "oversized first term cannot be skipped for a later term");
+        assertEquals(2, parsed.terms.size(), "valid supplementary characters remain stored");
     }
 
     private static void normalizationIsStableAndCaseInsensitiveDuplicatesAreRemoved()

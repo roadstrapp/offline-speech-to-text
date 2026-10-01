@@ -128,6 +128,17 @@ fn unicode_whitespace_does_not_panic() {
 }
 
 #[test]
+fn reused_word_buffer_preserves_contextual_unicode_lowercase() {
+    // String lowercase treats Greek final sigma differently from lowering
+    // each scalar independently. Candidate matching must retain that rule.
+    assert_eq!(apply("ος οσ ΟΣ Ος", &["ΟΣ"]), "ΟΣ οσ ΟΣ ΟΣ");
+    assert_eq!(
+        apply("parakeat ΟΣ helibord ος", &["Parakeet", "ΟΣ", "HeliBoard"]),
+        "Parakeet ΟΣ HeliBoard ΟΣ"
+    );
+}
+
+#[test]
 fn explicit_corrections_win_over_similar_preferred_words() {
     let rules = personal_corrections::parse("helibord => HeliBord\n").unwrap();
     let (corrected, protected) =

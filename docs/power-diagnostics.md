@@ -2,6 +2,10 @@
 
 OSTT keeps diagnostics off by default and never logs audio or recognized text. Enable **Settings → Debug logging** only while investigating. The bounded private log then records content-free fields such as capture duration, paused duration, inference duration, and inference thread count.
 
+Recording appears as `state=recording`; an explicit native cancellation appears as `state=cancelled`. Neither is an error. Recognition-service failures use `error_code process=service,code=E_RECOGNIZER_<number>`, retaining Android's numeric error code without exception text. A timing record alone does not prove successful recognition: an empty result can still finish computation and then report a no-match error.
+
+Application/keyboard starts, recognition-service creation and enabling logging record `version_code`. Logs survive updates and may contain several builds; a startup marker does not identify older records preceding it. The bounded log can also retain a partial session after trimming. Include the app version and what you observed when sharing a report. Missing error records in an older build do not prove error-free use.
+
 ## Quick investigation
 
 1. In **Manage speech models**, run **Benchmark active model** three times with inference threads set to **Automatic**.

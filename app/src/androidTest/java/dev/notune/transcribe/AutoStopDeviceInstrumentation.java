@@ -41,6 +41,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             if (hadDelay) savedDelay = Files.readAllBytes(delayFile.toPath());
             check(savedDelay == null || savedDelay.length <= 16, "unexpected delay fixture");
             testDictionaryFiles();
+            testDiagnosticEvidence();
             settingsTouched = true;
             Files.deleteIfExists(enabledFile.toPath());
             AutoStopDelay.set(directory, 2000);
@@ -87,7 +88,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             });
             waitForIdleSync();
             current = null;
-            result.putString("checks", "isolated dictionary persistence, corrupt UTF-8, atomic save; delay visibility, choices, persistence, restart, popup JNI/cancel");
+            result.putString("checks", "isolated dictionary persistence, corrupt UTF-8, atomic save; content-free diagnostic statuses/version/errors; delay visibility, choices, persistence, restart, popup JNI/cancel");
             result.putString("privacy", "no saved transcript/dictionary collection; isolated synthetic fixtures removed; original settings restored");
         } catch (Throwable failure) {
             injectedFailureCaught = failure instanceof InjectedFixtureFailure;
@@ -144,6 +145,41 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             check(CustomTerms.read(root.toFile()).terms.get(0).equals("Restored"), "replacement failed");
             if (failFixture) throw new InjectedFixtureFailure();
         } finally {
+            try (java.util.stream.Stream<java.nio.file.Path> files = Files.list(root)) {
+                for (java.nio.file.Path file : (Iterable<java.nio.file.Path>) files::iterator) {
+                    Files.delete(file);
+                }
+            }
+            Files.delete(root);
+        }
+    }
+
+    private void testDiagnosticEvidence() throws Exception {
+        java.nio.file.Path root = Files.createTempDirectory(getTargetContext().getCacheDir().toPath(),
+                "diagnostic-device-");
+        try {
+            DiagnosticLog.recognizerError(root.toFile(), 9);
+            check(!Files.exists(root.resolve("diagnostic.log")), "disabled error logging wrote a file");
+            DiagnosticLog.setEnabled(root.toFile(), true);
+            DiagnosticLog.event(root.toFile(), "ime_start",
+                    "process=ime,version_code=" + BuildConfig.VERSION_CODE);
+            DiagnosticLog.event(root.toFile(), "ime_state",
+                    "state=" + NativeStatus.diagnosticLabel("Listening..."));
+            DiagnosticLog.event(root.toFile(), "ime_state",
+                    "state=" + NativeStatus.diagnosticLabel("Canceled"));
+            DiagnosticLog.recognizerError(root.toFile(), 9);
+            DiagnosticLog.event(root.toFile(), "error_code", "message=private_fixture");
+            check(DiagnosticLog.awaitIdleForTest(5_000), "diagnostic fixture did not drain");
+            String snapshot = new String(DiagnosticLog.snapshot(root.toFile()),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            check(snapshot.contains("version_code=" + BuildConfig.VERSION_CODE), "build marker absent");
+            check(snapshot.contains("state=recording") && snapshot.contains("state=cancelled"),
+                    "capture diagnostic labels absent");
+            check(snapshot.contains("code=E_RECOGNIZER_9"), "recognizer error evidence absent");
+            check(!snapshot.contains("private_fixture"), "unapproved diagnostic content accepted");
+        } finally {
+            DiagnosticLog.setEnabled(root.toFile(), false);
+            check(DiagnosticLog.awaitIdleForTest(5_000), "diagnostic fixture cleanup did not drain");
             try (java.util.stream.Stream<java.nio.file.Path> files = Files.list(root)) {
                 for (java.nio.file.Path file : (Iterable<java.nio.file.Path>) files::iterator) {
                     Files.delete(file);

@@ -169,7 +169,8 @@ public class RustInputMethodService extends InputMethodService {
     public void onCreate() {
         super.onCreate();
         mainHandler = new Handler(Looper.getMainLooper());
-        DiagnosticLog.event(getFilesDir(), "ime_start", "process=ime");
+        DiagnosticLog.event(getFilesDir(), "ime_start",
+                "process=ime,version_code=" + BuildConfig.VERSION_CODE);
         try {
             initNative(this);
         } catch (Throwable t) {

@@ -81,6 +81,9 @@ pub(crate) fn apply_with_protected(
     phrases.sort_by_key(|phrase| (std::cmp::Reverse(phrase.char_count), phrase.is_alias));
 
     let mut output = String::with_capacity(text.len());
+    // Reuse the scalar buffer across candidates. Keep String's contextual
+    // lowercase rules (for example Greek final sigma) when filling it.
+    let mut folded = Vec::new();
     let mut offset = 0;
     let guard = ProtectedText::new(text, protected);
     while offset < text.len() {
@@ -123,7 +126,8 @@ pub(crate) fn apply_with_protected(
             output.push_str(candidate);
             continue;
         }
-        let folded: Vec<char> = candidate.to_lowercase().chars().collect();
+        folded.clear();
+        folded.extend(candidate.to_lowercase().chars());
         let mut exact = None;
         let mut nearby = None;
         let mut ambiguous = false;

@@ -25,6 +25,7 @@ public class App extends Application {
         }, "settings-migration");
         migration.start();
         ThemePrefs.apply(this);
-        DiagnosticLog.event(getFilesDir(), "app_start", "process=app");
+        DiagnosticLog.event(getFilesDir(), "app_start",
+                "process=app,version_code=" + BuildConfig.VERSION_CODE);
     }
 }

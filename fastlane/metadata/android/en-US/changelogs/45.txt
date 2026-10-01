@@ -1,0 +1,1 @@
+Maintenance release: shared dictionary text normalization, simpler prompt construction, and fewer temporary allocations and repeated checks. Existing matching behavior, limits, file formats and settings are preserved. No new features.

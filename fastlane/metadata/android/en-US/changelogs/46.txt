@@ -1,0 +1,1 @@
+Correct diagnostic labels for recording and cancellation, record content-free recognition error codes, and identify the build at diagnostic session startup. Includes the previously prepared dictionary cleanup. Speech recognition behavior is unchanged.

@@ -195,6 +195,16 @@ public final class BehaviorTest {
                 "waiting remains the diagnostic idle phase");
         assertEquals("ready", NativeStatus.diagnosticLabel("Ready"),
                 "ready status has a content-free diagnostic label");
+        assertEquals("recording", NativeStatus.diagnosticLabel("Listening..."),
+                "normal microphone capture is distinguishable from an unknown status");
+        assertEquals("cancelled", NativeStatus.diagnosticLabel("Canceled"),
+                "a requested cancellation is distinguishable from an error");
+        assertEquals(NativeStatus.Phase.UNKNOWN, NativeStatus.classify("Listening..."),
+                "diagnostic capture labeling does not alter existing UI phase rules");
+        assertEquals("unknown", NativeStatus.diagnosticLabel("Listening... private text"),
+                "only the exact fixed capture status receives the recording label");
+        assertEquals("error", NativeStatus.diagnosticLabel("Error: Listening..."),
+                "an error remains an error rather than a capture status");
         assertEquals("unknown", NativeStatus.diagnosticLabel(null),
                 "missing status fails closed without throwing");
     }
@@ -734,6 +744,7 @@ public final class BehaviorTest {
         Path filesDir = Files.createTempDirectory("offline-stt-diagnostic-log-test");
         Path disabledDir = filesDir.resolve("disabled");
         DiagnosticLog.event(disabledDir.toFile(), "app_start", "process=app");
+        DiagnosticLog.recognizerError(disabledDir.toFile(), 9);
         assertEquals(false, Files.exists(disabledDir),
                 "disabled logging returns before touching the file system");
         DiagnosticLog.event(filesDir.toFile(), "app_start", "process=app");
@@ -763,9 +774,33 @@ public final class BehaviorTest {
         assertEquals(true, metrics.contains("duration_ms=12000,paused_ms=1500"),
                 "capture power metadata is allowlisted");
 
+        DiagnosticLog.event(filesDir.toFile(), "ime_start", "process=ime,version_code=46");
+        DiagnosticLog.event(filesDir.toFile(), "ime_state",
+                "state=" + NativeStatus.diagnosticLabel("Listening..."));
+        DiagnosticLog.event(filesDir.toFile(), "ime_state",
+                "state=" + NativeStatus.diagnosticLabel("Canceled"));
+        for (int errorCode : new int[] {3, 4, 5, 7, 9, Integer.MAX_VALUE, Integer.MIN_VALUE}) {
+            DiagnosticLog.recognizerError(filesDir.toFile(), errorCode);
+        }
+        assertEquals(true, DiagnosticLog.awaitIdleForTest(5_000),
+                "fixed status, version and numeric error evidence drains");
+        String lifecycle = Files.readString(filesDir.resolve("diagnostic.log"),
+                StandardCharsets.UTF_8);
+        for (String expected : new String[] {
+                "ime_start process=ime,version_code=46", "ime_state state=recording",
+                "ime_state state=cancelled", "error_code process=service,code=E_RECOGNIZER_3",
+                "code=E_RECOGNIZER_4", "code=E_RECOGNIZER_5", "code=E_RECOGNIZER_7",
+                "code=E_RECOGNIZER_9", "code=E_RECOGNIZER_2147483647",
+                "code=E_RECOGNIZER_UNKNOWN"}) {
+            assertEquals(true, lifecycle.contains(expected),
+                    "diagnostic snapshot preserves content-free evidence: " + expected);
+        }
+
         DiagnosticLog.event(filesDir.toFile(), "transcript", "secret words");
         DiagnosticLog.event(filesDir.toFile(), "ime_state", "editor=secret words");
         DiagnosticLog.event(filesDir.toFile(), "ime_state", "state=secret");
+        DiagnosticLog.event(filesDir.toFile(), "ime_start", "process=ime,version_code=secret");
+        DiagnosticLog.event(filesDir.toFile(), "error_code", "process=service,message=secret");
         assertEquals(true, DiagnosticLog.awaitIdleForTest(5_000), "rejected events do not stall writer");
         String safe = Files.readString(filesDir.resolve("diagnostic.log"), StandardCharsets.UTF_8);
         assertEquals(false, safe.contains("secret"),
@@ -807,7 +842,7 @@ public final class BehaviorTest {
         assertEquals(true, crossProcessLog.endsWith("\n"),
                 "cross-process log ends at a record boundary");
         Pattern record = Pattern.compile(
-                "^\\d+ (?:app_start|state|error|model|timing|resource)(?: [a-z_]+=[a-z0-9_.-]+(?:,[a-z_]+=[a-z0-9_.-]+)*)?$");
+                "^\\d+ (?:app_start|ime_start|ime_state|error_code|timing|resource)(?: [a-z_]+=[a-zA-Z0-9_.:/-]+(?:,[a-z_]+=[a-zA-Z0-9_.:/-]+)*)?$");
         for (String line : crossProcessLog.split("\\R")) {
             assertEquals(true, record.matcher(line).matches(),
                     "cross-process log record is intact");

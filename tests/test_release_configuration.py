@@ -21,8 +21,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         gradle_properties = (ROOT / "gradle.properties").read_text()
         workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
         self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
-        self.assertIn("versionCode = 43", gradle)
-        self.assertIn('versionName = "0.12.0"', gradle)
+        self.assertIn("versionCode = 46", gradle)
+        self.assertIn('versionName = "0.12.1"', gradle)
         self.assertIn('providers.gradleProperty("includeBundledModel")', gradle)
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: false', gradle)
         self.assertIn('ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,', gradle)
@@ -1038,7 +1038,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         files = (ROOT / "app/src/main/java/dev/notune/transcribe/DictionaryFiles.java").read_text()
         self.assertIn("StandardCopyOption.ATOMIC_MOVE", files)
         self.assertIn("DictionaryFiles.write", store)
-        self.assertIn("Normalizer.Form.NFC", store)
+        dictionary_text = (ROOT / "app/src/main/java/dev/notune/transcribe/DictionaryText.java").read_text()
+        self.assertIn("Normalizer.Form.NFC", dictionary_text)
         self.assertNotIn("DiagnosticLog", store + activity)
         self.assertIn("VerifiedModelProvenance.isVerified", activity)
         self.assertIn('? ModelDescriptor.Capability.SUPPORTED', catalog)
@@ -1081,7 +1082,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertLess(engine.index('personal_corrections::load(&self.files_dir)'),
                         engine.index('pub(crate) fn transcribe_into'))
         self.assertIn('ProtectedText::new(text, &[])', native_corrections)
-        self.assertIn('guard.allows(offset, offset + consumed)', native_corrections)
+        self.assertIn('guard.allows(offset, end)', native_corrections)
         self.assertNotIn('log::', native_corrections)
 
     def test_settings_schema_migration_is_applied_before_theme(self):

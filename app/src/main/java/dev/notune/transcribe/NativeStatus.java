@@ -35,6 +35,9 @@ final class NativeStatus {
     }
 
     static String diagnosticLabel(String status) {
+        // These capture statuses do not change the existing UI phase rules.
+        if ("Listening...".equals(status)) return "recording";
+        if ("Canceled".equals(status)) return "cancelled";
         switch (classify(status)) {
             case ERROR: return "error";
             case LOADING: return "loading";

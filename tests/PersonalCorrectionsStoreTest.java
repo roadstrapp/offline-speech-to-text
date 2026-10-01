@@ -9,9 +9,22 @@ public final class PersonalCorrectionsStoreTest {
     public static void main(String[] args) throws Exception {
         rulesAreNormalizedAndExplicit();
         pairsAreValidatedWithoutUserSyntax();
+        normalizationPreservesExistingWhitespaceRules();
         unsafeAmbiguousAndNumericChangesAreRejected();
         writesAndOptInAreAtomicAndClearable();
         malformedUtf8IsRejectedWithoutChangingRules();
+    }
+
+    private static void normalizationPreservesExistingWhitespaceRules() throws Exception {
+        String heard = " \te\u0301clair\u2003 name\t ";
+        CustomTerms.Parsed terms = CustomTerms.parse(heard + "\nwhite\u00A0noise");
+        assertEquals("éclair name\nwhite\u00A0noise\n", terms.storedText,
+                "NFC and Java whitespace rules preserve non-breaking spaces");
+        PersonalCorrections.Parsed corrections = PersonalCorrections.fromPairs(Arrays.asList(
+                new PersonalCorrections.Rule(heard, "Éclair Name")));
+        assertEquals("éclair name => Éclair Name\n", corrections.storedText,
+                "both editors share the same canonical entry text");
+        assertProblem(PersonalCorrections.Problem.INVALID_CONTROL, "éclair\tname => Éclair Name");
     }
 
     private static void malformedUtf8IsRejectedWithoutChangingRules() throws Exception {

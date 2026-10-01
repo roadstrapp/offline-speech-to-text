@@ -112,15 +112,22 @@ pub(crate) fn apply_with_ranges(
             .chars()
             .next()
             .expect("valid character boundary");
-        let replacement = rules.iter().find_map(|rule| {
-            match_rule(text, offset, rule)
-                .filter(|(consumed, _)| guard.allows(offset, offset + consumed))
-        });
-        if let Some((consumed, written)) = replacement {
+        // All rules require the same source boundary. Check it once before
+        // trying their folded spellings, preserving longest-first priority.
+        let replacement = if left_boundary(text, offset) {
+            rules.iter().find_map(|rule| {
+                let end = match_folded(text, offset, &rule.heard_folded)?;
+                (right_boundary(text, end) && guard.allows(offset, end))
+                    .then_some((end, rule.written.as_str()))
+            })
+        } else {
+            None
+        };
+        if let Some((end, written)) = replacement {
             let start = result.len();
             result.push_str(written);
             protected.push(start..result.len());
-            offset += consumed;
+            offset = end;
             if result.len() > text.len().saturating_add(MAX_TOTAL_EXPANSION_BYTES) {
                 return (text.to_string(), Vec::new());
             }
@@ -130,14 +137,6 @@ pub(crate) fn apply_with_ranges(
         }
     }
     (result, protected)
-}
-
-fn match_rule<'a>(text: &str, offset: usize, rule: &'a Rule) -> Option<(usize, &'a str)> {
-    if !left_boundary(text, offset) {
-        return None;
-    }
-    let end = match_folded(text, offset, &rule.heard_folded)?;
-    right_boundary(text, end).then_some((end - offset, rule.written.as_str()))
 }
 
 fn normalize(value: &str) -> String {

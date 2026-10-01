@@ -156,7 +156,8 @@ public class MainActivity extends AppCompatActivity {
             try {
                 DiagnosticLog.setEnabled(getFilesDir(), enabled);
                 if (enabled) {
-                    DiagnosticLog.event(getFilesDir(), "app_start", "process=app");
+                    DiagnosticLog.event(getFilesDir(), "app_start",
+                            "process=app,version_code=" + BuildConfig.VERSION_CODE);
                 }
             } catch (IOException e) {
                 snackbar(getString(R.string.diagnostic_log_error));

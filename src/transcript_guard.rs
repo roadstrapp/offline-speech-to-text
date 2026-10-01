@@ -114,6 +114,8 @@ fn protected_token(token: &str) -> bool {
     token.contains("://")
         || token.contains('@')
         || token.contains('`')
-        || token.to_lowercase().starts_with("www.")
+        || token
+            .get(..4)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("www."))
         || dotted
 }

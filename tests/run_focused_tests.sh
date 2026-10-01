@@ -16,6 +16,7 @@ javac -d "$OUT" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/AutoStopDelay.java" \
   "$ROOT/tests/AutoStopDelayTest.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/DictionaryFiles.java" \
+  "$ROOT/app/src/main/java/dev/notune/transcribe/DictionaryText.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/CustomTerms.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/PersonalCorrections.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/StoredThemeMode.java" \

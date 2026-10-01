@@ -3,7 +3,6 @@ package dev.notune.transcribe;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -66,8 +65,7 @@ final class CustomTerms {
         List<String> terms = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
         for (String line : lines) {
-            String term = normalizeWhitespace(Normalizer.normalize(
-                    line.trim(), Normalizer.Form.NFC));
+            String term = DictionaryText.normalize(line);
             if (term.isEmpty()) continue;
             if (term.contains("<|") || term.contains("|>")) {
                 throw new InvalidTermsException(Problem.SPECIAL_TOKEN);
@@ -98,11 +96,15 @@ final class CustomTerms {
         // Whisper has a smaller prompt budget than the dictionary. Send a
         // complete prefix of terms; Parakeet uses the entire list locally.
         StringBuilder prompt = new StringBuilder();
+        int promptBytes = 0;
         for (String term : terms) {
-            String next = prompt.length() == 0 ? term : prompt + ", " + term;
-            if (next.getBytes(StandardCharsets.UTF_8).length > MAX_PROMPT_UTF8_BYTES) break;
-            prompt.setLength(0);
-            prompt.append(next);
+            int separatorBytes = prompt.length() == 0 ? 0 : 2;
+            int nextBytes = promptBytes + separatorBytes
+                    + term.getBytes(StandardCharsets.UTF_8).length;
+            if (nextBytes > MAX_PROMPT_UTF8_BYTES) break;
+            if (separatorBytes != 0) prompt.append(", ");
+            prompt.append(term);
+            promptBytes = nextBytes;
         }
         return new Parsed(terms, stored, prompt.toString());
     }
@@ -120,22 +122,5 @@ final class CustomTerms {
         Parsed parsed = parse(raw);
         DictionaryFiles.write(filesDir, FILE_NAME, parsed.storedText);
         return parsed;
-    }
-
-    private static String normalizeWhitespace(String value) {
-        StringBuilder result = new StringBuilder(value.length());
-        boolean pendingSpace = false;
-        for (int offset = 0; offset < value.length();) {
-            int codePoint = value.codePointAt(offset);
-            offset += Character.charCount(codePoint);
-            if (Character.isWhitespace(codePoint)) {
-                pendingSpace = result.length() > 0;
-            } else {
-                if (pendingSpace) result.append(' ');
-                result.appendCodePoint(codePoint);
-                pendingSpace = false;
-            }
-        }
-        return result.toString();
     }
 }

@@ -5,7 +5,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.charset.CharacterCodingException;
 import java.nio.file.Files;
-import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -94,8 +93,8 @@ final class PersonalCorrections {
             if (pair == null) {
                 throw new InvalidCorrectionsException(Problem.EMPTY_SIDE);
             }
-            String heard = normalize(pair.heard);
-            String written = normalize(pair.written);
+            String heard = DictionaryText.normalize(pair.heard);
+            String written = DictionaryText.normalize(pair.written);
             if (heard.isEmpty() || written.isEmpty()) {
                 throw new InvalidCorrectionsException(Problem.EMPTY_SIDE);
             }
@@ -123,10 +122,11 @@ final class PersonalCorrections {
         for (Rule rule : rules) {
             stored.append(rule.heard).append(" => ").append(rule.written).append('\n');
         }
-        if (stored.toString().getBytes(StandardCharsets.UTF_8).length > MAX_FILE_BYTES) {
+        String storedText = stored.toString();
+        if (storedText.getBytes(StandardCharsets.UTF_8).length > MAX_FILE_BYTES) {
             throw new InvalidCorrectionsException(Problem.SIDE_TOO_LONG);
         }
-        return new Parsed(rules, stored.toString());
+        return new Parsed(rules, storedText);
     }
 
     static Parsed read(File filesDir) throws IOException, InvalidCorrectionsException {
@@ -141,14 +141,14 @@ final class PersonalCorrections {
     static Parsed write(File filesDir, String raw)
             throws IOException, InvalidCorrectionsException {
         Parsed parsed = parse(raw);
-        writeAtomically(filesDir, FILE_NAME, parsed.storedText);
+        DictionaryFiles.write(filesDir, FILE_NAME, parsed.storedText);
         return parsed;
     }
 
     static Parsed writePairs(File filesDir, List<Rule> pairs)
             throws IOException, InvalidCorrectionsException {
         Parsed parsed = fromPairs(pairs);
-        writeAtomically(filesDir, FILE_NAME, parsed.storedText);
+        DictionaryFiles.write(filesDir, FILE_NAME, parsed.storedText);
         return parsed;
     }
 
@@ -171,33 +171,10 @@ final class PersonalCorrections {
 
     static void setEnabled(File filesDir, boolean enabled) throws IOException {
         if (enabled) {
-            writeAtomically(filesDir, ENABLED_FILE_NAME, "1\n");
+            DictionaryFiles.write(filesDir, ENABLED_FILE_NAME, "1\n");
         } else {
             Files.deleteIfExists(new File(filesDir, ENABLED_FILE_NAME).toPath());
         }
-    }
-
-    private static void writeAtomically(File filesDir, String name, String value)
-            throws IOException {
-        DictionaryFiles.write(filesDir, name, value);
-    }
-
-    private static String normalize(String value) {
-        String normalized = Normalizer.normalize(value.trim(), Normalizer.Form.NFC);
-        StringBuilder result = new StringBuilder(normalized.length());
-        boolean pendingSpace = false;
-        for (int offset = 0; offset < normalized.length();) {
-            int codePoint = normalized.codePointAt(offset);
-            offset += Character.charCount(codePoint);
-            if (Character.isWhitespace(codePoint)) {
-                pendingSpace = result.length() > 0;
-            } else {
-                if (pendingSpace) result.append(' ');
-                result.appendCodePoint(codePoint);
-                pendingSpace = false;
-            }
-        }
-        return result.toString();
     }
 
     private static boolean containsUnsafeCharacter(String value) {

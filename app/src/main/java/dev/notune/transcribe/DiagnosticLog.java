@@ -116,6 +116,12 @@ public final class DiagnosticLog {
         }
     }
 
+    /** Framework error numbers only; never log exception or recognition text. */
+    static void recognizerError(File filesDir, int errorCode) {
+        String code = errorCode >= 0 ? Integer.toString(errorCode) : "UNKNOWN";
+        event(filesDir, "error_code", "process=service,code=E_RECOGNIZER_" + code);
+    }
+
     private static void writeEvent(File filesDir, String event, String detail) {
         try {
             filesDir.mkdirs();
@@ -192,13 +198,15 @@ public final class DiagnosticLog {
                 case "state":
                     safe = Arrays.asList("start", "stop", "ready", "unknown", "error",
                             "loading", "processing", "idle", "enabled", "disabled",
-                            "visible", "hidden", "created", "destroyed").contains(value);
+                            "visible", "hidden", "created", "destroyed",
+                            "recording", "cancelled").contains(value);
                     break;
                 case "elapsed_ms":
                 case "duration_ms":
                 case "audio_ms":
                 case "paused_ms":
                 case "cpu_threads":
+                case "version_code":
                 case "memory_kb":
                     safe = value.matches("[0-9]{1,12}");
                     break;

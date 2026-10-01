@@ -1,0 +1,1 @@
+Maintenance release: reduces repeated work and temporary allocations in personal-dictionary cleanup while preserving existing matching behavior. No new features or settings.

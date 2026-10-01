@@ -52,6 +52,8 @@ public class VoiceRecognitionService extends RecognitionService {
     @Override
     public void onCreate() {
         super.onCreate();
+        DiagnosticLog.event(getFilesDir(), "service_state",
+                "state=created,version_code=" + BuildConfig.VERSION_CODE);
         try {
             initNative(this);
         } catch (Throwable t) {
@@ -262,6 +264,7 @@ public class VoiceRecognitionService extends RecognitionService {
     public void onError(int errorCode) {
         Callback cb = mCallback;
         if (cb == null) return;
+        DiagnosticLog.recognizerError(getFilesDir(), errorCode);
         mainHandler.post(() -> {
             try { cb.error(errorCode); } catch (RemoteException ignored) {}
             if (mCallback == cb) mCallback = null;
@@ -285,6 +288,7 @@ public class VoiceRecognitionService extends RecognitionService {
     private void safeError(int errorCode) {
         Callback cb = mCallback;
         if (cb == null) return;
+        DiagnosticLog.recognizerError(getFilesDir(), errorCode);
         try { cb.error(errorCode); } catch (RemoteException ignored) {}
         mCallback = null;
     }
