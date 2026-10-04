@@ -107,3 +107,6 @@ javac -d "$OUT" \
   "$ROOT/docs/examples/CallerAudioSessionCore.java" \
   "$ROOT/tests/CallerAudioLifecycleTest.java"
 java -ea -cp "$OUT" docs.examples.CallerAudioLifecycleTest
+
+rustc --edition 2021 --test "$ROOT/src/caller_audio_input.rs" -o "$OUT/caller_audio_input_test"
+"$OUT/caller_audio_input_test"

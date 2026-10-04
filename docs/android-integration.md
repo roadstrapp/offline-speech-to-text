@@ -103,6 +103,25 @@ Offline Speech to Text snapshots the private preferred-word list once per transc
 
 Long caller-audio sessions remain one ordinary recognition request. OSTT keeps the supplied PCM as one continuous utterance and calls the standard final `onResults` only after the writer closes or the caller stops listening. Ordinary dictations use one model run. Whisper owns its native long-input windows; very long input to other offline families is bounded with overlapping quiet-point windows and text-overlap reconciliation inside OSTT. An ordinary hesitation is never used as an app-level endpoint. Do not enable `EXTRA_SEGMENTED_SESSION` or concatenate partial callbacks. `cancel()` discards the captured utterance.
 
+### Caller-audio completion and errors
+
+Closing the writer after its final PCM frame is the clearest completion signal. On OSTT
+0.12.2+, `stopListening()` also drains PCM already readable by the service before
+finalizing. An unclosed idle writer does not hold Stop open. Total drain time after Stop
+is bounded to 500 ms; exceeding that limit returns `ERROR_AUDIO`. Cancellation discards the request. Descriptor read/poll errors and incomplete
+PCM frames return `ERROR_AUDIO`, rather than successful text from a truncated recording.
+Finish writing each whole PCM frame before requesting Stop (one frame is
+`channel_count × bytes_per_sample` bytes). Stop does not wait for a future writer to
+complete a partial frame; that request returns `ERROR_AUDIO`. Close the writer
+only after its final complete frame when using EOF instead.
+
+`ERROR_NO_MATCH` means no recognized text, not proof that the supplied audio was silent.
+OSTT never turns an empty decode into a successful empty result. Clients should preserve
+previously recognized chunks, bound retries, and let the user choose what to do with an
+unrecognized remainder. Opt-in content-free diagnostics distinguish insufficient audio,
+empty decoding, input failure and recognized text using fixed outcome labels and audio
+duration; they never include audio or transcript content.
+
 ### Scoped Kotlin session
 
 The following core is intentionally scoped to an API 33+ activity that is visible, already has `RECORD_AUDIO`, already resolved an eligible component, and already passed the capability preflight above. It uses only public Android APIs. The caller supplies `isOriginCurrent` so a late result cannot enter a different account, conversation, editor, or draft revision.

@@ -4,6 +4,7 @@ mod audio_finalization;
 mod background_chunking;
 mod background_transcription;
 mod bounded_preroll;
+mod caller_audio_input;
 pub mod custom_terms;
 pub mod engine;
 mod english_fillers;

@@ -796,6 +796,23 @@ public final class BehaviorTest {
                     "diagnostic snapshot preserves content-free evidence: " + expected);
         }
 
+        for (int reason = 0; reason <= 3; reason++) {
+            DiagnosticLog.recognitionOutcome(filesDir.toFile(), reason, 1600);
+        }
+        DiagnosticLog.recognitionOutcome(filesDir.toFile(), 1, Long.MAX_VALUE);
+        DiagnosticLog.recognitionOutcome(filesDir.toFile(), 1, -1);
+        DiagnosticLog.recognitionOutcome(filesDir.toFile(), 99, 777);
+        DiagnosticLog.event(filesDir.toFile(), "recognition_outcome", "outcome=secret");
+        assertEquals(true, DiagnosticLog.awaitIdleForTest(5_000), "outcome writer drains");
+        String outcomes = Files.readString(filesDir.resolve("diagnostic.log"));
+        for (String label : new String[] {"text", "insufficient_audio", "empty_decode", "input_error"}) {
+            assertEquals(true, outcomes.contains("outcome=" + label + ",audio_ms=1600"),
+                    "fixed outcome metadata recorded: " + label);
+        }
+        assertEquals(true, outcomes.contains("audio_ms=999999999999"), "duration is bounded");
+        assertEquals(true, outcomes.contains("outcome=insufficient_audio,audio_ms=0"), "negative duration clamped");
+        assertEquals(false, outcomes.contains("audio_ms=777"), "unknown reason is discarded");
+
         DiagnosticLog.event(filesDir.toFile(), "transcript", "secret words");
         DiagnosticLog.event(filesDir.toFile(), "ime_state", "editor=secret words");
         DiagnosticLog.event(filesDir.toFile(), "ime_state", "state=secret");
@@ -842,7 +859,7 @@ public final class BehaviorTest {
         assertEquals(true, crossProcessLog.endsWith("\n"),
                 "cross-process log ends at a record boundary");
         Pattern record = Pattern.compile(
-                "^\\d+ (?:app_start|ime_start|ime_state|error_code|timing|resource)(?: [a-z_]+=[a-zA-Z0-9_.:/-]+(?:,[a-z_]+=[a-zA-Z0-9_.:/-]+)*)?$");
+                "^\\d+ (?:app_start|ime_start|ime_state|error_code|recognition_outcome|timing|resource)(?: [a-z_]+=[a-zA-Z0-9_.:/-]+(?:,[a-z_]+=[a-zA-Z0-9_.:/-]+)*)?$");
         for (String line : crossProcessLog.split("\\R")) {
             assertEquals(true, record.matcher(line).matches(),
                     "cross-process log record is intact");

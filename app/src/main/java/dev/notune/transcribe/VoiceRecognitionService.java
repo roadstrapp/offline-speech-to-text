@@ -285,6 +285,12 @@ public class VoiceRecognitionService extends RecognitionService {
                         + ",cpu_threads=" + Math.max(0, threads));
     }
 
+    /** Fixed numeric native outcome; never implies that empty recognition was silent audio. */
+    public void onRecognitionOutcome(int reason, long audioMs) {
+        if (mCallback == null) return;
+        DiagnosticLog.recognitionOutcome(getFilesDir(), reason, audioMs);
+    }
+
     private void safeError(int errorCode) {
         Callback cb = mCallback;
         if (cb == null) return;

@@ -16,18 +16,21 @@ import java.nio.file.Files;
 public final class AutoStopDeviceInstrumentation extends Instrumentation {
     private Activity current;
     private boolean failFixture;
+    private boolean callerAudio;
     private static final class InjectedFixtureFailure extends Exception {}
 
     @Override
     public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
         failFixture = arguments != null && "true".equals(arguments.getString("fixture_failure"));
+        callerAudio = arguments != null && "true".equals(arguments.getString("caller_audio"));
         start();
     }
 
     @Override
     public void onStart() {
         Bundle result = new Bundle();
+        result.putBoolean("caller_audio_ran", false);
         File directory = getTargetContext().getFilesDir();
         File delayFile = new File(directory, AutoStopDelay.FILE_NAME);
         File enabledFile = new File(directory, "auto_stop");
@@ -42,6 +45,10 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             check(savedDelay == null || savedDelay.length <= 16, "unexpected delay fixture");
             testDictionaryFiles();
             testDiagnosticEvidence();
+            if (callerAudio) {
+                CallerAudioProviderDeviceTest.run(this);
+                result.putBoolean("caller_audio_ran", true);
+            }
             settingsTouched = true;
             Files.deleteIfExists(enabledFile.toPath());
             AutoStopDelay.set(directory, 2000);
@@ -88,7 +95,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             });
             waitForIdleSync();
             current = null;
-            result.putString("checks", "isolated dictionary persistence, corrupt UTF-8, atomic save; content-free diagnostic statuses/version/errors; delay visibility, choices, persistence, restart, popup JNI/cancel");
+            result.putString("checks", (callerAudio ? "caller audio benchmark/model, EOF/Stop equivalence, audio/no-match errors; " : "") + "isolated dictionary persistence, corrupt UTF-8, atomic save; content-free diagnostic statuses/version/errors; delay visibility, choices, persistence, restart, popup JNI/cancel");
             result.putString("privacy", "no saved transcript/dictionary collection; isolated synthetic fixtures removed; original settings restored");
         } catch (Throwable failure) {
             injectedFailureCaught = failure instanceof InjectedFixtureFailure;
@@ -168,6 +175,8 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             DiagnosticLog.event(root.toFile(), "ime_state",
                     "state=" + NativeStatus.diagnosticLabel("Canceled"));
             DiagnosticLog.recognizerError(root.toFile(), 9);
+            DiagnosticLog.recognitionOutcome(root.toFile(), 2, 1600);
+            DiagnosticLog.event(root.toFile(), "recognition_outcome", "outcome=private_fixture");
             DiagnosticLog.event(root.toFile(), "error_code", "message=private_fixture");
             check(DiagnosticLog.awaitIdleForTest(5_000), "diagnostic fixture did not drain");
             String snapshot = new String(DiagnosticLog.snapshot(root.toFile()),
@@ -176,6 +185,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             check(snapshot.contains("state=recording") && snapshot.contains("state=cancelled"),
                     "capture diagnostic labels absent");
             check(snapshot.contains("code=E_RECOGNIZER_9"), "recognizer error evidence absent");
+            check(snapshot.contains("outcome=empty_decode,audio_ms=1600"), "recognition outcome evidence absent");
             check(!snapshot.contains("private_fixture"), "unapproved diagnostic content accepted");
         } finally {
             DiagnosticLog.setEnabled(root.toFile(), false);

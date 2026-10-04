@@ -1,0 +1,1 @@
+Fix caller-audio Stop draining and report input failures instead of returning truncated recognition. Add private, opt-in outcome diagnostics. Recognition models and settings are unchanged.

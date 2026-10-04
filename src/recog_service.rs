@@ -9,7 +9,7 @@
 //! and finalises automatically (it also honours an explicit `stopListening`/`cancel`).
 
 use std::fs::File;
-use std::io::{ErrorKind, Read};
+use std::io::{self, ErrorKind};
 use std::os::fd::FromRawFd;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -23,6 +23,7 @@ use once_cell::sync::Lazy;
 
 use crate::background_chunking::CaptureBuffer;
 use crate::background_transcription::{BackgroundTranscriber, Completion};
+use crate::caller_audio_input::{self, InputEnd, Readiness, SourceState};
 use crate::engine;
 use crate::voice_session::{
     claim_session_owner, release_session_owner, SendStream, OWNER_RECOGNITION_SERVICE,
@@ -51,10 +52,6 @@ const ENDPOINT_MONITOR_MS: u64 = 250;
 // --- Caller-supplied audio (RecognizerIntent.EXTRA_AUDIO_SOURCE) --------------
 /// Rate the model runs at; caller audio is resampled to it.
 const TARGET_SAMPLE_RATE: u32 = 16000;
-/// Read size for the caller's descriptor.
-const READ_CHUNK_BYTES: usize = 8192;
-/// How long to block waiting for caller audio before re-checking for cancellation.
-const POLL_TIMEOUT_MS: i32 = 100;
 
 // Mirror of the android.media.AudioFormat encodings a caller may name.
 const ENCODING_PCM_16BIT: i32 = 2;
@@ -79,6 +76,8 @@ struct Endpoint {
     finalized: AtomicBool,
     cancelled: AtomicBool,
     inference_running: AtomicBool,
+    /// Caller stop drains already-readable bytes; it must not finalize on the Java thread.
+    stop_after_ms: AtomicU64,
     started_at: Instant,
     /// A caller streaming its own audio owns the endpoint: the session runs until the audio is
     /// closed or `stopListening` arrives, so trailing-silence auto-stop must not cut it short.
@@ -124,6 +123,18 @@ fn call_error(env: &mut JNIEnv, obj: &JObject, code: i32) {
     let _ = env.call_method(obj, "onError", "(I)V", &[code.into()]);
 }
 
+fn call_outcome(env: &mut JNIEnv, obj: &JObject, reason: i32, audio_ms: u64) {
+    let result = env.call_method(
+        obj,
+        "onRecognitionOutcome",
+        "(IJ)V",
+        &[JValue::Int(reason), JValue::Long(audio_ms as i64)],
+    );
+    if result.is_err() || env.exception_check().unwrap_or(true) {
+        let _ = env.exception_clear();
+    }
+}
+
 fn call_results(env: &mut JNIEnv, obj: &JObject, text: &str) {
     if let Ok(jtxt) = env.new_string(text) {
         let _ = env.call_method(obj, "onResults", "(Ljava/lang/String;)V", &[(&jtxt).into()]);
@@ -131,7 +142,7 @@ fn call_results(env: &mut JNIEnv, obj: &JObject, text: &str) {
 }
 
 fn call_metrics(env: &mut JNIEnv, obj: &JObject, audio_ms: u64, compute_ms: u64) {
-    let _ = env.call_method(
+    let result = env.call_method(
         obj,
         "onTranscriptionMetrics",
         "(JJI)V",
@@ -141,6 +152,9 @@ fn call_metrics(env: &mut JNIEnv, obj: &JObject, audio_ms: u64, compute_ms: u64)
             JValue::Int(engine::active_thread_count()),
         ],
     );
+    if result.is_err() || env.exception_check().unwrap_or(true) {
+        let _ = env.exception_clear();
+    }
 }
 
 // --- JNI entry points ---------------------------------------------------------
@@ -322,6 +336,18 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
         .as_ref()
         .map(|s| (s.shared.clone(), s.stream.clone()));
     if let Some((shared, stream)) = session {
+        if shared.caller_endpointed {
+            // Only the reader may finalize supplied PCM. Drain buffered bytes,
+            // bounded to 500 ms total even if the caller continues writing.
+            let deadline = (shared.started_at.elapsed().as_millis() as u64).saturating_add(500);
+            let _ = shared.stop_after_ms.compare_exchange(
+                u64::MAX,
+                deadline,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            );
+            return;
+        }
         std::thread::spawn(move || finalize(shared, stream));
     }
 }
@@ -416,6 +442,7 @@ fn begin_session(
         finalized: AtomicBool::new(false),
         cancelled: AtomicBool::new(false),
         inference_running: AtomicBool::new(false),
+        stop_after_ms: AtomicU64::new(u64::MAX),
         started_at: now,
         caller_endpointed,
         jvm: jvm.clone(),
@@ -486,70 +513,92 @@ fn read_caller_audio(
 ) {
     // SAFETY: the descriptor was detached from the caller's ParcelFileDescriptor, so this File is
     // its sole owner and closes it on drop.
-    let mut source = unsafe { File::from_raw_fd(fd) };
+    let source = unsafe { File::from_raw_fd(fd) };
     let mut resampler = Resampler::new(format.sample_rate, TARGET_SAMPLE_RATE);
-    let mut raw = [0u8; READ_CHUNK_BYTES];
     let mut carry: Vec<u8> = Vec::new();
     let mut mono: Vec<f32> = Vec::new();
     let mut frames: Vec<f32> = Vec::new();
     let mut analyzer = AudioAnalyzer::new();
 
-    while wait_readable(fd, &shared) {
-        match source.read(&mut raw) {
-            Ok(0) => break, // the caller closed the audio: the utterance is complete
-            Ok(read) => {
-                carry.extend_from_slice(&raw[..read]);
-                mono.clear();
-                drain_mono_frames(&mut carry, &format, &mut mono);
-                if mono.is_empty() {
-                    continue;
-                }
-                frames.clear();
-                resampler.push(&mono, &mut frames);
-                if !frames.is_empty() {
-                    audio_callback(&shared, &frames, &mut analyzer);
-                }
+    let end = caller_audio_input::drain(
+        source,
+        || wait_readable(fd, &shared),
+        |bytes| {
+            carry.extend_from_slice(bytes);
+            mono.clear();
+            drain_mono_frames(&mut carry, &format, &mut mono);
+            frames.clear();
+            resampler.push(&mono, &mut frames);
+            if !frames.is_empty() {
+                audio_callback(&shared, &frames, &mut analyzer);
             }
-            Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
-            Err(e) => {
-                log::error!("audio source read failed: {}", e);
-                break;
-            }
-        }
+        },
+    );
+    match end {
+        Ok(InputEnd::Cancelled) => {}
+        Ok(InputEnd::Finished) if carry.is_empty() => finalize(shared, stream),
+        _ => fail_caller_audio(shared, stream),
     }
-
-    finalize(shared, stream);
 }
 
-/// Blocks until the descriptor has audio to read. Returns false once the session has ended, so a
-/// cancel never leaves this thread parked on a descriptor the caller stopped writing to.
-fn wait_readable(fd: i32, shared: &Arc<Endpoint>) -> bool {
-    loop {
-        if shared.cancelled.load(Ordering::SeqCst) || shared.finalized.load(Ordering::SeqCst) {
-            return false;
-        }
-
-        let mut poll_fd = libc::pollfd {
-            fd,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        // SAFETY: a single initialised pollfd naming a descriptor this thread owns.
-        let ready = unsafe { libc::poll(&mut poll_fd, 1, POLL_TIMEOUT_MS) };
-
-        if ready > 0 {
-            return true;
-        }
-        if ready < 0 {
-            let err = std::io::Error::last_os_error();
-            if err.kind() == ErrorKind::Interrupted {
-                continue;
-            }
-            log::error!("audio source poll failed: {}", err);
-            return false;
-        }
-        // Timed out with nothing to read: loop round to re-check for cancellation.
+/// A malformed or failed source must not turn a partial recording into success.
+fn fail_caller_audio(shared: Arc<Endpoint>, stream: Arc<Mutex<Option<SendStream>>>) {
+    if shared
+        .finalized
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
     }
+    *stream.lock().unwrap() = None;
+    let completion = shared.background.cancel();
+    if !shared.cancelled.load(Ordering::SeqCst) {
+        if let Ok(mut env) = shared.jvm.attach_current_thread() {
+            let audio_ms = shared
+                .audio_buffer
+                .lock()
+                .unwrap()
+                .total_samples()
+                .saturating_mul(1000)
+                / 16000;
+            call_outcome(&mut env, shared.target.as_obj(), 3, audio_ms);
+            call_error(&mut env, shared.target.as_obj(), ERROR_AUDIO);
+        }
+    }
+    clear_session(&shared);
+    if let Some(completion) = completion {
+        let _ = completion.recv();
+    }
+}
+
+/// Stop drains currently readable data without waiting for an unclosed writer.
+/// Cancellation, safety limits, and poll errors have distinct outcomes.
+fn wait_readable(fd: i32, shared: &Arc<Endpoint>) -> io::Result<Readiness> {
+    caller_audio_input::wait_ready(
+        || SourceState {
+            cancelled: shared.cancelled.load(Ordering::SeqCst),
+            finalized: shared.finalized.load(Ordering::SeqCst),
+            elapsed_ms: shared.started_at.elapsed().as_millis() as u64,
+            stop_after_ms: shared.stop_after_ms.load(Ordering::SeqCst),
+        },
+        |timeout| {
+            let mut poll_fd = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: initialized pollfd naming the descriptor owned by this reader.
+            let ready = unsafe { libc::poll(&mut poll_fd, 1, timeout) };
+            if ready < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if poll_fd.revents & (libc::POLLERR | libc::POLLNVAL) != 0 {
+                return Err(io::Error::from(ErrorKind::BrokenPipe));
+            }
+            // POLLHUP drains remaining bytes before read() reports EOF.
+            Ok(ready > 0)
+        },
+    )
 }
 
 /// Decodes every whole frame buffered in `carry` into mono samples, leaving a partial frame behind.
@@ -861,6 +910,12 @@ fn finalize(shared: Arc<Endpoint>, stream: Arc<Mutex<Option<SendStream>>>) {
     // ~0.2s minimum of audio to bother transcribing.
     if total_samples < 3200 {
         if !shared.cancelled.load(Ordering::SeqCst) {
+            call_outcome(
+                &mut env,
+                target,
+                1,
+                total_samples.saturating_mul(1000) / 16000,
+            );
             call_error(&mut env, target, ERROR_NO_MATCH);
         }
         if let Some(completion) = shared.background.cancel() {
@@ -888,8 +943,14 @@ fn finalize(shared: Arc<Endpoint>, stream: Arc<Mutex<Option<SendStream>>>) {
             call_metrics(&mut env, target, audio_ms, compute_ms);
             match text {
                 _ if shared.cancelled.load(Ordering::SeqCst) => {}
-                Ok(text) if !text.trim().is_empty() => call_results(&mut env, target, &text),
-                Ok(_) => call_error(&mut env, target, ERROR_NO_MATCH),
+                Ok(text) if !text.trim().is_empty() => {
+                    call_outcome(&mut env, target, 0, audio_ms);
+                    call_results(&mut env, target, &text);
+                }
+                Ok(_) => {
+                    call_outcome(&mut env, target, 2, audio_ms);
+                    call_error(&mut env, target, ERROR_NO_MATCH);
+                }
                 Err(e) => {
                     log::error!("Transcription failed: {}", e);
                     call_error(&mut env, target, ERROR_SERVER);

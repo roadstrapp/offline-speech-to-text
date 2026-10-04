@@ -44,7 +44,7 @@ public final class DiagnosticLog {
             "app_start", "app_stop", "app_lifecycle", "service_state",
             "ime_start", "ime_stop", "ime_state",
             "model_state", "model_provenance", "timing", "resource",
-            "notification_state", "error_code"));
+            "notification_state", "error_code", "recognition_outcome"));
     private static final ReentrantLock PROCESS_LOCK = new ReentrantLock();
     private static final ThreadPoolExecutor WRITER = new ThreadPoolExecutor(
             1, 1, 30L, TimeUnit.SECONDS, new ArrayBlockingQueue<>(256), runnable -> {
@@ -120,6 +120,19 @@ public final class DiagnosticLog {
     static void recognizerError(File filesDir, int errorCode) {
         String code = errorCode >= 0 ? Integer.toString(errorCode) : "UNKNOWN";
         event(filesDir, "error_code", "process=service,code=E_RECOGNIZER_" + code);
+    }
+
+    static void recognitionOutcome(File filesDir, int reason, long audioMs) {
+        String label;
+        switch (reason) {
+            case 0: label = "text"; break;
+            case 1: label = "insufficient_audio"; break;
+            case 2: label = "empty_decode"; break;
+            case 3: label = "input_error"; break;
+            default: return;
+        }
+        event(filesDir, "recognition_outcome", "process=service,outcome=" + label
+                + ",audio_ms=" + Math.max(0L, Math.min(999999999999L, audioMs)));
     }
 
     private static void writeEvent(File filesDir, String event, String detail) {
@@ -209,6 +222,9 @@ public final class DiagnosticLog {
                 case "version_code":
                 case "memory_kb":
                     safe = value.matches("[0-9]{1,12}");
+                    break;
+                case "outcome":
+                    safe = Arrays.asList("text", "insufficient_audio", "empty_decode", "input_error").contains(value);
                     break;
                 case "code":
                     safe = value.matches("E_[A-Z0-9_]{1,64}");
