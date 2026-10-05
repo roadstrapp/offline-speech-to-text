@@ -15,6 +15,13 @@ Use the provider activity when compatibility matters more than a custom interfac
 
 All `SpeechRecognizer` construction and control calls must run on the main thread.
 
+The experimental **Prepare long dictation while recording** setting affects only
+OSTT's own voice keyboard, not caller audio, the popup or long recording. It prepares
+existing overlapping windows without publishing partial results or splitting on an
+ordinary pause. Detailed troubleshooting is a separate, warned one-hour local opt-in;
+see [Power and performance diagnostics](power-diagnostics.md). It changes neither
+provider eligibility nor the caller's ownership and retry obligations.
+
 ## Provider-owned recognition UI
 
 Launch the standard intent with the Activity Result API:

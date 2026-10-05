@@ -1,0 +1,1 @@
+Add optional early processing of long voice-keyboard recordings using existing overlapping windows, with one final result and no brief-pause cuts. Short dictation stays unchanged. Add separately warned, one-hour detailed troubleshooting with private timing, CPU and thermal metadata, never audio or transcripts. Improve no-text recognition messages and stale callback checks.

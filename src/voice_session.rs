@@ -220,9 +220,14 @@ fn start_recording_impl(
     };
 
     state.audio_buffer.lock().unwrap().reset();
-    let background = Arc::new(BackgroundTranscriber::start(
+    let prepare_long_dictation = state.owner == OWNER_IME
+        && crate::assets::files_dir(&mut env, state.target_ref.as_obj())
+            .map(|dir| dir.join("background_predecode").is_file())
+            .unwrap_or(false);
+    let background = Arc::new(BackgroundTranscriber::start_with_capture(
         state.jvm.clone(),
         state.target_ref.clone(),
+        prepare_long_dictation.then(|| state.audio_buffer.clone()),
     ));
     state.background = Some(background.clone());
     let buffer_clone = state.audio_buffer.clone();
@@ -445,12 +450,16 @@ fn start_recording_impl(
             } else {
                 MANUAL_MONITOR_MS
             };
+            let predecode = prepare_long_dictation.then(|| background.clone());
             std::thread::spawn(move || {
                 let mut no_speech_since = Instant::now();
                 loop {
                     std::thread::sleep(Duration::from_millis(monitor_interval));
                     if !session_active.load(Ordering::SeqCst) {
                         return;
+                    }
+                    if let Some(background) = &predecode {
+                        background.request_preparation();
                     }
                     let paused = capture_paused.load(Ordering::SeqCst);
                     let waiting_for_audio = endpoint
@@ -615,7 +624,9 @@ pub fn transcribe_recording(mut env: JNIEnv, state: &mut VoiceSessionState) {
                 text,
                 audio_ms,
                 compute_ms,
+                pipeline,
             }) => {
+                crate::background_transcription::notify_pipeline(&mut env, obj, &pipeline);
                 notify_metrics(&mut env, obj, audio_ms, compute_ms);
                 match text {
                     Ok(text) => {

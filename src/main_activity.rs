@@ -123,3 +123,77 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_MainActivity_benchmarkN
         }
     });
 }
+
+/// Same-process, same-signature instrumentation seam. It cannot open a file,
+/// publish text, change settings or acquire the microphone. Only fixed numeric
+/// equality/timing evidence escapes; the two hypotheses are dropped locally.
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_notune_transcribe_MainActivity_verifyPreparedWindowsNative(
+    mut env: JNIEnv,
+    activity: JObject,
+    samples: jni::objects::JFloatArray,
+) -> jni::sys::jlongArray {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> Result<Vec<i64>, String> {
+            let len = env.get_array_length(&samples).map_err(|_| "array")? as usize;
+            if len == 0 || len > 90 * 16_000 {
+                return Err("bounded fixture required".into());
+            }
+            let mut audio = vec![0.0; len];
+            env.get_float_array_region(&samples, 0, &mut audio)
+                .map_err(|_| "array")?;
+            engine::ensure_loaded(&mut env, &activity)?;
+            let eng = engine::get_engine().ok_or("model")?;
+            let mut guard = eng.lock().unwrap_or_else(|p| p.into_inner());
+            let limit = guard
+                .background_window_limit()
+                .ok_or("bounded model required")?;
+            let mut final_audio = audio.clone();
+            crate::audio_finalization::append_final_decode_silence(&mut final_audio);
+            let windows = crate::long_audio::windows(&final_audio, limit);
+            if windows.len() < 2 {
+                return Err("long fixture required".into());
+            }
+            let mut deferred = guard.begin_transcription();
+            let started = std::time::Instant::now();
+            guard.transcribe_into(&mut deferred, &final_audio)?;
+            let expected = deferred.finish();
+            let deferred_ms = started.elapsed().as_millis() as i64;
+            let mut early = guard.begin_transcription();
+            let started = std::time::Instant::now();
+            let mut start = 0;
+            while let Some(window) = crate::long_audio::complete_window(&audio, start, limit) {
+                start = window.end - crate::long_audio::overlap_samples(limit);
+                guard.prepare_complete_window(&mut early, audio[window.clone()].to_vec())?;
+            }
+            let prepared = engine::Engine::prepared_window_count(&early) as i64;
+            if prepared < 1 || prepared as usize >= windows.len() {
+                return Err("fixture did not reuse a strict prepared prefix".into());
+            }
+            let prepare_ms = started.elapsed().as_millis() as i64;
+            let started = std::time::Instant::now();
+            guard.transcribe_into(&mut early, &final_audio)?;
+            let actual = early.finish();
+            let stop_ms = started.elapsed().as_millis() as i64;
+            Ok(vec![
+                i64::from(!expected.trim().is_empty() && expected == actual),
+                prepared,
+                deferred_ms,
+                prepare_ms,
+                stop_ms,
+            ])
+        },
+    ));
+    match result {
+        Ok(Ok(values)) => env
+            .new_long_array(values.len() as i32)
+            .ok()
+            .and_then(|array| {
+                env.set_long_array_region(&array, 0, &values)
+                    .ok()
+                    .map(|()| array.into_raw())
+            })
+            .unwrap_or(std::ptr::null_mut()),
+        _ => std::ptr::null_mut(),
+    }
+}

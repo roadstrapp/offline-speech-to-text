@@ -100,7 +100,7 @@
     <string name="btn_voice_help">Guida alla configurazione</string>
 
     <string name="voice_test_ok">Funziona! Sentito: %1$s</string>
-    <string name="voice_test_empty">Funziona, ma non è stato rilevato alcun parlato.</string>
+    <string name="voice_test_empty">Il servizio ha risposto, ma non è stato riconosciuto alcun testo. Questo non significa necessariamente che l\'audio fosse silenzioso.</string>
     <string name="voice_test_failed">Impossibile avviare l\'immissione vocale su questo dispositivo.</string>
 
     <string name="voice_help_title">Configurazione dell\'immissione vocale</string>

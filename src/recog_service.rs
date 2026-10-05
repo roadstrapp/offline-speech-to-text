@@ -939,7 +939,9 @@ fn finalize(shared: Arc<Endpoint>, stream: Arc<Mutex<Option<SendStream>>>) {
             text,
             audio_ms,
             compute_ms,
-        }) => {
+            pipeline,
+        }) if !shared.cancelled.load(Ordering::SeqCst) => {
+            crate::background_transcription::notify_pipeline(&mut env, target, &pipeline);
             call_metrics(&mut env, target, audio_ms, compute_ms);
             match text {
                 _ if shared.cancelled.load(Ordering::SeqCst) => {}
@@ -957,7 +959,7 @@ fn finalize(shared: Arc<Endpoint>, stream: Arc<Mutex<Option<SendStream>>>) {
                 }
             }
         }
-        Ok(Completion::Cancelled) => {}
+        Ok(Completion::Cancelled) | Ok(Completion::Finished { .. }) => {}
         Err(_) if !shared.cancelled.load(Ordering::SeqCst) => {
             call_error(&mut env, target, ERROR_SERVER)
         }

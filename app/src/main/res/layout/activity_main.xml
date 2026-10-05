@@ -74,6 +74,16 @@
 
                     <!-- Native engine warm-up state, updated from Rust. -->
                     <TextView
+                        android:id="@+id/troubleshooting_banner"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/troubleshooting_active"
+                        android:textAppearance="?attr/textAppearanceBodyMedium"
+                        android:textColor="?attr/colorError"
+                        android:accessibilityLiveRegion="polite"
+                        android:visibility="gone"
+                        android:layout_marginBottom="8dp"/>
+                    <TextView
                         android:id="@+id/text_status"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
@@ -774,6 +784,34 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"/>
                     </LinearLayout>
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/switch_background_predecode"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:minHeight="48dp"
+                        android:text="@string/background_predecode_title"
+                        android:layout_marginTop="12dp"/>
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/background_predecode_description"
+                        android:textAppearance="?attr/textAppearanceBodySmall"
+                        android:textColor="?attr/colorOnSurfaceVariant"/>
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/switch_troubleshooting"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:minHeight="48dp"
+                        android:text="@string/troubleshooting_title"
+                        android:layout_marginTop="12dp"/>
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/troubleshooting_description"
+                        android:textAppearance="?attr/textAppearanceBodySmall"
+                        android:textColor="?attr/colorOnSurfaceVariant"/>
 
                     <TextView
                         android:layout_width="match_parent"

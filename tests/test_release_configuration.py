@@ -21,8 +21,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         gradle_properties = (ROOT / "gradle.properties").read_text()
         workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
         self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
-        self.assertIn("versionCode = 47", gradle)
-        self.assertIn('versionName = "0.12.2"', gradle)
+        self.assertIn("versionCode = 48", gradle)
+        self.assertIn('versionName = "0.13.0"', gradle)
         self.assertIn('providers.gradleProperty("includeBundledModel")', gradle)
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: false', gradle)
         self.assertIn('ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,', gradle)
@@ -44,6 +44,12 @@ class ReleaseConfigurationTest(unittest.TestCase):
             lockfile,
             r'name = "transcribe-cpp-sys"\nversion = "0\.2\.3"',
         )
+
+    def test_native_toolchain_is_explicit_and_update_compatible(self):
+        gradle = (ROOT / "app/build.gradle.kts").read_text()
+        self.assertIn('ndkVersion = "29.0.14206865"', gradle)
+        self.assertIn('libc++_shared.so', gradle)
+        self.assertNotIn('ndkVersion = "/', gradle)
 
     def test_isolated_device_validation_does_not_change_release_package(self):
         gradle = (ROOT / "app/build.gradle.kts").read_text()
@@ -604,7 +610,11 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("if samples.is_empty()", helper)
         self.assertIn("samples.resize", helper)
         self.assertEqual(1, background.count("append_final_decode_silence(&mut audio)"))
-        self.assertNotIn("audio.truncate", background)
+        # Only a private bounded preparation snapshot may be shortened; never
+        # truncate the complete Finish recording.
+        finalization = background[background.index("let (mut audio, total_samples, stop_started)"):]
+        self.assertNotIn("audio.truncate", finalization)
+        self.assertIn("buffer.window_snapshot(next_sample, limit)", background)
         self.assertNotIn("retry_complete_recording", background)
         self.assertLess(background.index("append_final_decode_silence(&mut audio)"),
                         background.index("transcribe_complete(&eng"))
@@ -1075,11 +1085,12 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn('crate::english_fillers::remove_uh_owned(self.text)', engine)
         self.assertIn('Ok(job.finish())', engine)
         background = (ROOT / 'src/background_transcription.rs').read_text()
-        self.assertIn('transcribe_complete(&eng, &mut job, &audio).map(|()| job.finish())', background)
+        self.assertIn('transcribe_complete(&eng, &mut job, &audio)', background)
+        self.assertIn('let text = job.finish();', background)
         self.assertEqual(engine.count('crate::custom_terms::load_terms(&self.custom_terms_path)'), 1)
         self.assertIn('and_then(crate::custom_terms::compile_prompt)', engine)
         self.assertIn('preferred_terms::apply_with_protected(&text, terms, &protected)', engine)
-        self.assertLess(engine.index('personal_corrections::load(&self.files_dir)'),
+        self.assertLess(engine.index('let (preferred_terms, corrections) = self.snapshot_cleanup_terms()'),
                         engine.index('pub(crate) fn transcribe_into'))
         self.assertIn('ProtectedText::new(text, &[])', native_corrections)
         self.assertIn('guard.allows(offset, end)', native_corrections)

@@ -39,6 +39,10 @@ pub(crate) struct TranscriptionJob {
     corrections: Option<Vec<crate::personal_corrections::Rule>>,
     text: String,
     english_output: bool,
+    /// Private hypotheses for immutable existing long-input windows. Never
+    /// delivered piecemeal or joined at a silence-only boundary.
+    prepared_windows: usize,
+    prepared_text: String,
 }
 
 impl TranscriptionJob {
@@ -65,6 +69,7 @@ impl TranscriptionJob {
 
 /// A loaded transcribe.cpp session plus the options applied to every run.
 pub struct Engine {
+    diagnostic_family: i32,
     session: transcribe_cpp::Session,
     language: Option<String>,
     task: transcribe_cpp::Task,
@@ -187,6 +192,14 @@ impl Engine {
         };
         ACTIVE_THREADS.store(threads, Ordering::Relaxed);
         Ok(Engine {
+            diagnostic_family: match model.arch().as_str() {
+                "whisper" => 1,
+                "parakeet" => 2,
+                "moonshine" => 3,
+                "gigaam" => 4,
+                "medasr" => 5,
+                _ => 0,
+            },
             session,
             language,
             task,
@@ -216,7 +229,7 @@ impl Engine {
         // support receive a recognition hint, but every model can restore the
         // spelling of a recognized preferred term after decoding. A prompt is
         // not a guarantee that the decoder will use or retain a term.
-        let preferred_terms = crate::custom_terms::load_terms(&self.custom_terms_path);
+        let (preferred_terms, corrections) = self.snapshot_cleanup_terms();
         let prompt = if self.supports_initial_prompt {
             preferred_terms
                 .as_deref()
@@ -227,11 +240,13 @@ impl Engine {
         // Exact personal corrections are model-independent, including for
         // Parakeet. Snapshot them beside the Whisper prompt.
         TranscriptionJob {
-            corrections: crate::personal_corrections::load(&self.files_dir),
+            corrections,
             preferred_terms,
             run_ext: self.run_extension(prompt),
             text: String::new(),
             english_output: true,
+            prepared_windows: 0,
+            prepared_text: String::new(),
         }
     }
 
@@ -243,21 +258,25 @@ impl Engine {
     ) -> Result<(), String> {
         if let Some(max_window_samples) = self.bounded_window_samples {
             let windows = crate::long_audio::windows(samples, max_window_samples);
-            let mut assembled = String::new();
+            if job.prepared_windows >= windows.len() {
+                // Original audio is authoritative. An unusable cache must
+                // never turn a recoverable recording into an error or loss.
+                job.prepared_windows = 0;
+                job.prepared_text.clear();
+                job.english_output = true;
+            }
+            let prepared_windows = std::mem::take(&mut job.prepared_windows);
+            let mut assembled = std::mem::take(&mut job.prepared_text);
             for (index, window) in windows.iter().enumerate() {
-                let mut owned;
-                let audio = if index + 1 < windows.len() {
-                    owned = samples[window.clone()].to_vec();
-                    crate::audio_finalization::append_final_decode_silence(&mut owned);
-                    owned.as_slice()
-                } else {
-                    &samples[window.clone()]
-                };
-                let transcript = self.run(audio, &job.run_ext)?;
-                if !transcript.text.trim().is_empty() {
-                    job.english_output &= self.output_is_english(transcript.language.as_deref());
+                if index < prepared_windows {
+                    continue;
                 }
-                assembled = crate::long_audio::stitch(&assembled, transcript.text.trim());
+                self.decode_window(
+                    job,
+                    &samples[window.clone()],
+                    index + 1 < windows.len(),
+                    &mut assembled,
+                )?;
             }
             append_piece(&mut job.text, &assembled);
         } else {
@@ -267,6 +286,73 @@ impl Engine {
             }
             append_piece(&mut job.text, transcript.text.trim());
         }
+        Ok(())
+    }
+
+    pub(crate) fn background_window_limit(&self) -> Option<usize> {
+        self.bounded_window_samples
+    }
+
+    pub(crate) fn diagnostic_family(&self) -> i32 {
+        self.diagnostic_family
+    }
+
+    pub(crate) fn prepared_window_count(job: &TranscriptionJob) -> usize {
+        job.prepared_windows
+    }
+
+    pub(crate) fn prepare_complete_window(
+        &mut self,
+        job: &mut TranscriptionJob,
+        audio: Vec<f32>,
+    ) -> Result<(), String> {
+        let mut assembled = job.prepared_text.clone();
+        let result = self.decode_window(job, &audio, true, &mut assembled);
+        result?;
+        job.prepared_text = assembled;
+        job.prepared_windows += 1;
+        Ok(())
+    }
+
+    pub(crate) fn refresh_final_terms(&self, job: &mut TranscriptionJob) {
+        // Preparation is non-Whisper only: these terms do not alter its native
+        // run options. Preserve the ordinary Stop-time cleanup snapshot.
+        (job.preferred_terms, job.corrections) = self.snapshot_cleanup_terms();
+    }
+
+    fn snapshot_cleanup_terms(
+        &self,
+    ) -> (
+        Option<Vec<String>>,
+        Option<Vec<crate::personal_corrections::Rule>>,
+    ) {
+        (
+            crate::custom_terms::load_terms(&self.custom_terms_path),
+            crate::personal_corrections::load(&self.files_dir),
+        )
+    }
+
+    /// Both early preparation and deferred windows use this exact path.
+    fn decode_window(
+        &mut self,
+        job: &mut TranscriptionJob,
+        audio: &[f32],
+        pad: bool,
+        assembled: &mut String,
+    ) -> Result<(), String> {
+        let mut owned;
+        let audio = if pad {
+            owned = audio.to_vec();
+            crate::audio_finalization::append_final_decode_silence(&mut owned);
+            owned.as_slice()
+        } else {
+            audio
+        };
+        let transcript = self.run(audio, &job.run_ext)?;
+        if !transcript.text.trim().is_empty() {
+            job.english_output &= self.output_is_english(transcript.language.as_deref());
+        }
+        *assembled = crate::long_audio::stitch(assembled, transcript.text.trim());
         Ok(())
     }
 }
@@ -676,6 +762,8 @@ mod tests {
             corrections: None,
             text: "I uh think so".to_string(),
             english_output,
+            prepared_windows: 0,
+            prepared_text: String::new(),
         };
         assert_eq!(job(true).finish(), "I think so");
         assert_eq!(job(false).finish(), "I uh think so");

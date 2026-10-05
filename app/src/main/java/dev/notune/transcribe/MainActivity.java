@@ -76,6 +76,7 @@ public class MainActivity extends AppCompatActivity {
     private volatile boolean micRequestedThisSession;
     private boolean modelSetupPromptChecked;
     private boolean nativeInitRequested;
+    private TroubleshootingControls troubleshootingControls;
     private final ExecutorService diagnosticIo = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "diagnostic-export");
         thread.setDaemon(true);
@@ -143,6 +144,7 @@ public class MainActivity extends AppCompatActivity {
         bindMarkerSwitch(R.id.switch_auto_record, "auto_record", false);
         bindMarkerSwitch(R.id.switch_select_transcription, "select_transcription", false);
         bindMarkerSwitch(R.id.switch_pause_audio, "pause_audio", false);
+        bindMarkerSwitch(R.id.switch_background_predecode, "background_predecode", false);
         // Record-in-background defaults to ON; its marker file is the opt-out.
         bindMarkerSwitch(R.id.switch_record_background, "stop_on_hide", true);
         setupAutoStopDelay();
@@ -162,7 +164,9 @@ public class MainActivity extends AppCompatActivity {
             } catch (IOException e) {
                 snackbar(getString(R.string.diagnostic_log_error));
             }
+            if (troubleshootingControls != null) troubleshootingControls.resume();
         });
+        troubleshootingControls = new TroubleshootingControls(this);
         findViewById(R.id.btn_clear_diagnostic_log).setOnClickListener(v -> {
             try {
                 DiagnosticLog.clear(getFilesDir());
@@ -319,6 +323,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (troubleshootingControls != null) troubleshootingControls.resume();
         // Re-check on return from the keyboard chooser, settings, or a test run.
         updateVoiceInputStatus();
         updateImeStatus();
@@ -326,6 +331,12 @@ public class MainActivity extends AppCompatActivity {
         // Returning from model management may make the first usable model
         // available without recreating this Activity.
         maybeStartNativeModelLoad();
+    }
+
+    @Override
+    protected void onPause() {
+        if (troubleshootingControls != null) troubleshootingControls.pause();
+        super.onPause();
     }
 
     private void maybeStartNativeModelLoad() {
@@ -824,6 +835,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        if (troubleshootingControls != null) troubleshootingControls.destroy();
         diagnosticIo.shutdown();
         super.onDestroy();
     }
@@ -831,4 +843,7 @@ public class MainActivity extends AppCompatActivity {
     private native void initNative(MainActivity activity);
 
     private native void benchmarkNative(MainActivity activity, float[] samples, int length);
+
+    // Same-signature instrumentation only; no UI, IPC or transcript-returning API.
+    private native long[] verifyPreparedWindowsNative(float[] samples);
 }

@@ -100,7 +100,7 @@
     <string name="btn_voice_help">Aide à la configuration</string>
 
     <string name="voice_test_ok">Ça fonctionne ! Entendu : %1$s</string>
-    <string name="voice_test_empty">Ça fonctionne, mais aucune parole n\'a été détectée.</string>
+    <string name="voice_test_empty">Le service a répondu, mais aucun texte n\'a été reconnu. Cela ne signifie pas nécessairement que l\'audio était silencieux.</string>
     <string name="voice_test_failed">Impossible de démarrer la saisie vocale sur cet appareil.</string>
 
     <string name="voice_help_title">Configuration de la saisie vocale</string>

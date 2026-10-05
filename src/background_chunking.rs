@@ -3,7 +3,8 @@
 //! Offline models must receive one continuous utterance. Splitting on a short
 //! pause changes the language context and lets each independent decode invent
 //! an end-of-sentence boundary. Keep capture cheap and defer the complete
-//! utterance to the engine until the user finishes speaking.
+//! utterance intact. Only immutable windows of genuinely long recordings may
+//! be copied by the background worker; the capture callback never decodes.
 
 #[derive(Default)]
 pub(crate) struct CaptureBuffer {
@@ -34,6 +35,14 @@ impl CaptureBuffer {
     pub(crate) fn total_samples(&self) -> u64 {
         self.total_samples
     }
+
+    /// Only the bounded prefix copy needs the capture lock. Quiet-point search,
+    /// padding and decoding run after it is released. One additional sample
+    /// preserves complete_window's strict non-final-window requirement.
+    pub(crate) fn window_snapshot(&self, start: usize, limit: usize) -> Option<Vec<f32>> {
+        let end = start.checked_add(limit)?.checked_add(1)?;
+        self.samples.get(start..end).map(<[f32]>::to_vec)
+    }
 }
 
 #[cfg(test)]
@@ -57,5 +66,20 @@ mod tests {
         assert_eq!(capture.total_samples(), input.len() as u64);
         assert_eq!(capture.take_tail(), input);
         assert!(capture.take_tail().is_empty());
+    }
+
+    #[test]
+    fn snapshot_is_bounded_and_never_consumes_original_samples() {
+        let mut capture = CaptureBuffer::default();
+        let original: Vec<f32> = (0..30_001).map(|i| i as f32).collect();
+        capture.push(&original);
+        assert_eq!(
+            capture.window_snapshot(10_000, 20_000).unwrap(),
+            original[10_000..]
+        );
+        assert!(capture.window_snapshot(10_001, 20_000).is_none());
+        assert!(capture.window_snapshot(usize::MAX, 20_000).is_none());
+        assert_eq!(capture.total_samples(), original.len() as u64);
+        assert_eq!(capture.take_tail(), original);
     }
 }

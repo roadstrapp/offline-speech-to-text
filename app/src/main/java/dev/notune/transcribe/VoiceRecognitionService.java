@@ -48,6 +48,7 @@ public class VoiceRecognitionService extends RecognitionService {
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private volatile Callback mCallback;
+    private volatile TroubleshootingSession troubleshooting;
 
     @Override
     public void onCreate() {
@@ -68,6 +69,7 @@ public class VoiceRecognitionService extends RecognitionService {
         // switch). Retire native work first so the new request never receives
         // a false ERROR_AUDIO from the stale process-wide owner.
         mCallback = null;
+        finishTroubleshooting("cancel");
         try {
             cancelNative();
         } catch (Throwable t) {
@@ -76,6 +78,8 @@ public class VoiceRecognitionService extends RecognitionService {
         mCallback = callback;
 
         ParcelFileDescriptor callerAudio = callerAudioSource(recognizerIntent);
+        troubleshooting = TroubleshootingSession.start(this, "service",
+                callerAudio == null ? "microphone" : "caller_audio");
         if (callerAudio != null) {
             startListeningFromCallerAudio(recognizerIntent, callback, callerAudio);
             return;
@@ -186,6 +190,7 @@ public class VoiceRecognitionService extends RecognitionService {
     @Override
     protected void onStopListening(Callback callback) {
         if (callback != mCallback) return;
+        if (troubleshooting != null) troubleshooting.event("processing", "stop");
         try {
             stopListening();
         } catch (Throwable t) {
@@ -197,6 +202,7 @@ public class VoiceRecognitionService extends RecognitionService {
     protected void onCancel(Callback callback) {
         if (callback != mCallback) return;
         mCallback = null;
+        finishTroubleshooting("cancel");
         try {
             cancelNative();
         } catch (Throwable t) {
@@ -206,6 +212,8 @@ public class VoiceRecognitionService extends RecognitionService {
 
     @Override
     public void onDestroy() {
+        mCallback = null;
+        finishTroubleshooting("destroy");
         try {
             destroyNative();
         } catch (Throwable t) {
@@ -220,6 +228,7 @@ public class VoiceRecognitionService extends RecognitionService {
         Callback cb = mCallback;
         if (cb == null) return;
         mainHandler.post(() -> {
+            if (mCallback != cb) return;
             try { cb.readyForSpeech(new Bundle()); } catch (RemoteException ignored) {}
         });
     }
@@ -228,6 +237,7 @@ public class VoiceRecognitionService extends RecognitionService {
         Callback cb = mCallback;
         if (cb == null) return;
         mainHandler.post(() -> {
+            if (mCallback != cb) return;
             try { cb.beginningOfSpeech(); } catch (RemoteException ignored) {}
         });
     }
@@ -236,6 +246,7 @@ public class VoiceRecognitionService extends RecognitionService {
         Callback cb = mCallback;
         if (cb == null) return;
         mainHandler.post(() -> {
+            if (mCallback != cb) return;
             try { cb.rmsChanged(rmsdB); } catch (RemoteException ignored) {}
         });
     }
@@ -244,6 +255,8 @@ public class VoiceRecognitionService extends RecognitionService {
         Callback cb = mCallback;
         if (cb == null) return;
         mainHandler.post(() -> {
+            if (mCallback != cb) return;
+            if (troubleshooting != null) troubleshooting.event("processing", "end");
             try { cb.endOfSpeech(); } catch (RemoteException ignored) {}
         });
     }
@@ -252,11 +265,13 @@ public class VoiceRecognitionService extends RecognitionService {
         Callback cb = mCallback;
         if (cb == null) return;
         mainHandler.post(() -> {
+            if (mCallback != cb) return;
             ArrayList<String> hypotheses = new ArrayList<>();
             hypotheses.add(text);
             Bundle bundle = new Bundle();
             bundle.putStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION, hypotheses);
             try { cb.results(bundle); } catch (RemoteException ignored) {}
+            finishTroubleshooting("text");
             if (mCallback == cb) mCallback = null;
         });
     }
@@ -266,7 +281,9 @@ public class VoiceRecognitionService extends RecognitionService {
         if (cb == null) return;
         DiagnosticLog.recognizerError(getFilesDir(), errorCode);
         mainHandler.post(() -> {
+            if (mCallback != cb) return;
             try { cb.error(errorCode); } catch (RemoteException ignored) {}
+            finishTroubleshooting("error");
             if (mCallback == cb) mCallback = null;
         });
     }
@@ -285,10 +302,30 @@ public class VoiceRecognitionService extends RecognitionService {
                         + ",cpu_threads=" + Math.max(0, threads));
     }
 
+    public long getTroubleshootingSessionId() {
+        TroubleshootingSession session = troubleshooting;
+        return session == null ? 0L : session.id();
+    }
+
+    public void onPipelineMetrics(long sessionId, long prepareMs, long decodeMs, long postprocessMs, long stopWaitMs, int windows, int family, int warm) {
+        TroubleshootingSession session = troubleshooting;
+        if (session != null && session.id() == sessionId) session.pipeline(prepareMs, decodeMs, postprocessMs, stopWaitMs, windows, family, warm);
+    }
+
+    private void finishTroubleshooting(String reason) {
+        TroubleshootingSession session = troubleshooting;
+        troubleshooting = null;
+        if (session != null) session.finish(reason);
+    }
+
     /** Fixed numeric native outcome; never implies that empty recognition was silent audio. */
     public void onRecognitionOutcome(int reason, long audioMs) {
         if (mCallback == null) return;
         DiagnosticLog.recognitionOutcome(getFilesDir(), reason, audioMs);
+        if (troubleshooting != null) {
+            String[] reasons = {"text", "insufficient_audio", "empty_decode", "input_error"};
+            if (reason >= 0 && reason < reasons.length) troubleshooting.event("processing", reasons[reason]);
+        }
     }
 
     private void safeError(int errorCode) {
@@ -296,6 +333,7 @@ public class VoiceRecognitionService extends RecognitionService {
         if (cb == null) return;
         DiagnosticLog.recognizerError(getFilesDir(), errorCode);
         try { cb.error(errorCode); } catch (RemoteException ignored) {}
+        finishTroubleshooting("error");
         mCallback = null;
     }
 

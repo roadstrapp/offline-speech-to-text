@@ -18,26 +18,47 @@ const OVERLAP_SAMPLES: usize = 3 * SAMPLE_RATE;
 const MAX_OVERLAP_WORDS: usize = 24;
 const MAX_LEADING_FALLBACK_WORDS: usize = 4;
 
+/// Only a window already forced by the existing long-input bound is immutable.
+/// Future samples cannot change its quiet-point search. A pause alone never
+/// qualifies, and the final window must always wait for Stop.
+pub(crate) fn complete_window(
+    samples: &[f32],
+    start: usize,
+    max_window_samples: usize,
+) -> Option<Range<usize>> {
+    let limit = max_window_samples.max(1);
+    if samples.len().saturating_sub(start) <= limit {
+        return None;
+    }
+    let overlap = overlap_samples(limit);
+    let hard_end = start.checked_add(limit)?;
+    let search_start = hard_end
+        .saturating_sub(SPLIT_SEARCH_SAMPLES.min(limit / 3))
+        .max(start + 1);
+    let split = crate::audio::find_quietest_split(samples, search_start, hard_end)
+        .clamp(start + overlap + 1, hard_end);
+    Some(start..split)
+}
+
+pub(crate) fn overlap_samples(limit: usize) -> usize {
+    OVERLAP_SAMPLES.min(limit.max(1) / 4)
+}
+
 pub(crate) fn windows(samples: &[f32], max_window_samples: usize) -> Vec<Range<usize>> {
     if samples.is_empty() {
         return Vec::new();
     }
     let max_window_samples = max_window_samples.max(1);
-    let overlap_samples = OVERLAP_SAMPLES.min(max_window_samples / 4);
-    let split_search_samples = SPLIT_SEARCH_SAMPLES.min(max_window_samples / 3);
+    let overlap_samples = overlap_samples(max_window_samples);
     if samples.len() <= max_window_samples {
         return vec![0..samples.len()];
     }
 
     let mut result = Vec::new();
     let mut start = 0usize;
-    while samples.len().saturating_sub(start) > max_window_samples {
-        let hard_end = start + max_window_samples;
-        let search_start = hard_end.saturating_sub(split_search_samples).max(start + 1);
-        let split = crate::audio::find_quietest_split(samples, search_start, hard_end)
-            .clamp(start + overlap_samples + 1, hard_end);
-        result.push(start..split);
-        start = split.saturating_sub(overlap_samples);
+    while let Some(window) = complete_window(samples, start, max_window_samples) {
+        start = window.end.saturating_sub(overlap_samples);
+        result.push(window);
     }
     result.push(start..samples.len());
     result
@@ -201,6 +222,52 @@ fn match_case(next: &str, replaced: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_windows_equal_final_windows_for_every_stop_and_capture_schedule() {
+        let limit = 12 * SAMPLE_RATE;
+        let audio: Vec<f32> = (0..75 * SAMPLE_RATE)
+            .map(|i| {
+                if i % (7 * SAMPLE_RATE) < SAMPLE_RATE {
+                    0.0
+                } else {
+                    0.25
+                }
+            })
+            .collect();
+        for seconds in [1, 5, 12, 13, 25, 40, 75] {
+            let final_audio = &audio[..seconds * SAMPLE_RATE];
+            let final_plan = windows(final_audio, limit);
+            for step in [SAMPLE_RATE / 10, SAMPLE_RATE, 5 * SAMPLE_RATE] {
+                let mut start = 0;
+                let mut prepared = Vec::new();
+                for captured in (step..final_audio.len()).step_by(step) {
+                    while let Some(window) = complete_window(&final_audio[..captured], start, limit)
+                    {
+                        start = window.end - overlap_samples(limit);
+                        prepared.push(window);
+                    }
+                }
+                assert_eq!(prepared, final_plan[..prepared.len()]);
+                assert!(
+                    prepared.len() < final_plan.len(),
+                    "final context always waits for Stop"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn silence_alone_cannot_prepare_a_sentence_or_discard_samples() {
+        let mut audio = vec![0.25; 5 * SAMPLE_RATE];
+        audio.extend(vec![0.0; 5 * SAMPLE_RATE]);
+        audio.extend(vec![0.25; 5 * SAMPLE_RATE]);
+        assert_eq!(complete_window(&audio, 0, DEFAULT_MAX_WINDOW_SAMPLES), None);
+        assert_eq!(
+            windows(&audio, DEFAULT_MAX_WINDOW_SAMPLES),
+            vec![0..audio.len()]
+        );
+    }
 
     #[test]
     fn ordinary_dictation_stays_one_complete_window() {

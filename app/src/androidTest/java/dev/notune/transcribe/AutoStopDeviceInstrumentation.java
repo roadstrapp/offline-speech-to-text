@@ -17,6 +17,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
     private Activity current;
     private boolean failFixture;
     private boolean callerAudio;
+    private boolean preparedWindows;
     private static final class InjectedFixtureFailure extends Exception {}
 
     @Override
@@ -24,6 +25,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         super.onCreate(arguments);
         failFixture = arguments != null && "true".equals(arguments.getString("fixture_failure"));
         callerAudio = arguments != null && "true".equals(arguments.getString("caller_audio"));
+        preparedWindows = arguments != null && "true".equals(arguments.getString("prepared_windows"));
         start();
     }
 
@@ -46,13 +48,21 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             testDictionaryFiles();
             testDiagnosticEvidence();
             if (callerAudio) {
-                CallerAudioProviderDeviceTest.run(this);
+                testCallerDiagnostics(directory);
                 result.putBoolean("caller_audio_ran", true);
             }
             settingsTouched = true;
             Files.deleteIfExists(enabledFile.toPath());
             AutoStopDelay.set(directory, 2000);
             launchMain();
+            if (preparedWindows) {
+                long[] evidence = PreparedWindowsDeviceTest.run(this, current);
+                result.putLong("equivalent_prepared_windows", evidence[1]);
+                result.putLong("deferred_decode_ms", evidence[2]);
+                result.putLong("early_decode_ms", evidence[3]);
+                result.putLong("prepared_stop_decode_ms", evidence[4]);
+            }
+            testTroubleshootingControls(directory);
             runOnMainSync(() -> {
                 current.findViewById(R.id.btn_more_settings).performClick();
                 check(current.findViewById(R.id.auto_stop_delay_controls).getVisibility() == View.GONE,
@@ -95,7 +105,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             });
             waitForIdleSync();
             current = null;
-            result.putString("checks", (callerAudio ? "caller audio benchmark/model, EOF/Stop equivalence, audio/no-match errors; " : "") + "isolated dictionary persistence, corrupt UTF-8, atomic save; content-free diagnostic statuses/version/errors; delay visibility, choices, persistence, restart, popup JNI/cancel");
+            result.putString("checks", (preparedWindows ? "71s same-public-audio prepared/deferred production text equivalence; " : "") + (callerAudio ? "caller audio benchmark/model, EOF/Stop equivalence, audio/no-match errors; " : "") + "isolated dictionary persistence, corrupt UTF-8, atomic save; content-free diagnostic statuses/version/errors; detailed consent warning/cancel/confirm/disable; delay visibility, choices, persistence, restart, popup JNI/cancel");
             result.putString("privacy", "no saved transcript/dictionary collection; isolated synthetic fixtures removed; original settings restored");
         } catch (Throwable failure) {
             injectedFailureCaught = failure instanceof InjectedFixtureFailure;
@@ -168,6 +178,12 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             DiagnosticLog.recognizerError(root.toFile(), 9);
             check(!Files.exists(root.resolve("diagnostic.log")), "disabled error logging wrote a file");
             DiagnosticLog.setEnabled(root.toFile(), true);
+            check(!DiagnosticLog.isTroubleshootingEnabled(root.toFile()), "basic consent enabled detailed mode");
+            DiagnosticLog.setTroubleshootingEnabled(root.toFile(), true);
+            DiagnosticLog.troubleshootingEvent(root.toFile(), "session",
+                    "process=ime,session_id=12,phase=capture,reason=start,elapsed_ms=0");
+            DiagnosticLog.troubleshootingEvent(root.toFile(), "resource",
+                    "process=ime,session_id=12,cpu_ms=34,battery_pct=99,power=battery,thermal=0");
             DiagnosticLog.event(root.toFile(), "ime_start",
                     "process=ime,version_code=" + BuildConfig.VERSION_CODE);
             DiagnosticLog.event(root.toFile(), "ime_state",
@@ -187,6 +203,10 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             check(snapshot.contains("code=E_RECOGNIZER_9"), "recognizer error evidence absent");
             check(snapshot.contains("outcome=empty_decode,audio_ms=1600"), "recognition outcome evidence absent");
             check(!snapshot.contains("private_fixture"), "unapproved diagnostic content accepted");
+            check(snapshot.contains("cpu_ms=34"), "detailed fixed metadata missing");
+            check(snapshot.contains("phase=capture,reason=start,elapsed_ms=0"), "session correlation event missing");
+            DiagnosticLog.setEnabled(root.toFile(), false);
+            check(!DiagnosticLog.isTroubleshootingEnabled(root.toFile()), "disable did not revoke detailed consent");
         } finally {
             DiagnosticLog.setEnabled(root.toFile(), false);
             check(DiagnosticLog.awaitIdleForTest(5_000), "diagnostic fixture cleanup did not drain");
@@ -196,6 +216,101 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
                 }
             }
             Files.delete(root);
+        }
+    }
+
+    private void testTroubleshootingControls(File directory) throws Exception {
+        File lease = new File(directory, "diagnostic_troubleshooting");
+        boolean wasEnabled = DiagnosticLog.isEnabled(directory);
+        byte[] savedLease = lease.isFile() && lease.length() == 16 ? Files.readAllBytes(lease.toPath()) : null;
+        check(!lease.exists() || savedLease != null, "unexpected detailed consent fixture");
+        java.lang.reflect.Field controlsField = MainActivity.class.getDeclaredField("troubleshootingControls");
+        controlsField.setAccessible(true);
+        TroubleshootingControls controls = (TroubleshootingControls) controlsField.get(current);
+        java.lang.reflect.Field warningField = TroubleshootingControls.class.getDeclaredField("warning");
+        warningField.setAccessible(true);
+        try {
+            DiagnosticLog.setEnabled(directory, true);
+            DiagnosticLog.setTroubleshootingEnabled(directory, false);
+            runOnMainSync(() -> {
+                controls.refresh();
+                ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(true);
+                check(!DiagnosticLog.isTroubleshootingEnabled(directory), "switch bypassed consent warning");
+            });
+            androidx.appcompat.app.AlertDialog warning = (androidx.appcompat.app.AlertDialog) warningField.get(controls);
+            runOnMainSync(() -> warning.getButton(android.content.DialogInterface.BUTTON_NEGATIVE).performClick());
+            // AlertController posts button callbacks to the main message queue.
+            waitForIdleSync();
+            check(!DiagnosticLog.isTroubleshootingEnabled(directory), "Cancel enabled detailed mode");
+            runOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(true));
+            androidx.appcompat.app.AlertDialog confirmation = (androidx.appcompat.app.AlertDialog) warningField.get(controls);
+            runOnMainSync(() -> confirmation.getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick());
+            // AlertController posts button callbacks to the main message queue.
+            waitForIdleSync();
+            check(DiagnosticLog.isTroubleshootingEnabled(directory), "explicit confirmation did not enable");
+            runOnMainSync(() -> check(current.findViewById(R.id.troubleshooting_banner).getVisibility() == View.VISIBLE,
+                    "active warning banner missing"));
+            long now = System.currentTimeMillis();
+            Files.write(lease.toPath(), java.nio.ByteBuffer.allocate(16)
+                    .putLong(now - DiagnosticLog.TROUBLESHOOTING_DURATION_MS - 1).putLong(now - 1).array());
+            runOnMainSync(() -> {
+                controls.refresh();
+                check(current.findViewById(R.id.troubleshooting_banner).getVisibility() == View.GONE,
+                        "expired warning banner remained visible");
+                check(!((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).isChecked(),
+                        "expired detailed mode remained checked");
+            });
+            check(!lease.exists(), "expired consent was not removed");
+            runOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(true));
+            check(!DiagnosticLog.isTroubleshootingEnabled(directory), "renewal bypassed consent warning");
+            androidx.appcompat.app.AlertDialog renewal = (androidx.appcompat.app.AlertDialog) warningField.get(controls);
+            check(renewal != confirmation, "renewal reused a dismissed warning");
+            runOnMainSync(() -> check(renewal != null && renewal.isShowing(), "renewal warning not shown"));
+            runOnMainSync(() -> renewal.getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick());
+            // AlertController posts button callbacks to the main message queue.
+            waitForIdleSync();
+            check(DiagnosticLog.isTroubleshootingEnabled(directory), "renewal did not enable detailed mode");
+            runOnMainSync(() -> check(current.findViewById(R.id.troubleshooting_banner).getVisibility() == View.VISIBLE,
+                    "renewal did not restore warning banner"));
+            runOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(false));
+            check(!DiagnosticLog.isTroubleshootingEnabled(directory), "toggle off did not revoke");
+        } finally {
+            DiagnosticLog.setEnabled(directory, wasEnabled);
+            if (savedLease != null) Files.write(lease.toPath(), savedLease);
+            else Files.deleteIfExists(lease.toPath());
+            runOnMainSync(controls::refresh);
+        }
+    }
+
+    private void testCallerDiagnostics(File directory) throws Exception {
+        File lease = new File(directory, "diagnostic_troubleshooting");
+        boolean basic = DiagnosticLog.isEnabled(directory);
+        byte[] original = lease.isFile() && lease.length() == 16 ? Files.readAllBytes(lease.toPath()) : null;
+        check(!lease.exists() || original != null, "unexpected caller consent fixture");
+        try {
+            DiagnosticLog.setEnabled(directory, true);
+            DiagnosticLog.setTroubleshootingEnabled(directory, true);
+            long start = System.currentTimeMillis();
+            CallerAudioProviderDeviceTest.run(this);
+            check(DiagnosticLog.awaitIdleForTest(5000), "caller diagnostics did not drain");
+            String log = new String(DiagnosticLog.snapshot(directory), java.nio.charset.StandardCharsets.UTF_8);
+            boolean pipeline = false, session = false, resources = false;
+            for (String line : log.split("\n")) {
+                int space = line.indexOf(' ');
+                if (space <= 0) continue;
+                try {
+                    if (Long.parseLong(line.substring(0, space)) < start) continue;
+                } catch (NumberFormatException oldOrIncompleteLine) { continue; }
+                if (!line.contains("route=caller_audio")) continue;
+                pipeline |= line.contains(" pipeline ") && line.contains("stop_wait_ms=") && line.contains("session_id=");
+                session |= line.contains("phase=capture,reason=start,elapsed_ms=");
+                resources |= line.contains(" resource ") && line.contains("cpu_ms=") && line.contains("thermal=");
+            }
+            check(pipeline && session && resources, "actual provider JNI/session/resource diagnostics absent");
+        } finally {
+            DiagnosticLog.setEnabled(directory, basic);
+            if (original == null) Files.deleteIfExists(lease.toPath());
+            else Files.write(lease.toPath(), original);
         }
     }
 

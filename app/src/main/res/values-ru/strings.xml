@@ -100,7 +100,7 @@
     <string name="btn_voice_help">Помощь по настройке</string>
 
     <string name="voice_test_ok">Работает! Распознано: %1$s</string>
-    <string name="voice_test_empty">Работает, но речь не обнаружена.</string>
+    <string name="voice_test_empty">Сервис ответил, но текст не распознан. Это не обязательно означает, что в записи была тишина.</string>
     <string name="voice_test_failed">Не удалось запустить голосовой ввод на этом устройстве.</string>
 
     <string name="voice_help_title">Настройка голосового ввода</string>

@@ -44,12 +44,14 @@ javac -d "$OUT" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/DiagnosticLog.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/NativeStatus.java" \
   "$ROOT/tests/BehaviorTest.java" \
+  "$ROOT/tests/TroubleshootingLeaseTest.java" \
   "$ROOT/tests/ModelDownloadBoundaryTest.java" \
   "$ROOT/tests/ModelImportTaskTest.java" \
   "$ROOT/tests/CustomTermsStoreTest.java" \
   "$ROOT/tests/PersonalCorrectionsStoreTest.java" \
   "$ROOT/tests/PendingTranscriptRecordTest.java"
 java -ea -cp "$OUT" dev.notune.transcribe.BehaviorTest
+java -ea -cp "$OUT" dev.notune.transcribe.TroubleshootingLeaseTest
 java -ea -cp "$OUT" dev.notune.transcribe.AutoStopDelayTest
 java -ea -cp "$OUT" dev.notune.transcribe.ModelDownloadBoundaryTest
 java -ea -cp "$OUT" dev.notune.transcribe.ModelImportTaskTest
@@ -70,6 +72,10 @@ java -ea -cp "$OUT" dev.notune.transcribe.M4LifecycleTest
 rustc --edition 2021 --test "$ROOT/tests/BackgroundChunkingTest.rs" \
   -o "$OUT/background_chunking_test"
 "$OUT/background_chunking_test"
+
+rustc --edition 2021 --test "$ROOT/tests/BackgroundWorkerTest.rs" \
+  -o "$OUT/background_worker_test"
+"$OUT/background_worker_test"
 
 rustc --edition 2021 --test "$ROOT/tests/InteractiveEndpointingTest.rs" \
   -o "$OUT/interactive_endpointing_test"

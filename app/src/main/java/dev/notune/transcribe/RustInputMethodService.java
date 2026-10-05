@@ -90,6 +90,7 @@ public class RustInputMethodService extends InputMethodService {
     private static final long DELIVERY_RETRY_DELAY_MS = 125L;
     private boolean pauseAudioActive = false;
     private long recordingStartedElapsedMs = -1L;
+    private volatile TroubleshootingSession troubleshooting;
     private long pauseStartedElapsedMs = -1L;
     private long accumulatedPausedMs = 0L;
     // Whether an editor is currently focused/started for input. Tracked via
@@ -208,6 +209,8 @@ public class RustInputMethodService extends InputMethodService {
             });
 
             statusView = view.findViewById(R.id.ime_status_text);
+            view.findViewById(R.id.ime_troubleshooting_banner).setVisibility(
+                    DiagnosticLog.isTroubleshootingEnabled(getFilesDir()) ? View.VISIBLE : View.GONE);
             processingRing = view.findViewById(R.id.ime_processing_ring);
             recordContainer = view.findViewById(R.id.ime_record_container);
             micIcon = view.findViewById(R.id.ime_mic_icon);
@@ -340,8 +343,8 @@ public class RustInputMethodService extends InputMethodService {
                 recordingSession.begin(getCurrentInputConnection(), editorGeneration);
                 recordingPaused = false;
                 processingResult = false;
-                startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
                 updateRecordButtonUI(true);
+                startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
             });
 
             recordContainer.setOnLongClickListener(v -> {
@@ -374,6 +377,7 @@ public class RustInputMethodService extends InputMethodService {
         super.onWindowShown();
         boolean wasVisible = windowVisible;
         windowVisible = true;
+        refreshTroubleshootingBanner();
         bindLongRecordingState();
         if (isRecording) {
             // A background recording is still running (record-in-background
@@ -478,8 +482,8 @@ public class RustInputMethodService extends InputMethodService {
             }
             recordingSession.begin(getCurrentInputConnection(), editorGeneration);
             recordingPaused = false;
-            startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
             updateRecordButtonUI(true);
+            startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
         } finally {
             automaticStartInFlight = false;
         }
@@ -554,6 +558,7 @@ public class RustInputMethodService extends InputMethodService {
         processingResult = false;
         pendingSwitchBack = false;
         recordingSession.discard();
+        finishTroubleshooting("discarded");
         try {
             cancelRecording();
         } catch (Throwable t) {
@@ -829,10 +834,13 @@ public class RustInputMethodService extends InputMethodService {
     }
 
     private void updateRecordButtonUI(boolean recording) {
+        refreshTroubleshootingBanner();
         boolean wasRecording = isRecording;
         isRecording = recording;
         if (!recording) recordingPaused = false;
         if (recording && !wasRecording) {
+            finishTroubleshooting("cancel");
+            troubleshooting = TroubleshootingSession.start(this, "ime", "ime");
             recordingStartedElapsedMs = SystemClock.elapsedRealtime();
             pauseStartedElapsedMs = -1L;
             accumulatedPausedMs = 0L;
@@ -889,6 +897,7 @@ public class RustInputMethodService extends InputMethodService {
 
     @Override
     public void onDestroy() {
+        finishTroubleshooting("destroy");
         unbindLongRecordingState();
         cancelDeletePreview();
         DiagnosticLog.event(getFilesDir(), "ime_stop", "process=ime");
@@ -917,6 +926,7 @@ public class RustInputMethodService extends InputMethodService {
                     "state=" + NativeStatus.diagnosticLabel(status));
             lastStatus = status;
             if (error) {
+                finishTroubleshooting("error");
                 processingResult = false;
                 recordingSession.onError();
                 if (isRecording) updateRecordButtonUI(false);
@@ -987,6 +997,7 @@ public class RustInputMethodService extends InputMethodService {
         mainHandler.post(() -> {
             boolean discarded = recordingSession.isDiscarded();
             if (discarded) {
+                finishTroubleshooting("discarded");
                 processingResult = false;
                 lastStatus = "Ready";
                 recordingSession.finish();
@@ -999,6 +1010,7 @@ public class RustInputMethodService extends InputMethodService {
                 return;
             }
             if (text == null || text.trim().isEmpty()) {
+                finishTroubleshooting("empty_decode");
                 processingResult = false;
                 lastStatus = "Ready";
                 // Nothing recognized — don't insert a stray space.
@@ -1034,6 +1046,27 @@ public class RustInputMethodService extends InputMethodService {
                         + ",cpu_threads=" + Math.max(0, threads));
     }
 
+    public long getTroubleshootingSessionId() {
+        TroubleshootingSession session = troubleshooting;
+        return session == null ? 0L : session.id();
+    }
+
+    public void onPipelineMetrics(long sessionId, long prepareMs, long decodeMs, long postprocessMs, long stopWaitMs, int windows, int family, int warm) {
+        TroubleshootingSession session = troubleshooting;
+        if (session != null && session.id() == sessionId) session.pipeline(prepareMs, decodeMs, postprocessMs, stopWaitMs, windows, family, warm);
+    }
+
+    private void refreshTroubleshootingBanner() {
+        if (inputView != null) inputView.findViewById(R.id.ime_troubleshooting_banner).setVisibility(
+                DiagnosticLog.isTroubleshootingEnabled(getFilesDir()) ? View.VISIBLE : View.GONE);
+    }
+
+    private void finishTroubleshooting(String reason) {
+        TroubleshootingSession session = troubleshooting;
+        troubleshooting = null;
+        if (session != null) session.finish(reason);
+    }
+
     private void deliverStagedTranscription(String text, boolean staged, int attempt) {
         InputConnection current = getCurrentInputConnection();
         boolean safeTarget = recordingSession.canDeliverToCurrent(
@@ -1059,6 +1092,7 @@ public class RustInputMethodService extends InputMethodService {
         processingResult = false;
         lastStatus = "Ready";
         recordingSession.finish();
+        finishTroubleshooting(inserted ? "delivered" : "retained");
         releasePauseAudio();
         if (inserted && staged) {
             updateRecordButtonUI(false);
@@ -1167,6 +1201,7 @@ public class RustInputMethodService extends InputMethodService {
 
     private void finishCaptureDiagnostics() {
         if (recordingStartedElapsedMs < 0L) return;
+        if (troubleshooting != null) troubleshooting.event("processing", "stop");
         long now = SystemClock.elapsedRealtime();
         if (pauseStartedElapsedMs >= 0L) {
             accumulatedPausedMs += Math.max(0L, now - pauseStartedElapsedMs);

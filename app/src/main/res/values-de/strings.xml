@@ -100,7 +100,7 @@
     <string name="btn_voice_help">Einrichtungshilfe</string>
 
     <string name="voice_test_ok">Es funktioniert! Verstanden: %1$s</string>
-    <string name="voice_test_empty">Es funktioniert, aber es wurde keine Sprache erkannt.</string>
+    <string name="voice_test_empty">Der Dienst hat geantwortet, aber es wurde kein Text erkannt. Das bedeutet nicht unbedingt, dass die Aufnahme still war.</string>
     <string name="voice_test_failed">Spracheingabe konnte auf diesem Gerät nicht gestartet werden.</string>
 
     <string name="voice_help_title">Einrichtung der Spracheingabe</string>

@@ -17,7 +17,7 @@ Private, on-device speech recognition for Android apps, keyboards, shared audio,
 - Benchmark the active model on the built-in recording. Automatic inference uses at most two performance cores to balance latency and battery use; higher manual thread counts remain available. Multi-model comparison was evaluated but is not offered because loading a batch safely would block live dictation surfaces.
 - Keep newer Arm64 phones on optimized dot-product/FP16 inference while safely falling back to baseline Armv8-A on older devices.
 - Use light, dark, or system appearance with an accessible amber interface.
-- Enable a bounded, content-free diagnostic log when troubleshooting. It is off by default and can be saved as a text file, shared through Android's Sharesheet, or cleared in the app.
+- Enable a bounded, content-free diagnostic log when troubleshooting; save, share or clear it explicitly. Separately enable **Detailed troubleshooting — 1 hour** after its warning for session IDs, model family, pipeline timing and CPU/battery/thermal context. Both are off by default; detailed collection expires automatically, never records speech or text, and never uploads anything. Optionally **Prepare long dictation while recording** in More settings: this experimental, default-off keyboard feature prepares existing overlapping long-audio windows early. Short dictation and Whisper remain unchanged. It never cuts at a brief pause or delivers partial text; speed and battery gains are not guaranteed.
 
 ## Screenshots
 

@@ -38,13 +38,15 @@ public final class DiagnosticLog {
     private static final String ENABLED_FILE = "diagnostic_logging";
     private static final String LOG_FILE = "diagnostic.log";
     private static final String LOCK_FILE = ".diagnostic.lock";
+    private static final String ENHANCED_FILE = "diagnostic_troubleshooting";
+    public static final long TROUBLESHOOTING_DURATION_MS = 60L * 60L * 1000L;
     private static final Pattern SAFE_DETAIL = Pattern.compile(
             "(?:[a-z][a-z0-9_]*=[a-zA-Z0-9_.:/-]+)(?:,(?:[a-z][a-z0-9_]*=[a-zA-Z0-9_.:/-]+))*");
     private static final Set<String> EVENTS = new HashSet<>(Arrays.asList(
             "app_start", "app_stop", "app_lifecycle", "service_state",
             "ime_start", "ime_stop", "ime_state",
             "model_state", "model_provenance", "timing", "resource",
-            "notification_state", "error_code", "recognition_outcome"));
+            "notification_state", "error_code", "recognition_outcome", "session", "pipeline"));
     private static final ReentrantLock PROCESS_LOCK = new ReentrantLock();
     private static final ThreadPoolExecutor WRITER = new ThreadPoolExecutor(
             1, 1, 30L, TimeUnit.SECONDS, new ArrayBlockingQueue<>(256), runnable -> {
@@ -75,6 +77,61 @@ public final class DiagnosticLog {
                 }
             } else {
                 Files.deleteIfExists(marker.toPath());
+                Files.deleteIfExists(new File(filesDir, ENHANCED_FILE).toPath());
+            }
+        });
+    }
+
+    /** Separate opt-in lease; malformed, expired or clock-reversed values fail closed. */
+    public static boolean isTroubleshootingEnabled(File filesDir) {
+        if (!isEnabled(filesDir)) return false;
+        File lease = new File(filesDir, ENHANCED_FILE);
+        if (!lease.isFile() || lease.length() != 16) return false;
+        try {
+            ByteBuffer bytes = ByteBuffer.wrap(Files.readAllBytes(lease.toPath()));
+            long started = bytes.getLong();
+            long expires = bytes.getLong();
+            boolean valid = validTroubleshootingLease(started, expires, System.currentTimeMillis());
+            if (!valid) {
+                // Re-read under the cross-process lock: never delete a newer
+                // warning-confirmed lease that replaced our expired snapshot.
+                IoAction expire = () -> {
+                    if (lease.isFile() && lease.length() == 16) {
+                        ByteBuffer current = ByteBuffer.wrap(Files.readAllBytes(lease.toPath()));
+                        if (current.getLong() == started && current.getLong() == expires) {
+                            Files.deleteIfExists(lease.toPath());
+                        }
+                    }
+                };
+                if (PROCESS_LOCK.isHeldByCurrentThread()) expire.run();
+                else withLock(filesDir, expire);
+            }
+            return valid;
+        } catch (IOException | RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    static boolean validTroubleshootingLease(long started, long expires, long now) {
+        return started > 0 && expires > started && expires - started == TROUBLESHOOTING_DURATION_MS
+                && now >= started && now < expires;
+    }
+
+    public static void setTroubleshootingEnabled(File filesDir, boolean enabled) throws IOException {
+        filesDir.mkdirs();
+        withLock(filesDir, () -> {
+            File target = new File(filesDir, ENHANCED_FILE);
+            if (!enabled) { Files.deleteIfExists(target.toPath()); return; }
+            if (!isEnabled(filesDir)) throw new IOException("Basic logging must be enabled first");
+            long now = System.currentTimeMillis();
+            File temporary = new File(filesDir, ENHANCED_FILE + ".tmp");
+            Files.write(temporary.toPath(), ByteBuffer.allocate(16).putLong(now)
+                    .putLong(now + TROUBLESHOOTING_DURATION_MS).array());
+            try {
+                Files.move(temporary.toPath(), target.toPath(),
+                        StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (java.nio.file.AtomicMoveNotSupportedException ignored) {
+                Files.move(temporary.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
             }
         });
     }
@@ -106,11 +163,20 @@ public final class DiagnosticLog {
     }
 
     public static void event(File filesDir, String event, String detail) {
+        enqueue(filesDir, event, detail, false);
+    }
+
+    static void troubleshootingEvent(File filesDir, String event, String detail) {
+        enqueue(filesDir, event, detail, true);
+    }
+
+    private static void enqueue(File filesDir, String event, String detail, boolean enhanced) {
         if (!EVENTS.contains(event) || !isSafeDetail(detail) || !isEnabled(filesDir)) {
             return;
         }
+        if (enhanced && !isTroubleshootingEnabled(filesDir)) return;
         try {
-            WRITER.execute(() -> writeEvent(filesDir, event, detail));
+            WRITER.execute(() -> writeEvent(filesDir, event, detail, enhanced));
         } catch (RejectedExecutionException ignored) {
             // The bounded queue drops excess diagnostics rather than affecting the app.
         }
@@ -135,11 +201,12 @@ public final class DiagnosticLog {
                 + ",audio_ms=" + Math.max(0L, Math.min(999999999999L, audioMs)));
     }
 
-    private static void writeEvent(File filesDir, String event, String detail) {
+    private static void writeEvent(File filesDir, String event, String detail, boolean enhanced) {
         try {
             filesDir.mkdirs();
             withLock(filesDir, () -> {
                 if (!isEnabled(filesDir)) return;
+                if (enhanced && !isTroubleshootingEnabled(filesDir)) return;
                 byte[] line = (System.currentTimeMillis() + " " + event + " " + detail + "\n")
                         .getBytes(StandardCharsets.UTF_8);
                 File target = log(filesDir);
@@ -221,7 +288,38 @@ public final class DiagnosticLog {
                 case "cpu_threads":
                 case "version_code":
                 case "memory_kb":
+                case "session_id":
+                case "cpu_ms":
+                case "stop_wait_ms":
+                case "prepare_ms":
+                case "decode_ms":
+                case "postprocess_ms":
+                case "prepared_windows":
+                case "model_warm":
                     safe = value.matches("[0-9]{1,12}");
+                    break;
+                case "battery_pct":
+                    safe = value.equals("unknown") || value.matches("[0-9]{1,3}");
+                    break;
+                case "thermal":
+                    safe = value.equals("unknown") || value.matches("[0-6]");
+                    break;
+                case "power":
+                    safe = value.equals("battery") || value.equals("external") || value.equals("unknown");
+                    break;
+                case "route":
+                    safe = Arrays.asList("ime", "microphone", "caller_audio").contains(value);
+                    break;
+                case "phase":
+                    safe = Arrays.asList("capture", "processing", "delivery", "sample").contains(value);
+                    break;
+                case "model_family":
+                    safe = Arrays.asList("unknown", "whisper", "parakeet", "moonshine", "gigaam", "medasr").contains(value);
+                    break;
+                case "reason":
+                    safe = Arrays.asList("start", "stop", "end", "cancel", "destroy", "error",
+                            "text", "empty_decode", "insufficient_audio", "input_error",
+                            "delivered", "retained", "discarded").contains(value);
                     break;
                 case "outcome":
                     safe = Arrays.asList("text", "insufficient_audio", "empty_decode", "input_error").contains(value);

@@ -100,7 +100,7 @@
     <string name="btn_voice_help">Ajuda de configuração</string>
 
     <string name="voice_test_ok">Funciona! Ouvido: %1$s</string>
-    <string name="voice_test_empty">Funciona, mas nenhuma fala foi detectada.</string>
+    <string name="voice_test_empty">O serviço respondeu, mas nenhum texto foi reconhecido. Isso não significa necessariamente que o áudio estava em silêncio.</string>
     <string name="voice_test_failed">Não foi possível iniciar a entrada de voz neste dispositivo.</string>
 
     <string name="voice_help_title">Configuração da entrada de voz</string>

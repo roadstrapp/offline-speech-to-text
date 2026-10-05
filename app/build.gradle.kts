@@ -18,13 +18,15 @@ val isolatedDebugPackage = providers.gradleProperty("isolatedDebugPackage")
 android {
     namespace = "dev.notune.transcribe"
     compileSdk = 35
+    // Preserve the production native toolchain and its 16 KiB-compatible libc++.
+    ndkVersion = "29.0.14206865"
 
     defaultConfig {
         applicationId = "app.offlinespeechtotext"
         minSdk = 26
         targetSdk = 35
-        versionCode = 47
-        versionName = "0.12.2"
+        versionCode = 48
+        versionName = "0.13.0"
         testInstrumentationRunner = "dev.notune.transcribe.AutoStopDeviceInstrumentation"
         buildConfigField("boolean", "HAS_BUNDLED_MODEL", includeBundledModel.toString())
         ndk {

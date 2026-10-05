@@ -1,6 +1,75 @@
 # Power and performance diagnostics
 
-OSTT keeps diagnostics off by default and never logs audio or recognized text. Enable **Settings → Debug logging** only while investigating. The bounded private log then records content-free fields such as capture duration, paused duration, inference duration, and inference thread count.
+OSTT keeps diagnostics off by default and never logs audio or recognized text. Enable **More settings → Diagnostic logging** only while investigating. The bounded private log then records content-free fields such as capture duration, paused duration, inference duration, and inference thread count.
+
+## Detailed troubleshooting and battery reports
+
+**Detailed troubleshooting — 1 hour** is a second, default-off opt-in. Basic logging
+does not enable it. Confirm its warning to collect session-local random IDs, input
+route, per-session build markers, fixed model family and warm-engine state,
+setup/decode/final-cleanup/Stop-wait durations, prepared-window counts, process CPU,
+battery percentage, plugged state and thermal status. Active sessions sample resource
+context at most every 15 seconds without a wake lock. Retention remains 64 KiB, so
+exports can contain incomplete sessions. There are no app identifiers, audio,
+transcripts, editor text, dictionary terms, arbitrary model filenames, paths or
+exception messages. There is no automatic upload.
+
+The app and keyboard show an active indicator. The lease expires after one hour;
+malformed leases and times outside the consent interval fail closed. An observed
+expired or invalid interval is removed and cannot revive after a clock change. Disable it at any time,
+or disable basic logging to revoke both. Exports require explicit Save or Share.
+Only send them to someone you trust: timing/resource metadata can reveal usage
+patterns. Clear deletes retained entries, but active recording can produce new ones;
+disable logging before clearing if you want the log to stay empty.
+
+For an initial battery report, no developer options or ADB are needed:
+
+1. Keep one model, language and thread setting. Use a cool, unplugged phone with
+   consistent brightness and similar background-app activity.
+2. Clear old logs, enable both modes, and repeat the same workload: short and long
+   dictation, pauses, Stop, Cancel and the observed failure. Note the model and result.
+3. Export promptly, then turn both modes off. Share the metadata file with test
+   duration and whether you used the keyboard or White Noise.
+4. Compare long dictation with **Prepare long dictation while recording** off/on,
+   cooling between runs. Repeat several times and compare medians, not one run.
+
+`cpu_ms` belongs to the whole OSTT process, not exclusively one utterance. Thermal
+status is device-wide; battery percentage is coarse and other apps/display/radios
+also consume power. None is energy attributable to OSTT. Detailed logging adds its
+own overhead. Controlled power-rail/system profiling is a separate optional developer
+investigation, not required for the initial report. Unsupported readings remain unknown.
+
+## Safe background preparation
+
+White Noise feeds serial non-overlapping quiet/size-ended caller chunks while its
+microphone continues recording. That can hide earlier inference latency, but quiet
+cannot prove a sentence ended. OSTT does not copy that strategy into its keyboard.
+It retains the complete recording and prepares only windows already forced by the
+current non-Whisper runtime's safe long-audio limit. They use the identical quiet-point
+search, padding, overlap and stitching as deferred decoding. The last window and all
+final corrections wait for Stop. No partial text reaches the editor. Inference remains
+serialized; cancellation discards private hypotheses. Failed preparation retains
+original audio for final decoding. The existing capture monitor coalesces worker
+nudges; there is no extra polling timer or inference in the real-time callback.
+Preferred terms and corrections are refreshed at Stop, matching deferred cleanup.
+A caught Rust-unwinding preparation panic discards all cached hypotheses and decodes the original
+recording from scratch. Neither a failed cache nor a count mismatch may omit words.
+This does not protect against a fatal native abort.
+Short audio and Whisper do not enqueue preparation work. A native model run cannot
+be interrupted mid-window: Cancel suppresses delivery but CPU may continue until
+that run returns, and Stop or a new recording may wait for its engine lock.
+
+Basic `timing duration_ms` measures cumulative decode and final cleanup, including
+windows prepared during capture—not how long you waited after Stop. Detailed
+`stop_wait_ms` measures that wait; `decode_ms` also includes engine-lock contention.
+`model_warm=1` means the model was already loaded, not that hardware caches were warm.
+
+The experimental setting is off by default and snapshotted per recording. Short
+dictation and Whisper do not decode speculatively. Native limits vary, so there is no
+universal activation time. Earlier compute can increase heat during capture even if
+final waiting falls. Planning equivalence tests are not acoustic-accuracy or battery
+evidence. With unresolved overlap, the existing stitcher preserves both hypotheses;
+it cannot promise perfect punctuation or no duplication for arbitrary speech.
 
 Recording appears as `state=recording`; an explicit native cancellation appears as `state=cancelled`. Neither is an error. Recognition-service failures use `error_code process=service,code=E_RECOGNIZER_<number>`, retaining Android's numeric error code without exception text. A timing record alone does not prove successful recognition: an empty result can still finish computation and then report a no-match error.
 
@@ -10,7 +79,7 @@ Application/keyboard starts, recognition-service creation and enabling logging r
 
 1. In **Manage speech models**, run **Benchmark active model** three times with inference threads set to **Automatic**.
 2. Repeat with a manual thread count only when comparing a suspected regression. Use the median result; the first run may include model loading and cold caches.
-3. Reproduce one ordinary dictation, one Pause/Resume, and one keyboard-to-background transition with debug logging enabled.
+3. Reproduce one ordinary dictation, one Pause/Resume, and one keyboard-to-background transition with Diagnostic logging enabled.
 4. Confirm that capture ends after transcription, Pause releases the microphone on supported Android audio backends, and the diagnostic durations match the interaction.
 5. Use **Save file** to keep a local text snapshot or **Share** to send a temporary read-only snapshot through Android's Sharesheet. Review the destination before sending, then disable and clear the log afterward.
 6. For device power rails, profile a release build with Android Studio's Power Profiler while repeating the same fixed workload. Compare traces on the same device, model, temperature, and battery state; Android's battery percentage alone is not a controlled benchmark.

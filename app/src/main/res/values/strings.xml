@@ -321,7 +321,7 @@
     <string name="btn_voice_help">Setup help</string>
 
     <string name="voice_test_ok">It works! Heard: %1$s</string>
-    <string name="voice_test_empty">It works, but no speech was detected.</string>
+    <string name="voice_test_empty">The provider responded, but no text was recognized. This does not necessarily mean the audio was silent.</string>
     <string name="voice_test_failed">Couldn\'t start voice input on this device.</string>
 
     <string name="voice_help_title">Voice input setup</string>
@@ -342,6 +342,14 @@
     <string name="diagnostic_log_clear_desc">Deletes all retained diagnostic metadata immediately.</string>
     <string name="diagnostic_log_cleared">Diagnostic log deleted</string>
     <string name="diagnostic_log_error">Could not update diagnostic logging</string>
+    <string name="troubleshooting_title">Detailed troubleshooting — 1 hour</string>
+    <string name="troubleshooting_description">Enable diagnostic logging first. Adds session, processing, CPU, battery and thermal metadata. No audio or text. Use only while reproducing a problem.</string>
+    <string name="troubleshooting_warning_title">Warning: detailed troubleshooting</string>
+    <string name="troubleshooting_warning">This mode may use extra battery and affect timing. Its local log reveals when and how you use dictation, model/build details, and device resource state. Never includes audio, recognized text, editor contents or dictionary terms. Nothing is uploaded automatically.\n\nIt turns off after one hour. Turn it off sooner or clear the log at any time. Export only to someone you trust. CPU and battery readings are diagnostic context, not a measurement of battery drain caused by OSTT.</string>
+    <string name="troubleshooting_enable">Enable for 1 hour</string>
+    <string name="troubleshooting_active">Detailed troubleshooting active — expires automatically</string>
+    <string name="background_predecode_title">Prepare long dictation while recording</string>
+    <string name="background_predecode_description">Experimental, off by default. For long voice-keyboard recordings with compatible non-Whisper models, decodes existing overlapping windows early. Never splits at a brief pause or inserts partial text. May increase heat while recording; shorter final waiting time is not guaranteed. Applies from the next recording.</string>
     <string name="source_link">Source</string>
     <string name="license_link">Licenses</string>
     <string name="about_version">Version %1$s (%2$d) · App source MIT · Default model CC BY 4.0</string>

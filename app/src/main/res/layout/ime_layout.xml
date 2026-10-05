@@ -28,6 +28,15 @@
     </LinearLayout>
 
     <!-- Record area: pulsing mic-level glow behind a keyboard-key-shaped record button -->
+    <TextView
+        android:id="@+id/ime_troubleshooting_banner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/troubleshooting_active"
+        android:textAppearance="?attr/textAppearanceBodySmall"
+        android:textColor="?attr/colorError"
+        android:visibility="gone"
+        android:accessibilityLiveRegion="polite"/>
     <FrameLayout
         android:id="@+id/ime_record_container"
         android:layout_width="match_parent"
