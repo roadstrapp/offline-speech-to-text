@@ -76,7 +76,7 @@ Live Subtitles uses Android's MediaProjection consent flow to capture playback a
 
 ## Build and contribute
 
-Requirements: JDK 17, Android SDK 35, Android NDK 28.0.13004108, Rust with the `aarch64-linux-android` target, and `cargo-ndk`. Use `JAVA_HOME` or your Gradle toolchain configuration for the JDK; the repository does not commit a machine-specific Java path. `Cargo.lock` keeps the Rust wrapper and bundled native `transcribe.cpp` runtime on the same reviewed 0.2.3 release; upgrade them together because upstream 0.2 is intentionally ABI-incompatible with 0.1. Point `local.properties` at your SDK:
+Requirements: JDK 17, Android SDK 35, Android NDK 29.0.14206865, Rust with the `aarch64-linux-android` target, and `cargo-ndk`. Use `JAVA_HOME` or your Gradle toolchain configuration for the JDK; the repository does not commit a machine-specific Java path. `Cargo.lock` keeps the Rust wrapper and bundled native `transcribe.cpp` runtime on the same reviewed 0.2.3 release; upgrade them together because upstream 0.2 is intentionally ABI-incompatible with 0.1. Point `local.properties` at your SDK:
 
 ```properties
 sdk.dir=/path/to/Android/Sdk

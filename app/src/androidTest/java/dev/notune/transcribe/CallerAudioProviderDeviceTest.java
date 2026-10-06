@@ -58,32 +58,41 @@ final class CallerAudioProviderDeviceTest {
         }
         if (!formatChecked || data < 0 || length != 352000) throw new AssertionError("unexpected benchmark PCM");
         byte[] pcm = java.util.Arrays.copyOfRange(wav, data, data + length);
-        String eof = recognize(fixture, pcm, false, 0);
-        String stop = recognize(fixture, pcm, true, 0);
-        if (!eof.equals(stop)) throw new AssertionError("Stop differed from complete EOF benchmark");
-        recognize(fixture, new byte[] {1, 2, 3}, false, SpeechRecognizer.ERROR_AUDIO);
-        recognize(fixture, new byte[320], false, SpeechRecognizer.ERROR_NO_MATCH);
+        // Keep one service connection across cases. Destroying and immediately
+        // recreating recognizers races Android's asynchronous service unbind.
+        SpeechRecognizer[] recognizer = new SpeechRecognizer[1];
+        fixture.runOnMainSync(() -> recognizer[0] = SpeechRecognizer.createSpeechRecognizer(
+                fixture.getTargetContext(), new ComponentName(fixture.getTargetContext(),
+                        VoiceRecognitionService.class)));
+        try {
+            String eof = recognize(fixture, recognizer[0], pcm, false, 0);
+            String stop = recognize(fixture, recognizer[0], pcm, true, 0);
+            if (!eof.equals(stop)) throw new AssertionError("Stop differed from complete EOF benchmark");
+            recognize(fixture, recognizer[0], new byte[] {1, 2, 3}, false, SpeechRecognizer.ERROR_AUDIO);
+            recognize(fixture, recognizer[0], new byte[320], false, SpeechRecognizer.ERROR_NO_MATCH);
+        } finally {
+            fixture.runOnMainSync(() -> recognizer[0].destroy());
+            fixture.waitForIdleSync();
+        }
     }
 
     private static void closeReader(ParcelFileDescriptor reader) {
         try { reader.close(); } catch (java.io.IOException ignored) {}
     }
 
-    private static String recognize(Instrumentation fixture, byte[] pcm, boolean stop, int expectedError)
+    private static String recognize(Instrumentation fixture, SpeechRecognizer recognizer,
+            byte[] pcm, boolean stop, int expectedError)
             throws Exception {
         CountDownLatch terminal = new CountDownLatch(1);
         CountDownLatch ready = new CountDownLatch(1);
         java.util.concurrent.atomic.AtomicBoolean feederFailed = new java.util.concurrent.atomic.AtomicBoolean();
-        SpeechRecognizer[] recognizer = new SpeechRecognizer[1];
         String[] text = new String[1];
         int[] error = new int[1];
         ParcelFileDescriptor[] pipe = ParcelFileDescriptor.createPipe();
         OutputStream writer = new ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]);
         try {
             fixture.runOnMainSync(() -> {
-                recognizer[0] = SpeechRecognizer.createSpeechRecognizer(fixture.getTargetContext(),
-                        new ComponentName(fixture.getTargetContext(), VoiceRecognitionService.class));
-                recognizer[0].setRecognitionListener(new RecognitionListener() {
+                recognizer.setRecognitionListener(new RecognitionListener() {
                     public void onReadyForSpeech(Bundle b) {
                         // The service has acquired its own read descriptor. Do not retain a
                         // local reader that would mask service closure and strand the writer.
@@ -110,7 +119,7 @@ final class CallerAudioProviderDeviceTest {
                         .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, 16000)
                         .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
                         .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT);
-                recognizer[0].startListening(intent);
+                recognizer.startListening(intent);
             });
             // A separate producer bounds a stalled service independently of the fixture thread.
             Thread feeder = new Thread(() -> {
@@ -118,7 +127,7 @@ final class CallerAudioProviderDeviceTest {
                     if (!ready.await(10, TimeUnit.SECONDS)) throw new AssertionError("provider not ready");
                     if (terminal.getCount() == 0) return;
                     writer.write(pcm); writer.flush();
-                    if (stop) fixture.runOnMainSync(() -> recognizer[0].stopListening());
+                    if (stop) fixture.runOnMainSync(() -> recognizer.stopListening());
                     else writer.close();
                 } catch (Throwable failure) {
                     feederFailed.set(true); terminal.countDown();
@@ -138,7 +147,7 @@ final class CallerAudioProviderDeviceTest {
         } finally {
             try { writer.close(); } catch (Exception ignored) {}
             try { pipe[0].close(); } catch (Exception ignored) {}
-            fixture.runOnMainSync(() -> { if (recognizer[0] != null) recognizer[0].destroy(); });
+            fixture.waitForIdleSync();
         }
     }
 }

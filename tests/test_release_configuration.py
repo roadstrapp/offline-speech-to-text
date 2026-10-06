@@ -21,8 +21,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         gradle_properties = (ROOT / "gradle.properties").read_text()
         workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
         self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
-        self.assertIn("versionCode = 48", gradle)
-        self.assertIn('versionName = "0.13.0"', gradle)
+        self.assertIn("versionCode = 49", gradle)
+        self.assertIn('versionName = "0.13.1"', gradle)
         self.assertIn('providers.gradleProperty("includeBundledModel")', gradle)
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: false', gradle)
         self.assertIn('ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,', gradle)
@@ -48,6 +48,9 @@ class ReleaseConfigurationTest(unittest.TestCase):
     def test_native_toolchain_is_explicit_and_update_compatible(self):
         gradle = (ROOT / "app/build.gradle.kts").read_text()
         self.assertIn('ndkVersion = "29.0.14206865"', gradle)
+        workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
+        self.assertIn('sdkmanager --install "ndk;29.0.14206865"', workflow)
+        self.assertIn('ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865', workflow)
         self.assertIn('libc++_shared.so', gradle)
         self.assertNotIn('ndkVersion = "/', gradle)
 

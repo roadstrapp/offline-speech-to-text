@@ -27,8 +27,8 @@ jobs:
 
     - name: Install Android NDK
       run: |
-        sdkmanager --install "ndk;28.0.13004108"
-        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.0.13004108" >> $GITHUB_ENV
+        sdkmanager --install "ndk;29.0.14206865"
+        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> $GITHUB_ENV
 
     - name: Setup Rust
       uses: dtolnay/rust-toolchain@stable

@@ -1,0 +1,1 @@
+Maintenance update: simplify content-free diagnostic validation and marker writes. Speech recognition, models, settings and privacy defaults remain unchanged. Includes safe dictation preparation and troubleshooting controls from 0.13.0.

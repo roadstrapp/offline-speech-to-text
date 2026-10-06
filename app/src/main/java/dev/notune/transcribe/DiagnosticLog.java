@@ -47,6 +47,21 @@ public final class DiagnosticLog {
             "ime_start", "ime_stop", "ime_state",
             "model_state", "model_provenance", "timing", "resource",
             "notification_state", "error_code", "recognition_outcome", "session", "pipeline"));
+    private static final Pattern UNSIGNED_METADATA = Pattern.compile("[0-9]{1,12}");
+    private static final Pattern BATTERY_METADATA = Pattern.compile("[0-9]{1,3}");
+    private static final Pattern THERMAL_METADATA = Pattern.compile("[0-6]");
+    private static final Pattern ERROR_METADATA = Pattern.compile("E_[A-Z0-9_]{1,64}");
+    private static final Set<String> STATES = tokens("start", "stop", "ready", "unknown", "error",
+            "loading", "processing", "idle", "enabled", "disabled", "visible", "hidden",
+            "created", "destroyed", "recording", "cancelled");
+    private static final Set<String> ROUTES = tokens("ime", "microphone", "caller_audio");
+    private static final Set<String> PHASES = tokens("capture", "processing", "delivery", "sample");
+    private static final Set<String> MODEL_FAMILIES = tokens("unknown", "whisper", "parakeet", "moonshine", "gigaam", "medasr");
+    private static final Set<String> REASONS = tokens("start", "stop", "end", "cancel", "destroy", "error",
+            "text", "empty_decode", "insufficient_audio", "input_error", "delivered", "retained", "discarded");
+    private static final Set<String> OUTCOMES = tokens("text", "insufficient_audio", "empty_decode", "input_error");
+    private static final Set<String> SOURCES = tokens("bundled", "imported", "bundled_opt_in");
+    private static final Set<String> ABIS = tokens("arm64-v8a", "armeabi-v7a", "x86", "x86_64");
     private static final ReentrantLock PROCESS_LOCK = new ReentrantLock();
     private static final ThreadPoolExecutor WRITER = new ThreadPoolExecutor(
             1, 1, 30L, TimeUnit.SECONDS, new ArrayBlockingQueue<>(256), runnable -> {
@@ -56,6 +71,19 @@ public final class DiagnosticLog {
             }, new ThreadPoolExecutor.AbortPolicy());
 
     private DiagnosticLog() { }
+
+    private static Set<String> tokens(String... values) {
+        return java.util.Collections.unmodifiableSet(new HashSet<>(Arrays.asList(values)));
+    }
+
+    private static void replaceMarker(File temporary, File target) throws IOException {
+        try {
+            Files.move(temporary.toPath(), target.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (java.nio.file.AtomicMoveNotSupportedException ignored) {
+            Files.move(temporary.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
 
     public static boolean isEnabled(File filesDir) {
         return marker(filesDir).isFile();
@@ -68,13 +96,7 @@ public final class DiagnosticLog {
             if (enabled) {
                 File temporary = new File(filesDir, ENABLED_FILE + ".tmp");
                 Files.write(temporary.toPath(), new byte[0]);
-                try {
-                    Files.move(temporary.toPath(), marker.toPath(),
-                            StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-                } catch (java.nio.file.AtomicMoveNotSupportedException ignored) {
-                    Files.move(temporary.toPath(), marker.toPath(),
-                            StandardCopyOption.REPLACE_EXISTING);
-                }
+                replaceMarker(temporary, marker);
             } else {
                 Files.deleteIfExists(marker.toPath());
                 Files.deleteIfExists(new File(filesDir, ENHANCED_FILE).toPath());
@@ -127,12 +149,7 @@ public final class DiagnosticLog {
             File temporary = new File(filesDir, ENHANCED_FILE + ".tmp");
             Files.write(temporary.toPath(), ByteBuffer.allocate(16).putLong(now)
                     .putLong(now + TROUBLESHOOTING_DURATION_MS).array());
-            try {
-                Files.move(temporary.toPath(), target.toPath(),
-                        StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            } catch (java.nio.file.AtomicMoveNotSupportedException ignored) {
-                Files.move(temporary.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
-            }
+            replaceMarker(temporary, target);
         });
     }
 
@@ -276,10 +293,7 @@ public final class DiagnosticLog {
                     safe = value.equals("app") || value.equals("ime") || value.equals("service");
                     break;
                 case "state":
-                    safe = Arrays.asList("start", "stop", "ready", "unknown", "error",
-                            "loading", "processing", "idle", "enabled", "disabled",
-                            "visible", "hidden", "created", "destroyed",
-                            "recording", "cancelled").contains(value);
+                    safe = STATES.contains(value);
                     break;
                 case "elapsed_ms":
                 case "duration_ms":
@@ -296,42 +310,40 @@ public final class DiagnosticLog {
                 case "postprocess_ms":
                 case "prepared_windows":
                 case "model_warm":
-                    safe = value.matches("[0-9]{1,12}");
+                    safe = UNSIGNED_METADATA.matcher(value).matches();
                     break;
                 case "battery_pct":
-                    safe = value.equals("unknown") || value.matches("[0-9]{1,3}");
+                    safe = value.equals("unknown") || BATTERY_METADATA.matcher(value).matches();
                     break;
                 case "thermal":
-                    safe = value.equals("unknown") || value.matches("[0-6]");
+                    safe = value.equals("unknown") || THERMAL_METADATA.matcher(value).matches();
                     break;
                 case "power":
                     safe = value.equals("battery") || value.equals("external") || value.equals("unknown");
                     break;
                 case "route":
-                    safe = Arrays.asList("ime", "microphone", "caller_audio").contains(value);
+                    safe = ROUTES.contains(value);
                     break;
                 case "phase":
-                    safe = Arrays.asList("capture", "processing", "delivery", "sample").contains(value);
+                    safe = PHASES.contains(value);
                     break;
                 case "model_family":
-                    safe = Arrays.asList("unknown", "whisper", "parakeet", "moonshine", "gigaam", "medasr").contains(value);
+                    safe = MODEL_FAMILIES.contains(value);
                     break;
                 case "reason":
-                    safe = Arrays.asList("start", "stop", "end", "cancel", "destroy", "error",
-                            "text", "empty_decode", "insufficient_audio", "input_error",
-                            "delivered", "retained", "discarded").contains(value);
+                    safe = REASONS.contains(value);
                     break;
                 case "outcome":
-                    safe = Arrays.asList("text", "insufficient_audio", "empty_decode", "input_error").contains(value);
+                    safe = OUTCOMES.contains(value);
                     break;
                 case "code":
-                    safe = value.matches("E_[A-Z0-9_]{1,64}");
+                    safe = ERROR_METADATA.matcher(value).matches();
                     break;
                 case "source":
-                    safe = Arrays.asList("bundled", "imported", "bundled_opt_in").contains(value);
+                    safe = SOURCES.contains(value);
                     break;
                 case "abi":
-                    safe = Arrays.asList("arm64-v8a", "armeabi-v7a", "x86", "x86_64").contains(value);
+                    safe = ABIS.contains(value);
                     break;
                 default:
                     safe = false;
