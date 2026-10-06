@@ -330,7 +330,7 @@
     <string name="section_privacy_about">Privacy &amp; About</string>
     <string name="privacy_about_body">Audio and transcription stay on this device. No transcription history is kept and no analytics is used. Network access begins only after you choose a model download or open a source link.</string>
     <string name="setting_diagnostic_logging">Diagnostic logging</string>
-    <string name="setting_diagnostic_logging_desc">Off by default. When enabled, stores only app, model, capture/pause duration, inference duration, CPU-thread count, resource, error-code, lifecycle, keyboard, and notification metadata in private app storage, capped at 64 KB. It never includes audio, recognized text, editor text, prompts, or dictionary content.</string>
+    <string name="setting_diagnostic_logging_desc">Off by default. When enabled, stores only app, model, capture/pause duration, inference duration, CPU-thread count, resource, error-code, lifecycle, keyboard, and notification metadata in private app storage, capped at 64 KiB for basic logging or 1 MiB while detailed troubleshooting is active. It never includes audio, recognized text, editor text, prompts, or dictionary content.</string>
     <string name="diagnostic_log_export_desc">Save or share a read-only snapshot when troubleshooting. The export contains only the content-free metadata described above.</string>
     <string name="diagnostic_log_save">Save file</string>
     <string name="diagnostic_log_share">Share</string>
@@ -342,11 +342,12 @@
     <string name="diagnostic_log_clear_desc">Deletes all retained diagnostic metadata immediately.</string>
     <string name="diagnostic_log_cleared">Diagnostic log deleted</string>
     <string name="diagnostic_log_error">Could not update diagnostic logging</string>
-    <string name="troubleshooting_title">Detailed troubleshooting — 1 hour</string>
-    <string name="troubleshooting_description">Enable diagnostic logging first. Adds session, processing, CPU, battery and thermal metadata. No audio or text. Use only while reproducing a problem.</string>
+    <string name="troubleshooting_title">Detailed troubleshooting</string>
+    <string name="troubleshooting_description">Enable diagnostic logging first. Choose 1 hour or 24 hours of session, processing, CPU, battery and thermal metadata. No audio or text. Use only while investigating a problem.</string>
     <string name="troubleshooting_warning_title">Warning: detailed troubleshooting</string>
-    <string name="troubleshooting_warning">This mode may use extra battery and affect timing. Its local log reveals when and how you use dictation, model/build details, and device resource state. Never includes audio, recognized text, editor contents or dictionary terms. Nothing is uploaded automatically.\n\nIt turns off after one hour. Turn it off sooner or clear the log at any time. Export only to someone you trust. CPU and battery readings are diagnostic context, not a measurement of battery drain caused by OSTT.</string>
+    <string name="troubleshooting_warning">This mode may use extra battery and affect timing. Its local log reveals when and how you use dictation, model/build details, and device resource state. Never includes audio, recognized text, editor contents or dictionary terms. Nothing is uploaded automatically.\n\nChoose 1 hour or 24 hours. It turns off automatically after that interval. The bounded 1 MiB log keeps recent events and may not retain the entire interval during heavy use. Turn it off sooner or clear the log at any time. Export only to someone you trust. CPU and battery readings are diagnostic context, not a measurement of battery drain caused by OSTT.</string>
     <string name="troubleshooting_enable">Enable for 1 hour</string>
+    <string name="troubleshooting_enable_day">Enable for 24 hours</string>
     <string name="troubleshooting_active">Detailed troubleshooting active — expires automatically</string>
     <string name="background_predecode_title">Prepare long dictation while recording</string>
     <string name="background_predecode_description">Experimental, off by default. For long voice-keyboard recordings with compatible non-Whisper models, decodes existing overlapping windows early. Never splits at a brief pause or inserts partial text. May increase heat while recording; shorter final waiting time is not guaranteed. Applies from the next recording.</string>

@@ -28,25 +28,28 @@ import java.util.regex.Pattern;
  * dictionary content, so those values cannot accidentally reach the file.
  */
 public final class DiagnosticLog {
-    public static final long MAX_BYTES = 64L * 1024L;
+    public static final long MAX_BYTES = 1024L * 1024L;
+    public static final long BASIC_MAX_BYTES = 64L * 1024L;
     /**
      * Compact below the hard cap so subsequent events can append without
      * rewriting the file again immediately. The log is diagnostic-only and
      * intentionally retains recent complete records rather than every event.
      */
-    private static final long COMPACT_TO_BYTES = 48L * 1024L;
+    private static final long COMPACT_TO_BYTES = 768L * 1024L;
+    private static final long BASIC_COMPACT_TO_BYTES = 48L * 1024L;
     private static final String ENABLED_FILE = "diagnostic_logging";
     private static final String LOG_FILE = "diagnostic.log";
     private static final String LOCK_FILE = ".diagnostic.lock";
     private static final String ENHANCED_FILE = "diagnostic_troubleshooting";
     public static final long TROUBLESHOOTING_DURATION_MS = 60L * 60L * 1000L;
+    public static final long TROUBLESHOOTING_DAY_MS = 24L * TROUBLESHOOTING_DURATION_MS;
     private static final Pattern SAFE_DETAIL = Pattern.compile(
             "(?:[a-z][a-z0-9_]*=[a-zA-Z0-9_.:/-]+)(?:,(?:[a-z][a-z0-9_]*=[a-zA-Z0-9_.:/-]+))*");
     private static final Set<String> EVENTS = new HashSet<>(Arrays.asList(
             "app_start", "app_stop", "app_lifecycle", "service_state",
             "ime_start", "ime_stop", "ime_state",
             "model_state", "model_provenance", "timing", "resource",
-            "notification_state", "error_code", "recognition_outcome", "session", "pipeline"));
+            "notification_state", "error_code", "recognition_outcome", "callback_delivery", "session", "pipeline"));
     private static final Pattern UNSIGNED_METADATA = Pattern.compile("[0-9]{1,12}");
     private static final Pattern BATTERY_METADATA = Pattern.compile("[0-9]{1,3}");
     private static final Pattern THERMAL_METADATA = Pattern.compile("[0-6]");
@@ -58,7 +61,7 @@ public final class DiagnosticLog {
     private static final Set<String> PHASES = tokens("capture", "processing", "delivery", "sample");
     private static final Set<String> MODEL_FAMILIES = tokens("unknown", "whisper", "parakeet", "moonshine", "gigaam", "medasr");
     private static final Set<String> REASONS = tokens("start", "stop", "end", "cancel", "destroy", "error",
-            "text", "empty_decode", "insufficient_audio", "input_error", "delivered", "retained", "discarded");
+            "text", "empty_decode", "insufficient_audio", "input_error", "delivered", "retained", "discarded", "callback_failed");
     private static final Set<String> OUTCOMES = tokens("text", "insufficient_audio", "empty_decode", "input_error");
     private static final Set<String> SOURCES = tokens("bundled", "imported", "bundled_opt_in");
     private static final Set<String> ABIS = tokens("arm64-v8a", "armeabi-v7a", "x86", "x86_64");
@@ -135,11 +138,22 @@ public final class DiagnosticLog {
     }
 
     static boolean validTroubleshootingLease(long started, long expires, long now) {
-        return started > 0 && expires > started && expires - started == TROUBLESHOOTING_DURATION_MS
+        return started > 0 && expires > started && validTroubleshootingDuration(expires - started)
                 && now >= started && now < expires;
     }
 
+    private static boolean validTroubleshootingDuration(long durationMs) {
+        return durationMs == TROUBLESHOOTING_DURATION_MS || durationMs == TROUBLESHOOTING_DAY_MS;
+    }
+
     public static void setTroubleshootingEnabled(File filesDir, boolean enabled) throws IOException {
+        setTroubleshootingEnabled(filesDir, enabled, TROUBLESHOOTING_DURATION_MS);
+    }
+
+    public static void setTroubleshootingEnabled(File filesDir, boolean enabled, long durationMs) throws IOException {
+        if (enabled && !validTroubleshootingDuration(durationMs)) {
+            throw new IllegalArgumentException("Choose one hour or 24 hours");
+        }
         filesDir.mkdirs();
         withLock(filesDir, () -> {
             File target = new File(filesDir, ENHANCED_FILE);
@@ -148,7 +162,7 @@ public final class DiagnosticLog {
             long now = System.currentTimeMillis();
             File temporary = new File(filesDir, ENHANCED_FILE + ".tmp");
             Files.write(temporary.toPath(), ByteBuffer.allocate(16).putLong(now)
-                    .putLong(now + TROUBLESHOOTING_DURATION_MS).array());
+                    .putLong(now + durationMs).array());
             replaceMarker(temporary, target);
         });
     }
@@ -188,12 +202,13 @@ public final class DiagnosticLog {
     }
 
     private static void enqueue(File filesDir, String event, String detail, boolean enhanced) {
+        long occurredAt = System.currentTimeMillis();
         if (!EVENTS.contains(event) || !isSafeDetail(detail) || !isEnabled(filesDir)) {
             return;
         }
         if (enhanced && !isTroubleshootingEnabled(filesDir)) return;
         try {
-            WRITER.execute(() -> writeEvent(filesDir, event, detail, enhanced));
+            WRITER.execute(() -> writeEvent(filesDir, event, detail, enhanced, occurredAt));
         } catch (RejectedExecutionException ignored) {
             // The bounded queue drops excess diagnostics rather than affecting the app.
         }
@@ -218,17 +233,20 @@ public final class DiagnosticLog {
                 + ",audio_ms=" + Math.max(0L, Math.min(999999999999L, audioMs)));
     }
 
-    private static void writeEvent(File filesDir, String event, String detail, boolean enhanced) {
+    private static void writeEvent(File filesDir, String event, String detail, boolean enhanced, long occurredAt) {
         try {
             filesDir.mkdirs();
             withLock(filesDir, () -> {
                 if (!isEnabled(filesDir)) return;
-                if (enhanced && !isTroubleshootingEnabled(filesDir)) return;
-                byte[] line = (System.currentTimeMillis() + " " + event + " " + detail + "\n")
+                boolean detailed = isTroubleshootingEnabled(filesDir);
+                if (enhanced && !detailed) return;
+                long maxBytes = detailed ? MAX_BYTES : BASIC_MAX_BYTES;
+                long compactToBytes = detailed ? COMPACT_TO_BYTES : BASIC_COMPACT_TO_BYTES;
+                byte[] line = (occurredAt + " " + event + " " + detail + "\n")
                         .getBytes(StandardCharsets.UTF_8);
                 File target = log(filesDir);
                 long existingSize = target.isFile() ? target.length() : 0L;
-                if (existingSize + line.length <= MAX_BYTES) {
+                if (existingSize + line.length <= maxBytes) {
                     try (FileChannel channel = new RandomAccessFile(target, "rw").getChannel()) {
                         channel.position(existingSize);
                         writeFully(channel, ByteBuffer.wrap(line));
@@ -238,7 +256,7 @@ public final class DiagnosticLog {
 
                 byte[] existing = target.isFile() ? Files.readAllBytes(target.toPath()) : new byte[0];
                 int keep = (int) Math.min(existing.length,
-                        Math.max(0L, COMPACT_TO_BYTES - line.length));
+                        Math.max(0L, compactToBytes - line.length));
                 int start = existing.length - keep;
                 while (start < existing.length && start > 0 && existing[start - 1] != '\n') {
                     start++;

@@ -32,6 +32,20 @@ public final class TroubleshootingLeaseTest {
         assert !DiagnosticLog.validTroubleshootingLease(start, end, start - 1);
         assert !DiagnosticLog.validTroubleshootingLease(start, end + 1, start);
         assert !DiagnosticLog.validTroubleshootingLease(-1, end, start);
+        long dayEnd = start + DiagnosticLog.TROUBLESHOOTING_DAY_MS;
+        assert DiagnosticLog.validTroubleshootingLease(start, dayEnd, end + 1);
+        assert DiagnosticLog.validTroubleshootingLease(start, dayEnd, dayEnd - 1);
+        assert !DiagnosticLog.validTroubleshootingLease(start, dayEnd, dayEnd);
+        assert !DiagnosticLog.validTroubleshootingLease(start, dayEnd + 1, start);
+        try {
+            DiagnosticLog.setTroubleshootingEnabled(dir, true, 2 * DiagnosticLog.TROUBLESHOOTING_DAY_MS);
+            throw new AssertionError("Arbitrary consent durations must be rejected");
+        } catch (IllegalArgumentException expected) { }
+        DiagnosticLog.setTroubleshootingEnabled(dir, true, DiagnosticLog.TROUBLESHOOTING_DAY_MS);
+        byte[] dayLease = Files.readAllBytes(directory.resolve("diagnostic_troubleshooting"));
+        ByteBuffer day = ByteBuffer.wrap(dayLease);
+        assert day.getLong(8) - day.getLong(0) == DiagnosticLog.TROUBLESHOOTING_DAY_MS;
+        assert DiagnosticLog.isTroubleshootingEnabled(dir);
         DiagnosticLog.troubleshootingEvent(dir, "resource",
                 "process=ime,session_id=12,cpu_ms=34,battery_pct=99,power=battery,thermal=0");
         DiagnosticLog.troubleshootingEvent(dir, "pipeline",

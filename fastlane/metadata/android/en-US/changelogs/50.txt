@@ -1,0 +1,1 @@
+Choose one hour or 24 hours of content-free detailed troubleshooting, with automatic expiry and bounded retention. Diagnostic timestamps now reflect event time and distinguish recognition from callback delivery. Reuse the microphone-meter animation and stop it when its view detaches. Speech recognition, models, and privacy defaults are preserved.

@@ -4,17 +4,18 @@ OSTT keeps diagnostics off by default and never logs audio or recognized text. E
 
 ## Detailed troubleshooting and battery reports
 
-**Detailed troubleshooting — 1 hour** is a second, default-off opt-in. Basic logging
+**Detailed troubleshooting** is a second, default-off opt-in with separate **Enable for 1 hour** and **Enable for 24 hours** confirmation buttons. Basic logging
 does not enable it. Confirm its warning to collect session-local random IDs, input
 route, per-session build markers, fixed model family and warm-engine state,
 setup/decode/final-cleanup/Stop-wait durations, prepared-window counts, process CPU,
 battery percentage, plugged state and thermal status. Active sessions sample resource
-context at most every 15 seconds without a wake lock. Retention remains 64 KiB, so
-exports can contain incomplete sessions. There are no app identifiers, audio,
+context at most every 15 seconds without a wake lock. While detailed consent is active, retention is bounded at 1 MiB, so
+exports can contain incomplete sessions. Basic logging retains its 64 KiB cap;
+the next basic write after detailed consent ends compacts a larger retained log. There are no app identifiers, audio,
 transcripts, editor text, dictionary terms, arbitrary model filenames, paths or
 exception messages. There is no automatic upload.
 
-The app and keyboard show an active indicator. The lease expires after one hour;
+The app and keyboard show an active indicator. The lease expires after the explicitly selected one-hour or 24-hour interval;
 malformed leases and times outside the consent interval fail closed. An observed
 expired or invalid interval is removed and cannot revive after a clock change. Disable it at any time,
 or disable basic logging to revoke both. Exports require explicit Save or Share.
@@ -71,7 +72,7 @@ final waiting falls. Planning equivalence tests are not acoustic-accuracy or bat
 evidence. With unresolved overlap, the existing stitcher preserves both hypotheses;
 it cannot promise perfect punctuation or no duplication for arbitrary speech.
 
-Recording appears as `state=recording`; an explicit native cancellation appears as `state=cancelled`. Neither is an error. Recognition-service failures use `error_code process=service,code=E_RECOGNIZER_<number>`, retaining Android's numeric error code without exception text. A timing record alone does not prove successful recognition: an empty result can still finish computation and then report a no-match error.
+Recording appears as `state=recording`; an explicit native cancellation appears as `state=cancelled`. Neither is an error. Recognition-service failures use `error_code process=service,code=E_RECOGNIZER_<number>`, retaining Android's numeric error code without exception text. Event timestamps are captured before asynchronous disk writes; concurrent process records can arrive out of timestamp order. `callback_delivery reason=delivered` means the Android result callback returned, not that an editor inserted the transcript; `reason=callback_failed` means the caller connection failed. Service session end reasons now distinguish callback return (`delivered`) from callback failure (`callback_failed`) instead of using decoded-text reason `text`. A timing record alone does not prove successful recognition: an empty result can still finish computation and then report a no-match error.
 
 Application/keyboard starts, recognition-service creation and enabling logging record `version_code`. Logs survive updates and may contain several builds; a startup marker does not identify older records preceding it. The bounded log can also retain a partial session after trimming. Include the app version and what you observed when sharing a report. Missing error records in an older build do not prove error-free use.
 

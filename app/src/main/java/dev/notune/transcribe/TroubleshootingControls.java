@@ -32,13 +32,16 @@ final class TroubleshootingControls {
         banner = activity.findViewById(R.id.troubleshooting_banner);
         toggle.setOnCheckedChangeListener((button, enabled) -> {
             if (binding) return;
-            if (!enabled) { setEnabled(false); return; }
+            if (!enabled) { setEnabled(false, DiagnosticLog.TROUBLESHOOTING_DURATION_MS); return; }
             refresh(); // A switch gesture is not warning consent.
             warning = new MaterialAlertDialogBuilder(activity)
                     .setTitle(R.string.troubleshooting_warning_title)
                     .setMessage(R.string.troubleshooting_warning)
                     .setNegativeButton(android.R.string.cancel, (dialog, which) -> refresh())
-                    .setPositiveButton(R.string.troubleshooting_enable, (dialog, which) -> setEnabled(true))
+                    .setPositiveButton(R.string.troubleshooting_enable,
+                            (dialog, which) -> setEnabled(true, DiagnosticLog.TROUBLESHOOTING_DURATION_MS))
+                    .setNeutralButton(R.string.troubleshooting_enable_day,
+                            (dialog, which) -> setEnabled(true, DiagnosticLog.TROUBLESHOOTING_DAY_MS))
                     .setOnCancelListener(dialog -> refresh())
                     .show();
         });
@@ -54,9 +57,9 @@ final class TroubleshootingControls {
         binding = false;
     }
 
-    private void setEnabled(boolean enabled) {
+    private void setEnabled(boolean enabled, long durationMs) {
         try {
-            DiagnosticLog.setTroubleshootingEnabled(activity.getFilesDir(), enabled);
+            DiagnosticLog.setTroubleshootingEnabled(activity.getFilesDir(), enabled, durationMs);
         } catch (IOException | RuntimeException failure) {
             Snackbar.make(banner, R.string.diagnostic_log_error, Snackbar.LENGTH_LONG).show();
         }

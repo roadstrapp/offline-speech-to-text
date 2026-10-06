@@ -270,8 +270,11 @@ public class VoiceRecognitionService extends RecognitionService {
             hypotheses.add(text);
             Bundle bundle = new Bundle();
             bundle.putStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION, hypotheses);
-            try { cb.results(bundle); } catch (RemoteException ignored) {}
-            finishTroubleshooting("text");
+            boolean delivered = false;
+            try { cb.results(bundle); delivered = true; } catch (RemoteException ignored) {}
+            String reason = delivered ? "delivered" : "callback_failed";
+            DiagnosticLog.event(getFilesDir(), "callback_delivery", "process=service,reason=" + reason);
+            finishTroubleshooting(reason);
             if (mCallback == cb) mCallback = null;
         });
     }

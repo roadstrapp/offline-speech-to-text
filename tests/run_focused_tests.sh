@@ -45,6 +45,7 @@ javac -d "$OUT" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/NativeStatus.java" \
   "$ROOT/tests/BehaviorTest.java" \
   "$ROOT/tests/TroubleshootingLeaseTest.java" \
+  "$ROOT/tests/DiagnosticRegressionTest.java" \
   "$ROOT/tests/ModelDownloadBoundaryTest.java" \
   "$ROOT/tests/ModelImportTaskTest.java" \
   "$ROOT/tests/CustomTermsStoreTest.java" \
@@ -52,6 +53,7 @@ javac -d "$OUT" \
   "$ROOT/tests/PendingTranscriptRecordTest.java"
 java -ea -cp "$OUT" dev.notune.transcribe.BehaviorTest
 java -ea -cp "$OUT" dev.notune.transcribe.TroubleshootingLeaseTest
+java -ea -cp "$OUT" dev.notune.transcribe.DiagnosticRegressionTest
 java -ea -cp "$OUT" dev.notune.transcribe.AutoStopDelayTest
 java -ea -cp "$OUT" dev.notune.transcribe.ModelDownloadBoundaryTest
 java -ea -cp "$OUT" dev.notune.transcribe.ModelImportTaskTest

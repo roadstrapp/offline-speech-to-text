@@ -45,6 +45,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         try {
             if (hadDelay) savedDelay = Files.readAllBytes(delayFile.toPath());
             check(savedDelay == null || savedDelay.length <= 16, "unexpected delay fixture");
+            testMainThreadFailureHandling();
             testDictionaryFiles();
             testDiagnosticEvidence();
             if (callerAudio) {
@@ -55,6 +56,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             Files.deleteIfExists(enabledFile.toPath());
             AutoStopDelay.set(directory, 2000);
             launchMain();
+            testMicLevelAnimation();
             if (preparedWindows) {
                 long[] evidence = PreparedWindowsDeviceTest.run(this, current);
                 result.putLong("equivalent_prepared_windows", evidence[1]);
@@ -63,7 +65,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
                 result.putLong("prepared_stop_decode_ms", evidence[4]);
             }
             testTroubleshootingControls(directory);
-            runOnMainSync(() -> {
+            runSafelyOnMainSync(() -> {
                 current.findViewById(R.id.btn_more_settings).performClick();
                 check(current.findViewById(R.id.auto_stop_delay_controls).getVisibility() == View.GONE,
                         "delay visible while disabled");
@@ -73,18 +75,18 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             });
             for (int position = 0; position < 3; position++) {
                 final int choice = position;
-                runOnMainSync(() -> ((Spinner) current.findViewById(R.id.spinner_auto_stop_delay))
+                runSafelyOnMainSync(() -> ((Spinner) current.findViewById(R.id.spinner_auto_stop_delay))
                         .setSelection(choice));
                 waitForIdleSync();
                 check(AutoStopDelay.get(directory) == AutoStopDelay.atPosition(choice),
                         "displayed choice not persisted");
             }
-            runOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_auto_stop))
+            runSafelyOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_auto_stop))
                     .setChecked(false));
             check(AutoStopDelay.get(directory) == 5000, "toggle erased choice");
             closeCurrent();
             launchMain();
-            runOnMainSync(() -> {
+            runSafelyOnMainSync(() -> {
                 current.findViewById(R.id.btn_more_settings).performClick();
                 check(((Spinner) current.findViewById(R.id.spinner_auto_stop_delay))
                         .getSelectedItemPosition() == 2, "activity restart lost choice");
@@ -99,7 +101,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             current = startActivitySync(popup);
             SystemClock.sleep(400);
-            runOnMainSync(() -> {
+            runSafelyOnMainSync(() -> {
                 check(current.findViewById(R.id.btn_close) != null, "popup did not launch");
                 current.findViewById(R.id.btn_close).performClick();
             });
@@ -139,6 +141,66 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             }
         }
         finish(code, result);
+    }
+
+    // Keep UI assertion failures on the test thread so onStart's finally can
+    // restore settings instead of Android terminating the instrumented process.
+    private void runSafelyOnMainSync(Runnable action) {
+        java.util.concurrent.atomic.AtomicReference<Throwable> failure =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        super.runOnMainSync(() -> {
+            try {
+                action.run();
+            } catch (Throwable error) {
+                failure.set(error);
+            }
+        });
+        if (failure.get() != null) throw new AssertionError("main-thread test action failed", failure.get());
+    }
+
+    private void testMainThreadFailureHandling() {
+        boolean restored = false;
+        boolean caught = false;
+        try {
+            try {
+                runSafelyOnMainSync(() -> { throw new AssertionError("injected UI assertion"); });
+            } finally {
+                restored = true;
+            }
+        } catch (AssertionError expected) {
+            caught = expected.getCause() instanceof AssertionError;
+        }
+        check(caught && restored, "UI failure escaped test-thread cleanup");
+    }
+
+    private void testMicLevelAnimation() throws Exception {
+        java.lang.reflect.Field animatorField = MicLevelView.class.getDeclaredField("animator");
+        java.lang.reflect.Field targetField = MicLevelView.class.getDeclaredField("target");
+        animatorField.setAccessible(true);
+        targetField.setAccessible(true);
+        runSafelyOnMainSync(() -> {
+            android.view.ViewGroup root = (android.view.ViewGroup) current.getWindow().getDecorView();
+            MicLevelView meter = new MicLevelView(current);
+            root.addView(meter, new android.view.ViewGroup.LayoutParams(32, 32));
+            try {
+                android.animation.ValueAnimator original =
+                        (android.animation.ValueAnimator) animatorField.get(meter);
+                for (int i = 0; i < 100; i++) meter.setLevel((i % 10) / 10f);
+                check(animatorField.get(meter) == original, "meter allocated repeated animators");
+                meter.setLevel(Float.NaN);
+                check(targetField.getFloat(meter) == 0f, "nonfinite meter target");
+                meter.setLevel(Float.POSITIVE_INFINITY);
+                check(targetField.getFloat(meter) == 1f, "meter upper clamp lost");
+                meter.setLevel(-1f);
+                check(targetField.getFloat(meter) == 0f, "meter lower clamp lost");
+                root.removeView(meter);
+                check(!original.isStarted(), "detached meter keeps animating");
+            } catch (IllegalAccessException failure) {
+                throw new AssertionError(failure);
+            } finally {
+                if (meter.getParent() == root) root.removeView(meter);
+            }
+        });
     }
 
     private void testDictionaryFiles() throws Exception {
@@ -232,28 +294,28 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         try {
             DiagnosticLog.setEnabled(directory, true);
             DiagnosticLog.setTroubleshootingEnabled(directory, false);
-            runOnMainSync(() -> {
+            runSafelyOnMainSync(() -> {
                 controls.refresh();
                 ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(true);
                 check(!DiagnosticLog.isTroubleshootingEnabled(directory), "switch bypassed consent warning");
             });
             androidx.appcompat.app.AlertDialog warning = (androidx.appcompat.app.AlertDialog) warningField.get(controls);
-            runOnMainSync(() -> warning.getButton(android.content.DialogInterface.BUTTON_NEGATIVE).performClick());
+            runSafelyOnMainSync(() -> warning.getButton(android.content.DialogInterface.BUTTON_NEGATIVE).performClick());
             // AlertController posts button callbacks to the main message queue.
             waitForIdleSync();
             check(!DiagnosticLog.isTroubleshootingEnabled(directory), "Cancel enabled detailed mode");
-            runOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(true));
+            runSafelyOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(true));
             androidx.appcompat.app.AlertDialog confirmation = (androidx.appcompat.app.AlertDialog) warningField.get(controls);
-            runOnMainSync(() -> confirmation.getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick());
+            runSafelyOnMainSync(() -> confirmation.getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick());
             // AlertController posts button callbacks to the main message queue.
             waitForIdleSync();
             check(DiagnosticLog.isTroubleshootingEnabled(directory), "explicit confirmation did not enable");
-            runOnMainSync(() -> check(current.findViewById(R.id.troubleshooting_banner).getVisibility() == View.VISIBLE,
+            runSafelyOnMainSync(() -> check(current.findViewById(R.id.troubleshooting_banner).getVisibility() == View.VISIBLE,
                     "active warning banner missing"));
             long now = System.currentTimeMillis();
             Files.write(lease.toPath(), java.nio.ByteBuffer.allocate(16)
                     .putLong(now - DiagnosticLog.TROUBLESHOOTING_DURATION_MS - 1).putLong(now - 1).array());
-            runOnMainSync(() -> {
+            runSafelyOnMainSync(() -> {
                 controls.refresh();
                 check(current.findViewById(R.id.troubleshooting_banner).getVisibility() == View.GONE,
                         "expired warning banner remained visible");
@@ -261,24 +323,35 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
                         "expired detailed mode remained checked");
             });
             check(!lease.exists(), "expired consent was not removed");
-            runOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(true));
+            runSafelyOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(true));
             check(!DiagnosticLog.isTroubleshootingEnabled(directory), "renewal bypassed consent warning");
             androidx.appcompat.app.AlertDialog renewal = (androidx.appcompat.app.AlertDialog) warningField.get(controls);
             check(renewal != confirmation, "renewal reused a dismissed warning");
-            runOnMainSync(() -> check(renewal != null && renewal.isShowing(), "renewal warning not shown"));
-            runOnMainSync(() -> renewal.getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick());
+            runSafelyOnMainSync(() -> check(renewal != null && renewal.isShowing(), "renewal warning not shown"));
+            runSafelyOnMainSync(() -> renewal.getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick());
             // AlertController posts button callbacks to the main message queue.
             waitForIdleSync();
             check(DiagnosticLog.isTroubleshootingEnabled(directory), "renewal did not enable detailed mode");
-            runOnMainSync(() -> check(current.findViewById(R.id.troubleshooting_banner).getVisibility() == View.VISIBLE,
+            runSafelyOnMainSync(() -> check(current.findViewById(R.id.troubleshooting_banner).getVisibility() == View.VISIBLE,
                     "renewal did not restore warning banner"));
-            runOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(false));
+            runSafelyOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(false));
             check(!DiagnosticLog.isTroubleshootingEnabled(directory), "toggle off did not revoke");
+            runSafelyOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(true));
+            check(!DiagnosticLog.isTroubleshootingEnabled(directory), "day choice bypassed consent warning");
+            androidx.appcompat.app.AlertDialog dayWarning = (androidx.appcompat.app.AlertDialog) warningField.get(controls);
+            runSafelyOnMainSync(() -> dayWarning.getButton(android.content.DialogInterface.BUTTON_NEUTRAL).performClick());
+            waitForIdleSync();
+            check(DiagnosticLog.isTroubleshootingEnabled(directory), "day confirmation did not enable");
+            java.nio.ByteBuffer dayLease = java.nio.ByteBuffer.wrap(Files.readAllBytes(lease.toPath()));
+            check(dayLease.getLong(8) - dayLease.getLong(0) == DiagnosticLog.TROUBLESHOOTING_DAY_MS,
+                    "day confirmation stored the wrong expiry");
+            runSafelyOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(false));
+            check(!DiagnosticLog.isTroubleshootingEnabled(directory), "day toggle off did not revoke");
         } finally {
             DiagnosticLog.setEnabled(directory, wasEnabled);
             if (savedLease != null) Files.write(lease.toPath(), savedLease);
             else Files.deleteIfExists(lease.toPath());
-            runOnMainSync(controls::refresh);
+            runSafelyOnMainSync(controls::refresh);
         }
     }
 
@@ -322,7 +395,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
 
     private void closeCurrent() {
         if (current == null) return;
-        runOnMainSync(() -> current.finish());
+        runSafelyOnMainSync(() -> current.finish());
         waitForIdleSync();
         current = null;
     }

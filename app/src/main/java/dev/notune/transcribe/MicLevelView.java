@@ -33,6 +33,12 @@ public class MicLevelView extends View {
         baseColor = MaterialColors.getColor(this,
                 com.google.android.material.R.attr.colorPrimary, Color.WHITE);
         paint.setColor(baseColor);
+        animator = ValueAnimator.ofFloat(0f, 0f);
+        animator.setDuration(60);
+        animator.addUpdateListener(a -> {
+            current = (float) a.getAnimatedValue();
+            invalidate();
+        });
     }
 
     private float dp(float v) {
@@ -48,18 +54,20 @@ public class MicLevelView extends View {
 
     /** level: 0..1 */
     public void setLevel(float level) {
+        if (Float.isNaN(level)) level = 0f;
         if (level < 0f) level = 0f;
         if (level > 1f) level = 1f;
         target = level;
 
-        if (animator != null) animator.cancel();
-        animator = ValueAnimator.ofFloat(current, target);
-        animator.setDuration(60); // fast, makes it feel "live"
-        animator.addUpdateListener(a -> {
-            current = (float) a.getAnimatedValue();
-            invalidate();
-        });
+        animator.cancel();
+        animator.setFloatValues(current, target);
         animator.start();
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        animator.cancel();
+        super.onDetachedFromWindow();
     }
 
     @Override

@@ -21,8 +21,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         gradle_properties = (ROOT / "gradle.properties").read_text()
         workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
         self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
-        self.assertIn("versionCode = 49", gradle)
-        self.assertIn('versionName = "0.13.1"', gradle)
+        self.assertIn("versionCode = 50", gradle)
+        self.assertIn('versionName = "0.14.0"', gradle)
         self.assertIn('providers.gradleProperty("includeBundledModel")', gradle)
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: false', gradle)
         self.assertIn('ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,', gradle)
@@ -670,7 +670,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         strings = ET.parse(ROOT / "app/src/main/res/values/strings.xml").getroot()
         values = {item.attrib["name"]: "".join(item.itertext()) for item in strings.findall("string")}
         description = values["setting_diagnostic_logging_desc"].lower()
-        for phrase in ("off by default", "never includes audio", "recognized text", "64 kb"):
+        for phrase in ("off by default", "never includes audio", "recognized text", "64 kib", "1 mib"):
             self.assertIn(phrase, description)
         self.assertIn("deletes", values["diagnostic_log_clear_desc"].lower())
         self.assertIn("content-free", values["diagnostic_log_export_desc"].lower())
@@ -693,8 +693,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn('path="diagnostics/"', provider_paths)
         self.assertNotIn("files-path", provider_paths)
         diagnostic = (ROOT / "app/src/main/java/dev/notune/transcribe/DiagnosticLog.java").read_text()
-        self.assertIn("COMPACT_TO_BYTES = 48L * 1024L", diagnostic)
-        self.assertIn("existingSize + line.length <= MAX_BYTES", diagnostic)
+        self.assertIn("existingSize + line.length <= maxBytes", diagnostic)
         self.assertIn("channel.position(existingSize)", diagnostic)
         for metric in ("audio_ms", "paused_ms", "cpu_threads"):
             self.assertIn('case "' + metric + '":', diagnostic)
