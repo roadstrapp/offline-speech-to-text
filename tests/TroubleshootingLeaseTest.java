@@ -70,7 +70,12 @@ public final class TroubleshootingLeaseTest {
         Files.write(lease, ByteBuffer.allocate(16).putLong(start).putLong(end).array());
         assert !DiagnosticLog.isTroubleshootingEnabled(dir);
         assert !Files.exists(lease) : "Expired consent must not revive after a clock change";
-        DiagnosticLog.setTroubleshootingEnabled(dir, true);
+        DiagnosticLog.setTroubleshootingEnabled(dir, true, DiagnosticLog.TROUBLESHOOTING_FOREVER_MS);
+        assert DiagnosticLog.isTroubleshootingEnabled(dir);
+        assert ByteBuffer.wrap(Files.readAllBytes(lease)).getLong(8) == Long.MAX_VALUE;
+        DiagnosticLog.setTroubleshootingEnabled(dir, false);
+        assert !DiagnosticLog.isTroubleshootingEnabled(dir);
+        DiagnosticLog.setTroubleshootingEnabled(dir, true, DiagnosticLog.TROUBLESHOOTING_FOREVER_MS);
         DiagnosticLog.setEnabled(dir, false);
         assert !Files.exists(lease);
         DiagnosticLog.setEnabled(dir, true);

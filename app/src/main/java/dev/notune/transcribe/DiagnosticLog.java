@@ -107,6 +107,9 @@ public final class DiagnosticLog {
         });
     }
 
+    /** Explicit indefinite consent, stored as a maximum expiry in the existing marker format. */
+    public static final long TROUBLESHOOTING_FOREVER_MS = -1L;
+
     /** Separate opt-in lease; malformed, expired or clock-reversed values fail closed. */
     public static boolean isTroubleshootingEnabled(File filesDir) {
         if (!isEnabled(filesDir)) return false;
@@ -138,12 +141,14 @@ public final class DiagnosticLog {
     }
 
     static boolean validTroubleshootingLease(long started, long expires, long now) {
-        return started > 0 && expires > started && validTroubleshootingDuration(expires - started)
-                && now >= started && now < expires;
+        return started > 0 && now >= started
+                && (expires == Long.MAX_VALUE || (expires > started
+                && validTroubleshootingDuration(expires - started) && now < expires));
     }
 
     private static boolean validTroubleshootingDuration(long durationMs) {
-        return durationMs == TROUBLESHOOTING_DURATION_MS || durationMs == TROUBLESHOOTING_DAY_MS;
+        return durationMs == TROUBLESHOOTING_DURATION_MS || durationMs == TROUBLESHOOTING_DAY_MS
+                || durationMs == TROUBLESHOOTING_FOREVER_MS;
     }
 
     public static void setTroubleshootingEnabled(File filesDir, boolean enabled) throws IOException {
@@ -152,7 +157,7 @@ public final class DiagnosticLog {
 
     public static void setTroubleshootingEnabled(File filesDir, boolean enabled, long durationMs) throws IOException {
         if (enabled && !validTroubleshootingDuration(durationMs)) {
-            throw new IllegalArgumentException("Choose one hour or 24 hours");
+            throw new IllegalArgumentException("Choose one hour, 24 hours or forever");
         }
         filesDir.mkdirs();
         withLock(filesDir, () -> {
@@ -162,7 +167,7 @@ public final class DiagnosticLog {
             long now = System.currentTimeMillis();
             File temporary = new File(filesDir, ENHANCED_FILE + ".tmp");
             Files.write(temporary.toPath(), ByteBuffer.allocate(16).putLong(now)
-                    .putLong(now + durationMs).array());
+                    .putLong(durationMs == TROUBLESHOOTING_FOREVER_MS ? Long.MAX_VALUE : now + durationMs).array());
             replaceMarker(temporary, target);
         });
     }

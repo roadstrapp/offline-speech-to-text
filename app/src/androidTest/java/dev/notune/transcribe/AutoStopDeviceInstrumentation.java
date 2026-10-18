@@ -328,6 +328,19 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         }
     }
 
+    private void chooseTroubleshootingOption(android.app.Dialog dialog, int choice) {
+        android.widget.ListView list = dialog.findViewById(current.getResources().getIdentifier(
+                "select_dialog_listview", "id", current.getPackageName()));
+        check(list != null && list.getHeaderViewsCount() == 1, "warning header missing");
+        int[] ids = {R.string.troubleshooting_enable, R.string.troubleshooting_enable_day,
+                R.string.troubleshooting_enable_forever, android.R.string.cancel};
+        for (int index = 0; index < ids.length; index++) {
+            check(current.getString(ids[index]).contentEquals((CharSequence) list.getAdapter().getItem(index + 1)),
+                    "troubleshooting choices are not in the requested order");
+        }
+        list.performItemClick(null, choice + 1, list.getAdapter().getItemId(choice + 1));
+    }
+
     private void testTroubleshootingControls(File directory) throws Exception {
         File lease = new File(directory, "diagnostic_troubleshooting");
         boolean wasEnabled = DiagnosticLog.isEnabled(directory);
@@ -347,13 +360,13 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
                 check(!DiagnosticLog.isTroubleshootingEnabled(directory), "switch bypassed consent warning");
             });
             android.app.Dialog warning = (android.app.Dialog) warningField.get(controls);
-            runSafelyOnMainSync(() -> warning.findViewById(android.R.id.button2).performClick());
+            runSafelyOnMainSync(() -> chooseTroubleshootingOption(warning, 3));
             // AlertController posts button callbacks to the main message queue.
             waitForIdleSync();
             check(!DiagnosticLog.isTroubleshootingEnabled(directory), "Cancel enabled detailed mode");
             runSafelyOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(true));
             android.app.Dialog confirmation = (android.app.Dialog) warningField.get(controls);
-            runSafelyOnMainSync(() -> confirmation.findViewById(android.R.id.button1).performClick());
+            runSafelyOnMainSync(() -> chooseTroubleshootingOption(confirmation, 0));
             // AlertController posts button callbacks to the main message queue.
             waitForIdleSync();
             check(DiagnosticLog.isTroubleshootingEnabled(directory), "explicit confirmation did not enable");
@@ -375,7 +388,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             android.app.Dialog renewal = (android.app.Dialog) warningField.get(controls);
             check(renewal != confirmation, "renewal reused a dismissed warning");
             runSafelyOnMainSync(() -> check(renewal != null && renewal.isShowing(), "renewal warning not shown"));
-            runSafelyOnMainSync(() -> renewal.findViewById(android.R.id.button1).performClick());
+            runSafelyOnMainSync(() -> chooseTroubleshootingOption(renewal, 0));
             // AlertController posts button callbacks to the main message queue.
             waitForIdleSync();
             check(DiagnosticLog.isTroubleshootingEnabled(directory), "renewal did not enable detailed mode");
@@ -386,7 +399,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             runSafelyOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(true));
             check(!DiagnosticLog.isTroubleshootingEnabled(directory), "day choice bypassed consent warning");
             android.app.Dialog dayWarning = (android.app.Dialog) warningField.get(controls);
-            runSafelyOnMainSync(() -> dayWarning.findViewById(android.R.id.button3).performClick());
+            runSafelyOnMainSync(() -> chooseTroubleshootingOption(dayWarning, 1));
             waitForIdleSync();
             check(DiagnosticLog.isTroubleshootingEnabled(directory), "day confirmation did not enable");
             java.nio.ByteBuffer dayLease = java.nio.ByteBuffer.wrap(Files.readAllBytes(lease.toPath()));
@@ -394,6 +407,16 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
                     "day confirmation stored the wrong expiry");
             runSafelyOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(false));
             check(!DiagnosticLog.isTroubleshootingEnabled(directory), "day toggle off did not revoke");
+            runSafelyOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(true));
+            android.app.Dialog foreverWarning = (android.app.Dialog) warningField.get(controls);
+            runSafelyOnMainSync(() -> chooseTroubleshootingOption(foreverWarning, 2));
+            waitForIdleSync();
+            check(DiagnosticLog.isTroubleshootingEnabled(directory), "forever confirmation did not enable");
+            check(java.nio.ByteBuffer.wrap(Files.readAllBytes(lease.toPath())).getLong(8) == Long.MAX_VALUE,
+                    "forever confirmation did not persist indefinite expiry");
+            runSafelyOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(false));
+            check(!DiagnosticLog.isTroubleshootingEnabled(directory), "forever toggle off did not revoke");
+
         } finally {
             DiagnosticLog.setEnabled(directory, wasEnabled);
             if (savedLease != null) Files.write(lease.toPath(), savedLease);

@@ -42,7 +42,7 @@ Apps can use OSTT through standard Android APIs. `ACTION_RECOGNIZE_SPEECH` opens
 
 The app makes no network request on launch. A network connection opens only after the user confirms a model download. Speech recognition and dictionary processing run on the device. Models remain in app-private storage across ordinary updates.
 
-Diagnostics are disabled by default. They contain fixed numeric timing and resource metadata, excluding audio and transcript content. Detailed collection expires after the selected consent interval. Log export requires an explicit Save or Share action. Experimental long-dictation preparation is separately opt-in and disabled by default; its latency and battery effects depend on the phone and model.
+Diagnostics are disabled by default. They contain fixed numeric timing and resource metadata, excluding audio and transcript content. Detailed collection offers 1 hour, 24 hours or continuous collection until manually disabled. Log export requires an explicit Save or Share action. Experimental long-dictation preparation is separately opt-in and disabled by default; its latency and battery effects depend on the phone and model.
 
 ## Build and contribute
 

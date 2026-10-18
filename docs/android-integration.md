@@ -1,6 +1,6 @@
 # Android integration
 
-Offline Speech to Text exposes four Android contracts. Choose the contract before recording; they are not interchangeable.
+Offline Speech to Text exposes four Android contracts. Choose the contract before recording; each has a separate owner and lifecycle.
 
 ## Choose a surface
 
@@ -11,16 +11,16 @@ Offline Speech to Text exposes four Android contracts. Choose the contract befor
 | `SpeechRecognizer` with `RecognizerIntent.EXTRA_AUDIO_SOURCE` | Calling app | Calling app | `RecognitionListener` callbacks |
 | Voice IME | Offline Speech to Text keyboard | Offline Speech to Text | Text committed through Android's input-method contract |
 
-Use the provider activity when compatibility matters more than a custom interface. Use `SpeechRecognizer` only after resolving a service that is eligible on the current device. Use caller-supplied audio for app-owned controls on Android 13+ only after establishing that the exact provider build consumes it. A keyboard cannot remotely drive the Offline Speech to Text IME: Android enables and selects IMEs through user-mediated system UI.
+Use the provider activity when compatibility matters more than a custom interface. Use `SpeechRecognizer` only after resolving a service that is eligible on the current device. Use caller-supplied audio for app-owned controls on Android 13+ only after establishing that the exact provider build consumes it. Android enables and selects the Offline Speech to Text IME through user-mediated system UI.
 
 All `SpeechRecognizer` construction and control calls must run on the main thread.
 
 The experimental **Prepare long dictation while recording** setting affects only
-OSTT's own voice keyboard, not caller audio, the popup or long recording. It prepares
-existing overlapping windows without publishing partial results or splitting on an
-ordinary pause. Detailed troubleshooting is a separate, warned one-hour local opt-in;
-see [Power and performance diagnostics](power-diagnostics.md). It changes neither
-provider eligibility nor the caller's ownership and retry obligations.
+OSTT's own voice keyboard. It prepares
+existing overlapping windows while keeping results private and retaining continuous
+speech across ordinary pauses. Detailed troubleshooting is a separate, warned local opt-in for one hour, 24 hours or until manually disabled;
+see [Power and performance diagnostics](power-diagnostics.md). It preserves
+provider eligibility and the caller's ownership and retry obligations.
 
 ## Provider-owned recognition UI
 
@@ -51,11 +51,11 @@ fun openVoicePanel() {
 }
 ```
 
-The resolved provider activity owns permission prompts, recording, stopping, and cancellation. Your activity must still treat a missing handler, a cancelled result, and an empty result as normal outcomes. It cannot synchronously stop another app's provider activity, so retain one stable request owner until the result returns.
+The resolved provider activity owns permission prompts, recording, stopping, and cancellation. Treat a missing handler as an ordinary outcome. Cancelled or empty results are also ordinary outcomes. Stopping another app's provider activity requires its own controls; retain one stable request owner until the result returns.
 
 ## App UI with provider microphone capture
 
-Discover recognition services rather than hard-coding a class name. Android 11+ callers that query services need package visibility:
+Discover recognition services dynamically. Android 11+ callers that query services need package visibility:
 
 ```xml
 <queries>
@@ -79,7 +79,7 @@ recognizer.startListening(
 )
 ```
 
-Grant `RECORD_AUDIO` to the component that opens the microphone. Android may prevent an unselected, non-preinstalled recognition service from inheriting the caller's while-in-use microphone capability; that commonly ends as `SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS`. Do not retry in a loop. Either use verified caller-supplied audio or fall back to the provider activity before recording.
+Grant `RECORD_AUDIO` to the component that opens the microphone. Android may prevent an unselected, non-preinstalled recognition service from inheriting the caller's while-in-use microphone capability; that commonly ends as `SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS`. Choose a supported capture path before retrying. Either use verified caller-supplied audio or fall back to the provider activity before recording.
 
 ## Custom UI with caller-supplied audio
 
@@ -90,25 +90,25 @@ Grant `RECORD_AUDIO` to the component that opens the microphone. Android may pre
 - signed PCM 16-bit little-endian samples
 - an unsegmented session, so the final transcript arrives through `onResults`
 
-The caller owns the microphone and endpoint. Closing the pipe or calling `stopListening()` ends the utterance; pauses in supplied audio do not trigger the provider's microphone-mode trailing-silence endpoint. Android 12+ attribution remains caller-owned: Offline Speech to Text creates a caller-attributed context from `RecognitionService.Callback.getCallingAttributionSource()` before consuming the descriptor.
+The caller owns the microphone and endpoint. Closing the pipe or calling `stopListening()` ends the utterance; supplied audio uses caller-owned endpointing. Android 12+ attribution remains caller-owned: Offline Speech to Text creates a caller-attributed context from `RecognitionService.Callback.getCallingAttributionSource()` before consuming the descriptor.
 
 ### Preflight and fallback
 
-There is no platform capability flag for caller audio. Before the first real capture:
+Establish caller-audio support through a runtime check before the first real capture:
 
 1. Resolve and pin one eligible provider component.
 2. Require API 33+ and the caller's microphone permission/AppOps access.
 3. Cache capability by provider component and installed version, never by package alone.
-4. For an unknown build, run a bounded probe with `EXTRA_AUDIO_SOURCE` pointing to a pipe whose write end is already closed. The probe opens no microphone.
-5. Treat a final result, `ERROR_NO_MATCH`, or `ERROR_SPEECH_TIMEOUT` as evidence that the provider read the descriptor. `ERROR_INSUFFICIENT_PERMISSIONS` or `ERROR_CLIENT` means this route is unsupported. Other errors and timeout are inconclusive.
+4. For an unknown build, run a bounded probe with `EXTRA_AUDIO_SOURCE` pointing to a pipe whose write end is already closed. The probe uses an empty descriptor with the microphone closed.
+5. Treat a final result, `ERROR_NO_MATCH`, or `ERROR_SPEECH_TIMEOUT` as evidence that the provider read the descriptor. `ERROR_INSUFFICIENT_PERMISSIONS` or `ERROR_CLIENT` means this route is unsupported; other errors and timeout leave support unknown.
 6. Re-resolve the provider after the probe. Discard the answer if the component or version changed.
-7. Choose caller audio or provider activity before starting `AudioRecord`. Never open the microphone and then launch the fallback activity.
+7. Choose caller audio or provider activity before starting `AudioRecord`. Keep the microphone closed until this decision is complete.
 
-Offline Speech to Text currently reports ready, beginning-of-speech, RMS, end-of-speech, final-result, and error callbacks. It does not emit partial-result callbacks. Set `EXTRA_PARTIAL_RESULTS` to `false` and design the UI around a final transcript.
+Offline Speech to Text currently reports ready, beginning-of-speech, RMS, end-of-speech, final-result, and error callbacks. Results arrive through the final-result callback. Set `EXTRA_PARTIAL_RESULTS` to `false` and design the UI around a final transcript.
 
-Offline Speech to Text snapshots the private preferred-word list once per transcription. Capable Whisper backends receive a bounded prompt; every model also restores exact preferred words and phrases, including hyphenated and apostrophe-joined names with identical punctuation, applies conservative close-spelling cleanup to single words, and recognizes a few narrowly defined spoken identifier forms after decoding. For known-English output, a standalone “uh” filler is removed before dictionary processing; unknown or non-English output is unchanged. The multilingual Parakeet v3 model does not reliably report a detected language in Auto mode, so users should select English in OSTT's model-language setting to enable this cleanup. If the user enables advanced exact correction pairs, they then run on the final assembled transcript so an explicit rule wins over a preferred match or close-spelling guess. Every activity, recognition-service, file, subtitle, long-recording, and IME result receives the same final processing. Whisper hints and cleanup derive from one immutable word-list read per complete job. Exact replacements stay protected when preferred cleanup runs; each pass also checks the whole match against quotes, code, URLs, email addresses, and dotted identifiers. Integrators do not need a separate pass. This is not native Parakeet phrase boosting or general phonetic matching, and dictionary contents are never exposed to callers or diagnostic logs.
+Offline Speech to Text snapshots the private preferred-word list once per transcription. Capable Whisper backends receive a bounded prompt; every model also restores exact preferred words and phrases, including hyphenated and apostrophe-joined names with identical punctuation, applies conservative close-spelling cleanup to single words, and recognizes a few narrowly defined spoken identifier forms after decoding. For known-English output, a standalone “uh” filler is removed before dictionary processing; unknown or non-English output is unchanged. The multilingual Parakeet v3 model does not reliably report a detected language in Auto mode, so users should select English in OSTT's model-language setting to enable this cleanup. If the user enables advanced exact correction pairs, they then run on the final assembled transcript so an explicit rule wins over a preferred match or close-spelling guess. Every activity, recognition-service, file, subtitle, long-recording, and IME result receives the same final processing. Whisper hints and cleanup derive from one immutable word-list read per complete job. Exact replacements stay protected when preferred cleanup runs; each pass also checks the whole match against quotes, code, URLs, email addresses, and dotted identifiers. OSTT supplies the complete cleanup pass for integrators. This is not native Parakeet phrase boosting or general phonetic matching, and dictionary contents are never exposed to callers or diagnostic logs.
 
-Long caller-audio sessions remain one ordinary recognition request. OSTT keeps the supplied PCM as one continuous utterance and calls the standard final `onResults` only after the writer closes or the caller stops listening. Ordinary dictations use one model run. Whisper owns its native long-input windows; very long input to other offline families is bounded with overlapping quiet-point windows and text-overlap reconciliation inside OSTT. An ordinary hesitation is never used as an app-level endpoint. Do not enable `EXTRA_SEGMENTED_SESSION` or concatenate partial callbacks. `cancel()` discards the captured utterance.
+Long caller-audio sessions remain one ordinary recognition request. OSTT keeps the supplied PCM as one continuous utterance and calls the standard final `onResults` only after the writer closes or the caller stops listening. Ordinary dictations use one model run. Whisper owns its native long-input windows; long input to other offline families is bounded with overlapping quiet-point windows and text-overlap reconciliation inside OSTT. An ordinary hesitation is never used as an app-level endpoint. Do not enable `EXTRA_SEGMENTED_SESSION` or concatenate partial callbacks. `cancel()` discards the captured utterance.
 
 ### Caller-audio completion and errors
 
@@ -116,7 +116,7 @@ Closing the writer after its final PCM frame is the clearest completion signal. 
 0.12.2+, `stopListening()` also drains PCM already readable by the service before
 finalizing. An unclosed idle writer does not hold Stop open. Total drain time after Stop
 is bounded to 500 ms; exceeding that limit returns `ERROR_AUDIO`. Cancellation discards the request. Descriptor read/poll errors and incomplete
-PCM frames return `ERROR_AUDIO`, rather than successful text from a truncated recording.
+PCM frames return `ERROR_AUDIO` and discard the truncated recording.
 Finish writing each whole PCM frame before requesting Stop (one frame is
 `channel_count × bytes_per_sample` bytes). Stop does not wait for a future writer to
 complete a partial frame; that request returns `ERROR_AUDIO`. Close the writer
@@ -124,7 +124,7 @@ only after its final complete frame when using EOF instead.
 
 `ERROR_NO_MATCH` means no recognized text, not proof that the supplied audio was silent.
 OSTT never turns an empty decode into a successful empty result. Clients should preserve
-previously recognized chunks, bound retries, and let the user choose what to do with an
+previously recognized chunks and bound retries. Let the user choose what to do with an
 unrecognized remainder. Opt-in content-free diagnostics distinguish insufficient audio,
 empty decoding, input failure and recognized text using fixed outcome labels and audio
 duration; they never include audio or transcript content.
@@ -375,7 +375,7 @@ class CallerAudioSpeechSession(
 }
 ```
 
-`start()` either starts the complete pipe/recorder/recognizer session or discards every resource it opened before rethrowing. The terminal paths share an idempotent `releaseCapture()`: Stop closes audio and requests one final result, while Cancel, Error, Destroy, and capture failure close audio and invalidate the result. The atomic state transitions make a worker-thread failure win before its callback is queued, and make queued Stop, Error, and Result work a no-op after another terminal path wins.
+`start()` either starts the complete pipe/recorder/recognizer session or discards every resource it opened before rethrowing. Terminal paths share an idempotent `releaseCapture()`: Stop closes audio and requests one final result, while Cancel, Error, Destroy, and capture failure close audio and invalidate the result. Atomic state transitions make a worker-thread failure win before its callback is queued, and make queued Stop, Error, and Result work a no-op after another terminal path wins.
 
 The platform-neutral [caller-audio lifecycle core](examples/CallerAudioSessionCore.java) isolates that state machine behind fakeable recorder, descriptor, recognizer, and main-queue interfaces. `tests/CallerAudioLifecycleTest.java` executes synchronous start failure, asynchronous read/write failure, Stop, Cancel, Results, Error, Destroy, and queued-callback races; keep it aligned when adapting the Android wrapper.
 
@@ -392,12 +392,12 @@ Treat one recognition attempt as one generation with one immutable destination s
 - `onResults`: accept only the first nonblank final result after exact-origin validation.
 - `onError`: release capture and present a recoverable, content-free error.
 - `stopListening`: close caller audio and request a final result.
-- `cancel`: close caller audio, discard the generation, and ignore late callbacks.
+- `cancel`: close caller audio and discard the generation; ignore late callbacks.
 - `destroy`: call on the main thread when the owning lifecycle ends.
 
 Before inserting text, revalidate every origin dimension that matters: session generation, account, conversation or document, editor identity, draft revision, and whether the field has become sensitive. Atomically stage each non-cancelled final result in app-private no-backup storage before attempting delivery. Clear it only after the destination confirms insertion or the user explicitly copies or deletes it. A result for a stale origin must be presented in an explicit recovery UI; it must never be inserted into whichever field happens to be active or silently discarded. Keep result content out of logs, notifications, Intent extras, saved-instance state, and analytics.
 
-If capture can continue after the activity is no longer visible, the caller—not the recognition provider—must run a microphone-typed foreground service. Declare `android:foregroundServiceType="microphone"`, `FOREGROUND_SERVICE`, and on Android 14+ `FOREGROUND_SERVICE_MICROPHONE`; start it while the app still has while-in-use microphone eligibility, show an honest ongoing notification, and stop it as soon as capture closes. Handle notification permission and start restrictions explicitly. Never hide active capture or continue it after process/lifecycle recovery without fresh user intent.
+If capture can continue after the activity is no longer visible, the caller—not the recognition provider—must run a microphone-typed foreground service. Declare `android:foregroundServiceType="microphone"` and `FOREGROUND_SERVICE`; Android 14+ also requires `FOREGROUND_SERVICE_MICROPHONE`. Start it while the app still has while-in-use microphone eligibility. Show an honest ongoing notification throughout capture, then stop the service as soon as capture closes. Handle notification permission and start restrictions explicitly. Never hide active capture or continue it after process/lifecycle recovery without fresh user intent.
 
 ## Long recording lifecycle
 
@@ -407,20 +407,20 @@ The private foreground notification is the control surface:
 
 - **Preparing recording** / **Microphone off • cancel to stop setup** exposes only **Cancel start**.
 - **Recording speech** / **Microphone on • tap an action to finish** exposes **Stop and discard** and **Stop and transcribe**.
-- **Transcribing — microphone off** exposes only **Discard** and reads **Processing on device**. Audio focus is abandoned before inference starts.
+- `Transcribing — microphone off` exposes only **Discard** and reads **Processing on device**. Audio focus is abandoned before inference starts.
 
-A successful transcript opens a private review surface. It does not automatically insert text into the current or former editor and does not expose the transcript outside process memory until you press **Share and clear result**. **Delete result**, the notification's Delete action, or expiry discards it. A pending result remains only in process memory for up to ten minutes; it does not survive process death, force-stop, reboot, or TTL expiry. Starting another recording while a result is pending opens that result instead of replacing it.
+A successful transcript opens a private review surface. The review surface holds the transcript in process memory, with insertion into editors disabled. Exposure outside that memory requires **Share and clear result**. **Delete result** and the notification's Delete action both discard it. Expiry also discards it. A pending result remains only in process memory for up to ten minutes; it does not survive process death, force-stop, reboot, or TTL expiry. Starting another recording while a result is pending opens the retained result.
 
-Android shows its normal microphone privacy indicator during capture. Microphone privacy, capture errors, audio focus loss, denied permissions, a missing notification, or a platform foreground-service timeout fail closed: capture stops, buffered audio is discarded, and no result is published. Removing the app from Recents does not stop an independently visible recording; Android Task Manager stop, force-stop, and process or device lifecycle recovery do stop it and never restart capture without a fresh visible activity and second user gesture.
+Android shows its normal microphone privacy indicator during capture. Microphone privacy, capture errors, audio focus loss, denied permissions, a missing notification, or a platform foreground-service timeout fail closed: capture stops and buffered audio is discarded; result publication is suppressed. Removing the app from Recents does not stop an independently visible recording; Android Task Manager stop, force-stop, and process or device lifecycle recovery do stop it and never restart capture without a fresh visible activity and second user gesture.
 
 ## Voice IME contract
 
-Offline Speech to Text also declares an `InputMethodService` with a voice subtype. Users enable it in Android keyboard settings and select it with the system keyboard switcher. HeliBoard and several other keyboards route their microphone button to the configured voice IME rather than to `ACTION_RECOGNIZE_SPEECH`.
+Offline Speech to Text also declares an `InputMethodService` with a voice subtype. Users enable it in Android keyboard settings and select it with the system keyboard switcher. HeliBoard and several other keyboards route their microphone button directly to the configured voice IME.
 
-The IME uses the current focused, non-sensitive `InputConnection` for final delivery because Compose and other reactive toolkits may recreate their editor lifecycle while keeping the same visible composer. If Android is between connections, OSTT retries briefly instead of treating that recreation as a destination change. Every non-cancelled final transcript is first written atomically to one checksummed, app-private, no-backup recovery slot. Confirmed `commitText` clears it; if no writable safe composer becomes available or insertion is rejected, the keyboard exposes copy/keep/delete recovery without launching an OSTT screen over the current app. New IME recordings are blocked until that result is recovered, so it cannot be overwritten. Explicit **Cancel** remains the only path that intentionally discards the current recording.
+The IME uses the current focused, non-sensitive `InputConnection` for final delivery because Compose and other reactive toolkits may recreate their editor lifecycle while keeping the same visible composer. If Android is between connections, OSTT briefly retries connection acquisition while preserving the destination. Every non-cancelled final transcript is first written atomically to one checksummed, app-private, no-backup recovery slot. Confirmed `commitText` clears it; if a writable safe composer remains unavailable or insertion is rejected, the keyboard exposes copy/keep/delete recovery within the keyboard. New IME recordings are blocked until that result is recovered, to preserve the pending result. Explicit **Cancel** remains the only path that intentionally discards the current recording.
 
-An app cannot silently enable, select, start, or stop another app's IME through public Android APIs. If your product needs controls inside its own UI, use one of the three recognition contracts above. If a keyboard switch is acceptable, direct the user to Android's standard input-method settings or picker.
+Public Android APIs require user-mediated selection and activation of another app's IME. If your product needs controls inside its own UI, use one of the three recognition contracts above. If a keyboard switch is acceptable, direct the user to Android's standard input-method settings or picker.
 
 ## Optional interactive auto-stop
 
-The voice keyboard and provider-owned popup share **Stop after silence**, off by default. When enabled, **Pause before stopping** offers two seconds (default), three seconds, or five seconds. Longer choices allow hesitation but delay the final result. The preference is snapshotted at the start of each recording; pause/resume and microphone-unblock handling retain their existing timing rules. The eight-second no-speech timeout and ten-minute interactive safety cap are independent of this choice. Custom callers supplying audio continue to control termination with their pipe, `stopListening()`, or `cancel()`; their audio is never ended by this preference.
+The voice keyboard and provider-owned popup share **Stop after silence**, off by default. When enabled, **Pause before stopping** offers two seconds (default), three seconds, or five seconds. Longer choices allow hesitation but delay the final result. The preference is snapshotted at the start of each recording; pause/resume and microphone-unblock handling retain their existing timing rules. The eight-second initial-silence timeout and ten-minute interactive safety cap are independent of this choice. Custom callers retain control over termination: close the pipe or call `stopListening()` to finish, and use `cancel()` to discard. Their audio is never ended by this preference.
