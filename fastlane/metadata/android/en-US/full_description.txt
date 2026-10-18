@@ -8,4 +8,6 @@ Add names and specialist terms to your dictionary, save personal corrections and
 
 The app download does not bundle a speech model. Setup offers verified model downloads with recommendations based on your language, storage and phone. Choose a model and tap Download and install. Downloaded models remain in private app storage through ordinary updates. Compatible transcribe.cpp GGUF models can also be imported from local storage.
 
-Optional troubleshooting logs are off by default and have a time limit. The app is free and open source under the MIT License, with a native Android interface, a Rust core and the transcribe.cpp speech engine.
+The app is free and open source under the MIT License, with a native Android interface, a Rust core and the transcribe.cpp speech engine.
+
+Detailed troubleshooting is off by default. Enable it for one hour, 24 hours or until manually disabled. Logs stay private and bounded; exporting them requires your action.

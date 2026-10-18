@@ -34,34 +34,38 @@ final class TroubleshootingControls {
             if (binding) return;
             if (!enabled) { setEnabled(false, DiagnosticLog.TROUBLESHOOTING_DURATION_MS); return; }
             refresh(); // A switch gesture is not warning consent.
-            // A vertical list keeps all four choices in the same reading order on every layout.
-            CharSequence[] choices = {
-                    activity.getString(R.string.troubleshooting_enable),
-                    activity.getString(R.string.troubleshooting_enable_day),
-                    activity.getString(R.string.troubleshooting_enable_forever),
-                    activity.getString(android.R.string.cancel)
-            };
-            warning = new MaterialAlertDialogBuilder(activity)
-                    .setTitle(R.string.troubleshooting_warning_title)
-                    .setItems(choices, (dialog, which) -> {
-                        int choice = which - 1; // The non-selectable warning header occupies position zero.
-                        if (choice < 0 || choice >= 3) { refresh(); return; }
-                        long[] durations = {DiagnosticLog.TROUBLESHOOTING_DURATION_MS,
-                                DiagnosticLog.TROUBLESHOOTING_DAY_MS,
-                                DiagnosticLog.TROUBLESHOOTING_FOREVER_MS};
-                        setEnabled(true, durations[choice]);
-                    })
-                    .setOnCancelListener(dialog -> refresh())
-                    .create();
-            // Use a separate header so the warning and the ordered list are both visible.
-            android.widget.TextView explanation = new android.widget.TextView(activity);
-            explanation.setText(R.string.troubleshooting_warning);
-            int padding = Math.round(24 * activity.getResources().getDisplayMetrics().density);
-            explanation.setPadding(padding, padding / 2, padding, padding / 2);
-            warning.show();
-            warning.getListView().addHeaderView(explanation, null, false);
+            showWarning();
         });
         refresh();
+    }
+
+    private void showWarning() {
+        // A vertical list keeps all four choices in the same reading order on every layout.
+        CharSequence[] choices = {
+                activity.getString(R.string.troubleshooting_enable),
+                activity.getString(R.string.troubleshooting_enable_day),
+                activity.getString(R.string.troubleshooting_enable_forever),
+                activity.getString(android.R.string.cancel)
+        };
+        long[] durations = {DiagnosticLog.TROUBLESHOOTING_DURATION_MS,
+                DiagnosticLog.TROUBLESHOOTING_DAY_MS, DiagnosticLog.TROUBLESHOOTING_FOREVER_MS};
+        warning = new MaterialAlertDialogBuilder(activity)
+                .setTitle(R.string.troubleshooting_warning_title)
+                .setItems(choices, (dialog, which) -> {
+                    int choice = which - 1; // The non-selectable warning header occupies position zero.
+                    if (choice < 0 || choice >= durations.length) { refresh(); return; }
+                    setEnabled(true, durations[choice]);
+                })
+                .setOnCancelListener(dialog -> refresh())
+                .create();
+        // Use a separate header so the warning and the ordered list are both visible.
+        android.widget.TextView explanation = new android.widget.TextView(warning.getContext());
+        explanation.setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium);
+        explanation.setText(R.string.troubleshooting_warning);
+        int padding = Math.round(24 * activity.getResources().getDisplayMetrics().density);
+        explanation.setPadding(padding, padding / 2, padding, padding / 2);
+        warning.show();
+        warning.getListView().addHeaderView(explanation, null, false);
     }
 
     void refresh() {

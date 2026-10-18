@@ -332,6 +332,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         android.widget.ListView list = dialog.findViewById(current.getResources().getIdentifier(
                 "select_dialog_listview", "id", current.getPackageName()));
         check(list != null && list.getHeaderViewsCount() == 1, "warning header missing");
+        check(!list.getAdapter().isEnabled(0), "warning header must not be selectable");
         int[] ids = {R.string.troubleshooting_enable, R.string.troubleshooting_enable_day,
                 R.string.troubleshooting_enable_forever, android.R.string.cancel};
         for (int index = 0; index < ids.length; index++) {

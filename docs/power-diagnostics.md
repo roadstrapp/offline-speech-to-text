@@ -13,7 +13,7 @@ exports can contain incomplete sessions. Basic logging retains its 64 KiB cap;
 the next basic write after detailed consent ends compacts a larger retained log. Excluded fields include app identifiers, audio, transcripts, editor text, dictionary terms, arbitrary model filenames, paths and exception messages. Export requires an explicit action.
 
 The app and keyboard show an active indicator. Timed consent expires after the explicitly selected one-hour or 24-hour interval; **Enable forever** stays active until explicitly disabled.
-Malformed leases and times outside the consent interval fail closed. An observed
+Malformed leases and times outside the consent interval fail closed. Moving the device clock before the consent start time also revokes forever consent. An observed
 expired or invalid timed interval is removed and stays removed after a clock change. Disable it at any time,
 or disable basic logging to revoke both. Exports require explicit Save or Share.
 Only send them to someone you trust: timing/resource metadata can reveal usage
