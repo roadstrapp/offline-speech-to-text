@@ -9,7 +9,13 @@ small Kotlin API, a reproducible Android build and its own tests. See [engine/RE
 ## Staying in sync with upstream
 
 `engine/` and this file are the only additions and touch no upstream file, so merging upstream
-should be conflict-free:
+should be conflict-free. The daily `Sync upstream` workflow fast-forwards `main` to the relay's
+pristine `main`, merges that mirror into a temporary branch, runs the engine tests and opens (or
+refreshes) a pull request against `engine/offline-stt-engine`. It can also be run manually from the
+Actions tab. The pull request deliberately remains reviewable rather than silently changing the
+engine version consumed by Roadstr.
+
+The equivalent manual sequence is:
 
 ```sh
 git remote add upstream <the original repository>

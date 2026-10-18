@@ -1,0 +1,72 @@
+name: Sync upstream
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_URL: https://relay.ngit.dev/npub1jg2qmt3rxjksq65v3nk7dq6yaz2c4uf3qt9epdhxwms2xwd47j2s38a228/offline-speech-to-text.git
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "roadstr-upstream-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git remote add upstream "$UPSTREAM_URL"
+
+      - name: Fast-forward the pristine mirror
+        run: |
+          git fetch --tags upstream main
+          git merge-base --is-ancestor origin/main upstream/main
+          git merge --ff-only upstream/main
+          git push origin main --follow-tags
+
+      - name: Merge upstream into the embeddable-engine branch
+        id: merge
+        run: |
+          git switch --force-create upstream-sync origin/engine/offline-stt-engine
+          git merge --no-edit origin/main
+          if git diff --quiet origin/engine/offline-stt-engine...HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Test the extracted engine
+        if: steps.merge.outputs.changed == 'true'
+        run: cargo test --manifest-path engine/Cargo.toml --locked
+
+      - name: Publish the reviewed sync branch
+        if: steps.merge.outputs.changed == 'true'
+        run: git push --force-with-lease origin HEAD:automation/sync-upstream
+
+      - name: Open or refresh the sync pull request
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr create \
+            --base engine/offline-stt-engine \
+            --head automation/sync-upstream \
+            --title "Sync engine branch with upstream" \
+            --body "Automated merge of the latest pristine upstream main into the embeddable-engine branch. The engine test suite passed before this pull request was opened." || \
+          gh pr edit automation/sync-upstream \
+            --title "Sync engine branch with upstream" \
+            --body "Automated merge of the latest pristine upstream main into the embeddable-engine branch. The engine test suite passed before this pull request was refreshed."
