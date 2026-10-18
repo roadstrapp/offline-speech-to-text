@@ -16,7 +16,7 @@ Offline Speech to Text (OSTT) turns speech into text on your Android phone. Reco
 
 ## Screenshots
 
-<p float="left"><img src=".screenshots/screenshot_home.png" alt="Home and setup screen" width="30%" /> <img src=".screenshots/screenshot_models.png" alt="Speech model selection" width="30%" /> <img src=".screenshots/screenshot_recording.png" alt="Voice keyboard controls" width="30%" /></p>
+<p float="left"><img src=".screenshots/screenshot_home.png" alt="Home and setup screen" width="45%" /> <img src=".screenshots/screenshot_models.png" alt="Speech model selection" width="45%" /></p>
 
 ## Set up
 
