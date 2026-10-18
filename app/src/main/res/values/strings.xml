@@ -355,4 +355,19 @@
     <string name="license_link">Licenses</string>
     <string name="about_version">Version %1$s (%2$d) · App source MIT · Default model CC BY 4.0</string>
     <string name="custom_terms_load_failed">The saved dictionary could not be loaded. It stays unchanged until you save or clear it.</string>
+
+<string name="no_model_short">No speech model installed. Open Offline Voice Input to add one.</string>
+<string name="voice_listening">Listening… (tap to stop)</string>
+<string name="voice_no_speech">No speech recognized</string>
+<string name="voice_processing">Processing…</string>
+<string name="voice_need_mic">Microphone permission required.\nGrant it in the main app.</string>
+<string name="file_decoding">Decoding audio…</string>
+<string name="file_transcribing">Transcribing…</string>
+<string name="file_transcribing_progress">Transcribing… %1$s / %2$s</string>
+<string name="file_transcribing_at">Transcribing… %1$s</string>
+<string name="file_copied">Copied to clipboard</string>
+<string name="file_copied_auto">Transcription copied to clipboard</string>
+<string name="file_no_audio">No audio file received</string>
+<string name="file_decode_error">Could not decode this audio file</string>
+<string name="file_no_speech">No speech recognized in this file</string>
 </resources>

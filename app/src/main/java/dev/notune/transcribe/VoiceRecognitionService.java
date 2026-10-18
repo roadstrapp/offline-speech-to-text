@@ -48,6 +48,8 @@ public class VoiceRecognitionService extends RecognitionService {
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private volatile Callback mCallback;
+    private NativeCallbacks nativeCallbacks;
+    private long callbackGeneration;
     private volatile TroubleshootingSession troubleshooting;
 
     @Override
@@ -68,6 +70,7 @@ public class VoiceRecognitionService extends RecognitionService {
         // cancellation reaches us (for example during a fast app/editor
         // switch). Retire native work first so the new request never receives
         // a false ERROR_AUDIO from the stale process-wide owner.
+        ++callbackGeneration;
         mCallback = null;
         finishTroubleshooting("cancel");
         try {
@@ -80,6 +83,7 @@ public class VoiceRecognitionService extends RecognitionService {
         ParcelFileDescriptor callerAudio = callerAudioSource(recognizerIntent);
         troubleshooting = TroubleshootingSession.start(this, "service",
                 callerAudio == null ? "microphone" : "caller_audio");
+        nativeCallbacks = new NativeCallbacks(callback);
         if (callerAudio != null) {
             startListeningFromCallerAudio(recognizerIntent, callback, callerAudio);
             return;
@@ -93,7 +97,7 @@ public class VoiceRecognitionService extends RecognitionService {
         }
 
         try {
-            startListening(this);
+            startListening(nativeCallbacks);
         } catch (Throwable t) {
             Log.e(TAG, "startListening failed", t);
             safeError(SpeechRecognizer.ERROR_CLIENT);
@@ -137,7 +141,7 @@ public class VoiceRecognitionService extends RecognitionService {
 
         try {
             startListeningFromAudioSource(
-                    this,
+                    nativeCallbacks,
                     fd,
                     recognizerIntent.getIntExtra(
                             RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, SAMPLE_RATE_HZ),
@@ -201,6 +205,7 @@ public class VoiceRecognitionService extends RecognitionService {
     @Override
     protected void onCancel(Callback callback) {
         if (callback != mCallback) return;
+        ++callbackGeneration;
         mCallback = null;
         finishTroubleshooting("cancel");
         try {
@@ -226,36 +231,40 @@ public class VoiceRecognitionService extends RecognitionService {
 
     public void onReadyForSpeech() {
         Callback cb = mCallback;
+        long generation = callbackGeneration;
         if (cb == null) return;
         mainHandler.post(() -> {
-            if (mCallback != cb) return;
+            if (mCallback != cb || callbackGeneration != generation) return;
             try { cb.readyForSpeech(new Bundle()); } catch (RemoteException ignored) {}
         });
     }
 
     public void onBeginningOfSpeech() {
         Callback cb = mCallback;
+        long generation = callbackGeneration;
         if (cb == null) return;
         mainHandler.post(() -> {
-            if (mCallback != cb) return;
+            if (mCallback != cb || callbackGeneration != generation) return;
             try { cb.beginningOfSpeech(); } catch (RemoteException ignored) {}
         });
     }
 
     public void onRmsChanged(float rmsdB) {
         Callback cb = mCallback;
+        long generation = callbackGeneration;
         if (cb == null) return;
         mainHandler.post(() -> {
-            if (mCallback != cb) return;
+            if (mCallback != cb || callbackGeneration != generation) return;
             try { cb.rmsChanged(rmsdB); } catch (RemoteException ignored) {}
         });
     }
 
     public void onEndOfSpeech() {
         Callback cb = mCallback;
+        long generation = callbackGeneration;
         if (cb == null) return;
         mainHandler.post(() -> {
-            if (mCallback != cb) return;
+            if (mCallback != cb || callbackGeneration != generation) return;
             if (troubleshooting != null) troubleshooting.event("processing", "end");
             try { cb.endOfSpeech(); } catch (RemoteException ignored) {}
         });
@@ -263,13 +272,15 @@ public class VoiceRecognitionService extends RecognitionService {
 
     public void onResults(String text) {
         Callback cb = mCallback;
+        long generation = callbackGeneration;
         if (cb == null) return;
         mainHandler.post(() -> {
-            if (mCallback != cb) return;
+            if (mCallback != cb || callbackGeneration != generation) return;
             ArrayList<String> hypotheses = new ArrayList<>();
             hypotheses.add(text);
             Bundle bundle = new Bundle();
             bundle.putStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION, hypotheses);
+            bundle.putFloatArray(SpeechRecognizer.CONFIDENCE_SCORES, new float[] { -1.0f });
             boolean delivered = false;
             try { cb.results(bundle); delivered = true; } catch (RemoteException ignored) {}
             String reason = delivered ? "delivered" : "callback_failed";
@@ -281,10 +292,11 @@ public class VoiceRecognitionService extends RecognitionService {
 
     public void onError(int errorCode) {
         Callback cb = mCallback;
+        long generation = callbackGeneration;
         if (cb == null) return;
         DiagnosticLog.recognizerError(getFilesDir(), errorCode);
         mainHandler.post(() -> {
-            if (mCallback != cb) return;
+            if (mCallback != cb || callbackGeneration != generation) return;
             try { cb.error(errorCode); } catch (RemoteException ignored) {}
             finishTroubleshooting("error");
             if (mCallback == cb) mCallback = null;
@@ -333,6 +345,7 @@ public class VoiceRecognitionService extends RecognitionService {
 
     private void safeError(int errorCode) {
         Callback cb = mCallback;
+        long generation = callbackGeneration;
         if (cb == null) return;
         DiagnosticLog.recognizerError(getFilesDir(), errorCode);
         try { cb.error(errorCode); } catch (RemoteException ignored) {}
@@ -340,12 +353,41 @@ public class VoiceRecognitionService extends RecognitionService {
         mCallback = null;
     }
 
+    /** JNI holds this exact request target, never a mutable current callback. */
+    private final class NativeCallbacks extends android.content.ContextWrapper {
+        private final Callback callback;
+        private final long sessionId;
+        private final long generation;
+        NativeCallbacks(Callback callback) {
+            super(VoiceRecognitionService.this);
+            this.callback = callback;
+            this.generation = callbackGeneration;
+            this.sessionId = VoiceRecognitionService.this.getTroubleshootingSessionId();
+        }
+        private void deliver(Runnable action) {
+            mainHandler.post(() -> { if (mCallback == callback && callbackGeneration == generation) action.run(); });
+        }
+        public void onReadyForSpeech() { deliver(VoiceRecognitionService.this::onReadyForSpeech); }
+        public void onBeginningOfSpeech() { deliver(VoiceRecognitionService.this::onBeginningOfSpeech); }
+        public void onEndOfSpeech() { deliver(VoiceRecognitionService.this::onEndOfSpeech); }
+        public void onRmsChanged(float value) { deliver(() -> VoiceRecognitionService.this.onRmsChanged(value)); }
+        public void onResults(String text) { deliver(() -> VoiceRecognitionService.this.onResults(text)); }
+        public void onError(int code) { deliver(() -> VoiceRecognitionService.this.onError(code)); }
+        public void onStatusUpdate(String status) { deliver(() -> VoiceRecognitionService.this.onStatusUpdate(status)); }
+        public void onTranscriptionMetrics(long audio, long compute, int threads) { deliver(() -> VoiceRecognitionService.this.onTranscriptionMetrics(audio, compute, threads)); }
+        public long getTroubleshootingSessionId() { return sessionId; }
+        public void onRecognitionOutcome(int reason, long audio) { deliver(() -> VoiceRecognitionService.this.onRecognitionOutcome(reason, audio)); }
+        public void onPipelineMetrics(long id, long prepare, long decode, long post, long wait, int windows, int family, int warm) {
+            deliver(() -> VoiceRecognitionService.this.onPipelineMetrics(id, prepare, decode, post, wait, windows, family, warm));
+        }
+    }
+
     // --- Native methods (implemented in src/recog_service.rs) ----------------
 
     private native void initNative(VoiceRecognitionService service);
-    private native void startListening(VoiceRecognitionService service);
+    private native void startListening(android.content.Context service);
     private native void startListeningFromAudioSource(
-            VoiceRecognitionService service,
+            android.content.Context service,
             int fd,
             int sampleRate,
             int channelCount,

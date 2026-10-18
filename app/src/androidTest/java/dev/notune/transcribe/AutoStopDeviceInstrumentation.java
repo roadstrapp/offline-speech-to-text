@@ -17,6 +17,8 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
     private Activity current;
     private boolean failFixture;
     private boolean callerAudio;
+    private boolean fileDecoder;
+    private boolean modelFixture;
     private boolean preparedWindows;
     private static final class InjectedFixtureFailure extends Exception {}
 
@@ -24,6 +26,8 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
     public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
         failFixture = arguments != null && "true".equals(arguments.getString("fixture_failure"));
+        modelFixture = arguments != null && "true".equals(arguments.getString("model_fixture"));
+        fileDecoder = arguments != null && "true".equals(arguments.getString("file_decoder"));
         callerAudio = arguments != null && "true".equals(arguments.getString("caller_audio"));
         preparedWindows = arguments != null && "true".equals(arguments.getString("prepared_windows"));
         start();
@@ -45,6 +49,21 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         try {
             if (hadDelay) savedDelay = Files.readAllBytes(delayFile.toPath());
             check(savedDelay == null || savedDelay.length <= 16, "unexpected delay fixture");
+            if (modelFixture) {
+                check(getTargetContext().getPackageName().equals("app.offlinespeechtotext.validation"),
+                        "model fixture requires isolated validation package");
+                File staged = new File(getTargetContext().getCacheDir(), "validation-model.gguf");
+                try {
+                    try (java.io.InputStream input = getContext().getAssets()
+                            .open(DefaultModelContract.FILE_NAME)) {
+                        Files.copy(input, staged.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    }
+                    ModelInstaller.installVerified(directory, staged,
+                            ModelCatalog.findByFileName(DefaultModelContract.FILE_NAME));
+                    result.putBoolean("verified_model_fixture", true);
+                } finally { Files.deleteIfExists(staged.toPath()); }
+            }
+            if (fileDecoder) { FileDecoderDeviceTest.run(this); result.putBoolean("file_decoder_ran", true); }
             testMainThreadFailureHandling();
             testDictionaryFiles();
             testDiagnosticEvidence();
@@ -93,6 +112,20 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
                 check(current.findViewById(R.id.auto_stop_delay_controls).getVisibility() == View.GONE,
                         "activity restart enabled delay unexpectedly");
                 ((CompoundButton) current.findViewById(R.id.switch_auto_stop)).setChecked(true);
+            });
+            closeCurrent();
+            // A failed file must leave already recovered text available to copy.
+            current = startActivitySync(new Intent(getTargetContext(), TranscribeFileActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            runSafelyOnMainSync(() -> {
+                TranscribeFileActivity file = (TranscribeFileActivity) current;
+                file.onPartialText("Synthetic partial transcript");
+                file.onStatusUpdate("Error: synthetic file failure");
+                check(file.findViewById(R.id.btn_copy).getVisibility() == View.VISIBLE,
+                        "file error hid recovered partial text copy");
+                check(((android.widget.TextView) file.findViewById(R.id.txt_result)).getText()
+                        .toString().equals("Synthetic partial transcript"),
+                        "file error erased recovered partial text");
             });
             closeCurrent();
             // Exercise the changed Java/JNI popup path without running inference

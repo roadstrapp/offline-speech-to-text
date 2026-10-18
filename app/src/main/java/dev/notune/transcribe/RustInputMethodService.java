@@ -205,6 +205,7 @@ public class RustInputMethodService extends InputMethodService {
             view.setOnApplyWindowInsetsListener((v, insets) -> {
                 v.setPadding(basePaddingLeft, basePaddingTop, basePaddingRight,
                         basePaddingBottom + insets.getSystemWindowInsetBottom());
+                v.post(v::requestLayout);
                 return insets;
             });
 
@@ -245,6 +246,11 @@ public class RustInputMethodService extends InputMethodService {
                 }
             };
 
+            backspaceButton.setOnClickListener(v -> sendOneTapBackspace());
+            spaceButton.setOnClickListener(v -> {
+                InputConnection editor = getCurrentInputConnection();
+                if (editor != null) editor.commitText(" ", 1);
+            });
             backspaceButton.setOnTouchListener((v, event) -> {
                 switch (event.getActionMasked()) {
                     case MotionEvent.ACTION_DOWN:
@@ -1131,11 +1137,14 @@ public class RustInputMethodService extends InputMethodService {
     }
 
     private void switchToOtherInputMethod() {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-            switchToPreviousInputMethod();
-            return;
-        }
         InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            if (switchToPreviousInputMethod() || switchToNextInputMethod(false)) return;
+        } else if (imm != null && getWindow() != null && getWindow().getWindow() != null) {
+            android.os.IBinder token = getWindow().getWindow().getAttributes().token;
+            if (token != null && (imm.switchToLastInputMethod(token)
+                    || imm.switchToNextInputMethod(token, false))) return;
+        }
         if (imm != null) imm.showInputMethodPicker();
     }
 

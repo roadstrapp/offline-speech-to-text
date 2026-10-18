@@ -30,9 +30,12 @@ const MODEL_TRANSLATE_FILE: &str = "model_translate";
 /// Optional file in filesDir with the CPU thread count for inference.
 /// Absent/invalid/0 = default (all cores).
 const MODEL_THREADS_FILE: &str = "model_threads";
+pub(crate) static INFERENCE_GATE: Lazy<crate::inference_gate::Gate> =
+    Lazy::new(crate::inference_gate::Gate::default);
 static ACTIVE_THREADS: AtomicI32 = AtomicI32::new(0);
 
 /// Settings captured once for a complete user transcription.
+#[derive(Clone)]
 pub(crate) struct TranscriptionJob {
     run_ext: Option<transcribe_cpp::RunExtension>,
     preferred_terms: Option<Vec<String>>,
@@ -109,8 +112,8 @@ impl Engine {
         // Translation is gated on the model's capabilities: models without it
         // (e.g. Parakeet) silently keep transcribing, so the setting can stay
         // on while switching models.
-        let capabilities = model.capabilities();
-        let task = if translate && capabilities.supports_translate {
+        let capabilities = model.capabilities().ok();
+        let task = if translate && capabilities.as_ref().is_some_and(|c| c.supports_translate) {
             transcribe_cpp::Task::Translate
         } else {
             if translate {
@@ -142,8 +145,9 @@ impl Engine {
         );
         let supports_initial_prompt =
             is_whisper && model.supports(transcribe_cpp::Feature::InitialPrompt);
-        let english_only_model = capabilities.languages.len() == 1
-            && crate::english_fillers::is_english_tag(&capabilities.languages[0]);
+        let english_only_model = capabilities.as_ref().is_some_and(|c| {
+            c.languages.len() == 1 && crate::english_fillers::is_english_tag(&c.languages[0])
+        });
         // Whisper Turbo advertises translation despite being unreliable at
         // producing English output; don't apply English-only cleanup there.
         let translates_to_english =
@@ -293,6 +297,16 @@ impl Engine {
         self.bounded_window_samples
     }
 
+    pub(crate) fn file_window_limit(&self) -> usize {
+        self.bounded_window_samples
+            .unwrap_or(crate::long_audio::DEFAULT_MAX_WINDOW_SAMPLES)
+    }
+
+    pub(crate) fn finish_file_job(mut job: TranscriptionJob, text: String) -> String {
+        job.text = text;
+        job.finish()
+    }
+
     pub(crate) fn diagnostic_family(&self) -> i32 {
         self.diagnostic_family
     }
@@ -333,7 +347,7 @@ impl Engine {
     }
 
     /// Both early preparation and deferred windows use this exact path.
-    fn decode_window(
+    pub(crate) fn decode_window(
         &mut self,
         job: &mut TranscriptionJob,
         audio: &[f32],
@@ -399,6 +413,11 @@ impl Engine {
         samples: &[f32],
         run_ext: &Option<transcribe_cpp::RunExtension>,
     ) -> Result<transcribe_cpp::Transcript, String> {
+        let range = crate::endpoint::speech_range(samples);
+        let samples = &samples[range];
+        if samples.is_empty() {
+            return Ok(transcribe_cpp::Transcript::default());
+        }
         loop {
             let opts = transcribe_cpp::RunOptions {
                 language: self.language.clone(),
@@ -408,6 +427,18 @@ impl Engine {
             };
             match self.session.run(samples, &opts) {
                 Ok(transcript) => return Ok(transcript),
+                Err(transcribe_cpp::Error::OutputTruncated {
+                    partial: Some(transcript),
+                    ..
+                })
+                | Err(transcribe_cpp::Error::OutputRepetition {
+                    partial: Some(transcript),
+                    ..
+                }) => {
+                    // Preserve decoded text through the normal dictionary and
+                    // overlap reconciliation path; do not expose model errors.
+                    return Ok(*transcript);
+                }
                 Err(transcribe_cpp::Error::Unsupported(msg)) if self.language.is_some() => {
                     let lang = self.language.take().unwrap();
                     self.language = lang.split_once('-').map(|(primary, _)| primary.to_string());
@@ -458,6 +489,7 @@ fn install_engine(engine: Engine) {
 /// normal error, and a lock poisoned by an earlier panic is recovered instead
 /// of propagating the poison forever.
 pub fn transcribe_shared(engine: &Arc<Mutex<Engine>>, samples: Vec<f32>) -> Result<String, String> {
+    let _permit = INFERENCE_GATE.acquire(false);
     let audio_secs = samples.len() as f64 / 16_000.0;
     let started = std::time::Instant::now();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

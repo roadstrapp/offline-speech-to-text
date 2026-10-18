@@ -8,11 +8,11 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Offline catalog for exact model artifacts supported by transcribe.cpp 0.2.3.
+ * Offline catalog for exact model artifacts supported by transcribe.cpp 0.4.0.
  */
 public final class ModelCatalog {
     private static final long MIB = 1024L * 1024L;
-    private static final String RUNTIME = "transcribe.cpp 0.2.3";
+    private static final String RUNTIME = "transcribe.cpp 0.4.0";
     private static final LinkedHashSet<String> PARAKEET_V3_LANGUAGES =
             new LinkedHashSet<>(Arrays.asList(
                     "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de",

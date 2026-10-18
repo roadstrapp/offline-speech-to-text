@@ -176,7 +176,7 @@ public final class BehaviorTest {
                 "primeLine downloads use the reviewed immutable model revision");
         assertEquals(true, primeLine.supportsLanguage("de-DE"),
                 "primeLine advertises its retained Parakeet v3 language coverage");
-        assertEquals("transcribe.cpp 0.2.3", primeLine.backend,
+        assertEquals("transcribe.cpp 0.4.0", primeLine.backend,
                 "new catalog entries name the active runtime version");
         assertEquals(true, ModelCatalog.localePreferredBalanced("fr-FR") == null,
                 "a language-tuned model does not override the general default elsewhere");

@@ -35,10 +35,6 @@ use crate::voice_session::{
 // transcribes whatever was captured, so a mis-tuned threshold only affects the
 // auto-stop *timing*, never whether text is returned.
 //
-/// Absolute smoothed level (0..1) that must be exceeded to count as speech.
-const MIN_SPEECH_LEVEL: f32 = 0.12;
-/// How far above the running noise floor a level must be to count as speech.
-const SPEECH_MARGIN: f32 = 0.08;
 /// Trailing silence after speech that triggers auto-finalisation.
 const SILENCE_MS: u64 = 1500;
 /// If no speech is ever detected, finalise after this long anyway.
@@ -89,14 +85,14 @@ struct Endpoint {
 /// Analysis state has exactly one producer per session: either the microphone
 /// callback or the caller-audio reader. It therefore stays local and lock-free.
 struct AudioAnalyzer {
-    noise_floor: f32,
+    endpointer: crate::endpoint::Endpointer,
     last_level_sent: Instant,
 }
 
 impl AudioAnalyzer {
     fn new() -> Self {
         Self {
-            noise_floor: 0.0,
+            endpointer: crate::endpoint::Endpointer::new(),
             last_level_sent: Instant::now(),
         }
     }
@@ -807,7 +803,8 @@ fn audio_callback(shared: &Arc<Endpoint>, data: &[f32], analyzer: &mut AudioAnal
     let rms = (sum / (data.len().max(1) as f32)).sqrt();
     let level = (rms * 6.0).clamp(0.0, 1.0);
 
-    let is_speech = level > MIN_SPEECH_LEVEL && level > analyzer.noise_floor + SPEECH_MARGIN;
+    analyzer.endpointer.push(data);
+    let is_speech = analyzer.endpointer.is_voiced();
 
     shared.audio_buffer.lock().unwrap().push(data);
 
@@ -826,9 +823,6 @@ fn audio_callback(shared: &Arc<Endpoint>, data: &[f32], analyzer: &mut AudioAnal
                 call_void(&mut env, shared.target.as_obj(), "onBeginningOfSpeech");
             }
         }
-    } else {
-        // Slowly adapt the noise floor while no speech is present.
-        analyzer.noise_floor = analyzer.noise_floor * 0.95 + level * 0.05;
     }
 
     // Throttled mic-level updates for the keyboard's waveform UI.

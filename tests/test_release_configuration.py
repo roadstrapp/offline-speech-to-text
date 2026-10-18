@@ -21,8 +21,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         gradle_properties = (ROOT / "gradle.properties").read_text()
         workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
         self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
-        self.assertIn("versionCode = 50", gradle)
-        self.assertIn('versionName = "0.14.0"', gradle)
+        self.assertIn("versionCode = 52", gradle)
+        self.assertIn('versionName = "0.16.0"', gradle)
         self.assertIn('providers.gradleProperty("includeBundledModel")', gradle)
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: false', gradle)
         self.assertIn('ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,', gradle)
@@ -35,14 +35,14 @@ class ReleaseConfigurationTest(unittest.TestCase):
     def test_transcribe_cpp_runtime_stays_on_the_reviewed_lockstep_release(self):
         manifest = (ROOT / "Cargo.toml").read_text()
         lockfile = (ROOT / "Cargo.lock").read_text()
-        self.assertIn('transcribe-cpp = "0.2.3"', manifest)
+        self.assertIn('transcribe-cpp = "0.4.0"', manifest)
         self.assertRegex(
             lockfile,
-            r'name = "transcribe-cpp"\nversion = "0\.2\.3"',
+            r'name = "transcribe-cpp"\nversion = "0\.4\.0"',
         )
         self.assertRegex(
             lockfile,
-            r'name = "transcribe-cpp-sys"\nversion = "0\.2\.3"',
+            r'name = "transcribe-cpp-sys"\nversion = "0\.4\.0"',
         )
 
     def test_native_toolchain_is_explicit_and_update_compatible(self):
@@ -834,7 +834,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("Whisper", catalog)
         self.assertIn("parakeet-tdt-1.1b", catalog)
         self.assertIn("parakeet-primeline-Q4_K_M.gguf", catalog)
-        self.assertIn("transcribe.cpp 0.2.3", catalog)
+        self.assertIn("transcribe.cpp 0.4.0", catalog)
         self.assertNotIn("transcribe.cpp 0.1.3", catalog)
         self.assertIn("ModelCatalog.verifiedDownloads()", activity)
         self.assertIn("startDownload(model, origin)", activity)

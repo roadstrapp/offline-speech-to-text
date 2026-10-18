@@ -17,16 +17,16 @@ val isolatedDebugPackage = providers.gradleProperty("isolatedDebugPackage")
 
 android {
     namespace = "dev.notune.transcribe"
-    compileSdk = 35
+    compileSdk = 36
     // Preserve the production native toolchain and its 16 KiB-compatible libc++.
     ndkVersion = "29.0.14206865"
 
     defaultConfig {
         applicationId = "app.offlinespeechtotext"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 50
-        versionName = "0.14.0"
+        targetSdk = 36
+        versionCode = 52
+        versionName = "0.16.0"
         testInstrumentationRunner = "dev.notune.transcribe.AutoStopDeviceInstrumentation"
         buildConfigField("boolean", "HAS_BUNDLED_MODEL", includeBundledModel.toString())
         ndk {
@@ -51,15 +51,24 @@ android {
         }
     }
 
-    testBuildType = "release"
+    testBuildType = if (isolatedDebugPackage) "debug" else "release"
 
     buildTypes {
         debug {
-            if (isolatedDebugPackage) applicationIdSuffix = ".validation"
+            if (isolatedDebugPackage) {
+                applicationIdSuffix = ".validation"
+                isMinifyEnabled = true
+                isShrinkResources = true
+                proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            }
         }
         release {
-            isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("release")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (!providers.gradleProperty("unsignedValidation").map(String::toBoolean).getOrElse(false)) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
@@ -224,6 +233,13 @@ val cargoNdkBuild by tasks.registering {
             throw GradleException("libc++_shared.so not found in NDK at: ${libcpp.absolutePath}")
         }
         libcpp.copyTo(File(destDir, "libc++_shared.so"), overwrite = true)
+        val strip = file("$ndkDir/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip")
+        if (!strip.isFile) throw GradleException("NDK debug-strip tool missing")
+        destDir.listFiles { f -> f.name.endsWith(".so") }!!.forEach { lib ->
+            val code = ProcessBuilder(strip.absolutePath, "--strip-debug", lib.absolutePath)
+                .inheritIO().start().waitFor()
+            if (code != 0) throw GradleException("Native debug stripping failed: ${lib.name}")
+        }
         println("Packaged baseline and optimized native backends")
     }
 }

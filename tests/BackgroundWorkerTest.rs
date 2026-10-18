@@ -109,7 +109,11 @@ struct Control {
 }
 type SharedControl = Arc<(Mutex<Control>, Condvar)>;
 
+#[path = "../src/inference_gate.rs"]
+mod inference_gate;
 mod engine {
+    pub(crate) static INFERENCE_GATE: std::sync::LazyLock<crate::inference_gate::Gate> =
+        std::sync::LazyLock::new(crate::inference_gate::Gate::default);
     use super::*;
     static ENGINE: OnceLock<Mutex<Option<Arc<Mutex<Engine>>>>> = OnceLock::new();
     pub struct Engine {

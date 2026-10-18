@@ -28,10 +28,6 @@ pub fn release_session_owner(owner: u8) {
 }
 
 // --- Optional auto-stop endpointing (same level heuristics as recog_service) --
-/// Absolute smoothed level (0..1) that must be exceeded to count as speech.
-const MIN_SPEECH_LEVEL: f32 = 0.12;
-/// How far above the running noise floor a level must be to count as speech.
-const SPEECH_MARGIN: f32 = 0.08;
 const LEVEL_UPDATE_MS: u64 = 100;
 const AUTO_STOP_MONITOR_MS: u64 = 250;
 const MANUAL_MONITOR_MS: u64 = 1000;
@@ -276,7 +272,7 @@ fn start_recording_impl(
         return 1;
     }
 
-    let mut noise_floor = 0.0f32;
+    let mut endpointer = crate::endpoint::Endpointer::new();
     let mut last_level_sent = Instant::now();
     let mut audio_started = false;
     let stream = device.build_input_stream(
@@ -308,7 +304,8 @@ fn start_recording_impl(
             }
             let rms = (sum / (data.len().max(1) as f32)).sqrt();
             let level = (rms * 6.0).clamp(0.0, 1.0);
-            let is_speech = level > MIN_SPEECH_LEVEL && level > noise_floor + SPEECH_MARGIN;
+            endpointer.push(data);
+            let is_speech = endpointer.is_voiced();
 
             // Do not buffer system-muted leading silence. Besides avoiding a
             // false empty transcription, this prevents needless background
@@ -324,12 +321,7 @@ fn start_recording_impl(
                         Ordering::Relaxed,
                     );
                     ep.speech_started.store(true, Ordering::SeqCst);
-                } else {
-                    // Slowly adapt the noise floor while no speech is present.
-                    noise_floor = noise_floor * 0.95 + level * 0.05;
                 }
-            } else if !is_speech {
-                noise_floor = noise_floor * 0.95 + level * 0.05;
             }
 
             // throttle updates

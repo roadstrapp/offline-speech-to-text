@@ -15,16 +15,24 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_RecognizeActivity_initN
     activity: JObject,
 ) {
     let state = voice_session::init_session(env, activity, voice_session::OWNER_ACTIVITY);
-    *RECOG_STATE.lock().unwrap() = Some(state);
+    if let Some(mut old) = RECOG_STATE.lock().unwrap().replace(state) {
+        voice_session::cleanup_session(&mut old);
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_notune_transcribe_RecognizeActivity_cleanupNative(
-    _env: JNIEnv,
-    _class: JClass,
+    env: JNIEnv,
+    caller: JObject,
 ) {
-    if let Some(mut state) = RECOG_STATE.lock().unwrap().take() {
-        voice_session::cleanup_session(&mut state);
+    let mut guard = RECOG_STATE.lock().unwrap();
+    if guard
+        .as_ref()
+        .is_some_and(|s| env.is_same_object(&s.target_ref, &caller).unwrap_or(false))
+    {
+        if let Some(mut state) = guard.take() {
+            voice_session::cleanup_session(&mut state);
+        }
     }
 }
 

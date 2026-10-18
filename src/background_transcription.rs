@@ -327,6 +327,7 @@ fn worker_loop(
                 }
                 let (eng, job) = prepared.as_mut().expect("prepared above");
                 let started = Instant::now();
+                let _permit = engine::INFERENCE_GATE.acquire(false);
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     eng.lock()
                         .unwrap_or_else(|p| p.into_inner())
@@ -455,6 +456,7 @@ fn transcribe_complete(
     job: &mut engine::TranscriptionJob,
     audio: &[f32],
 ) -> Result<(), String> {
+    let _permit = engine::INFERENCE_GATE.acquire(true);
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         engine
             .lock()

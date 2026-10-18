@@ -15,16 +15,24 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_RustInputMethodService_
     service: JObject,
 ) {
     let state = voice_session::init_session(env, service, voice_session::OWNER_IME);
-    *IME_STATE.lock().unwrap() = Some(state);
+    if let Some(mut old) = IME_STATE.lock().unwrap().replace(state) {
+        voice_session::cleanup_session(&mut old);
+    }
 }
 
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_notune_transcribe_RustInputMethodService_cleanupNative(
-    _env: JNIEnv,
-    _class: JClass,
+    env: JNIEnv,
+    caller: JObject,
 ) {
-    if let Some(mut state) = IME_STATE.lock().unwrap().take() {
-        voice_session::cleanup_session(&mut state);
+    let mut guard = IME_STATE.lock().unwrap();
+    if guard
+        .as_ref()
+        .is_some_and(|s| env.is_same_object(&s.target_ref, &caller).unwrap_or(false))
+    {
+        if let Some(mut state) = guard.take() {
+            voice_session::cleanup_session(&mut state);
+        }
     }
 }
 
