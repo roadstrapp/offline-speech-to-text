@@ -1,0 +1,28 @@
+[package]
+name = "offlinestt"
+version = "0.1.0"
+edition = "2021"
+description = "Embeddable offline speech-to-text engine for Android (transcribe.cpp + JNI facade)"
+license = "MIT"
+publish = false
+
+[lib]
+# `rlib` lets `cargo test` run the engine on the host; `cdylib` is the Android library.
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+# GGUF files are untrusted input: keep panic containment at the native boundary
+# instead of aborting the host app's process.
+panic = "unwind"
+opt-level = "s"
+lto = "thin"
+strip = "symbols"
+
+[dependencies]
+transcribe-cpp = "=0.2.3"
+jni = "0.21"
+log = "0.4"
+android_logger = "0.13"
+
+# The engine is built on its own, not as a member of the app workspace at the root.
+[workspace]
