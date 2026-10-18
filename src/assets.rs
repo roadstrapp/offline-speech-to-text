@@ -36,19 +36,10 @@ pub fn files_dir(env: &mut JNIEnv, context: &JObject) -> anyhow::Result<PathBuf>
 /// returns the path of its GGUF file.
 pub fn extract_builtin_model(env: &mut JNIEnv, context: &JObject) -> anyhow::Result<PathBuf> {
     let base_path = files_dir(env, context)?;
-
-    let legacy_dir = base_path.join(LEGACY_MODEL_DIR);
-    if legacy_dir.exists() {
-        log::info!("Removing legacy ONNX model directory");
-        let _ = std::fs::remove_dir_all(&legacy_dir);
-    }
-
     let model_dir = base_path.join(BUILTIN_MODEL_DIR);
     let marker_file = model_dir.join(EXTRACTION_COMPLETE_MARKER);
 
-    // Older non-bundled builds could leave a marker after AssetManager.open
-    // found no model. Never trust the marker without the actual GGUF; upgrades
-    // to a bundled build must repair that state automatically.
+    // The marker only ever appears together with a complete directory.
     if marker_file.exists() {
         if let Ok(model) = find_gguf(&model_dir) {
             return Ok(model);
@@ -56,14 +47,58 @@ pub fn extract_builtin_model(env: &mut JNIEnv, context: &JObject) -> anyhow::Res
         log::warn!("Bundled-model marker exists without a GGUF; re-extracting");
     }
 
-    // Incomplete or missing — wipe and re-extract
-    if model_dir.exists() {
-        log::info!("Removing incomplete model directory for re-extraction");
-        let _ = std::fs::remove_dir_all(&model_dir);
+    let _lock = ExtractionLock::acquire(&base_path.join(EXTRACTION_LOCK))?;
+    // Another process may have finished extracting while we waited.
+    if marker_file.exists() {
+        if let Ok(model) = find_gguf(&model_dir) {
+            return Ok(model);
+        }
+        log::warn!("Bundled-model marker exists without a GGUF; re-extracting");
     }
 
-    std::fs::create_dir_all(&model_dir)?;
+    let legacy_dir = base_path.join(LEGACY_MODEL_DIR);
+    if legacy_dir.exists() {
+        log::info!("Removing legacy ONNX model directory");
+        let _ = std::fs::remove_dir_all(&legacy_dir);
+    }
 
+    let tmp_root = base_path.join(EXTRACTION_TMP_DIR);
+    if tmp_root.exists() {
+        std::fs::remove_dir_all(&tmp_root)?;
+    }
+    std::fs::create_dir_all(&tmp_root)?;
+
+    // Don't leave a partial copy (hundreds of MB) behind if this fails, e.g.
+    // because storage is full.
+    let extracted = extract_into(env, context, &tmp_root);
+    if extracted.is_err() {
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_clear();
+        }
+        let _ = std::fs::remove_dir_all(&tmp_root);
+    }
+    let tmp_model_dir = extracted?;
+
+    let published = publish_extracted_model(&tmp_model_dir, &model_dir);
+    let _ = std::fs::remove_dir_all(&tmp_root);
+    published
+}
+
+fn publish_extracted_model(staged: &Path, destination: &Path) -> anyhow::Result<PathBuf> {
+    find_gguf(staged)?;
+    if !staged.join(EXTRACTION_COMPLETE_MARKER).is_file() {
+        anyhow::bail!("bundled model extraction is incomplete");
+    }
+    if destination.exists() {
+        std::fs::remove_dir_all(destination)?;
+    }
+    std::fs::rename(staged, destination)?;
+    find_gguf(destination)
+}
+
+/// Copies the bundled model into `tmp_root` and marks it complete; returns
+/// the model directory inside it.
+fn extract_into(env: &mut JNIEnv, context: &JObject, tmp_root: &Path) -> anyhow::Result<PathBuf> {
     let asset_manager_obj = env
         .call_method(
             context,
@@ -72,37 +107,52 @@ pub fn extract_builtin_model(env: &mut JNIEnv, context: &JObject) -> anyhow::Res
             &[],
         )?
         .l()?;
-
-    // AssetManager.list() returns an empty array for a path that is absent.
-    // A compact build deliberately has no builtin-model asset, so do not feed
-    // that directory name to AssetManager.open(): it throws a Java
-    // FileNotFoundException which remains pending across JNI and can terminate
-    // the native loader thread even when the Rust error is otherwise handled.
     if list_asset_children(env, &asset_manager_obj, BUILTIN_MODEL_DIR)?.is_empty() {
-        let _ = std::fs::remove_dir_all(&model_dir);
         anyhow::bail!(MISSING_BUNDLED_MODEL_ERROR);
     }
+    copy_assets_recursively(env, &asset_manager_obj, BUILTIN_MODEL_DIR, tmp_root)?;
 
-    if let Err(error) =
-        copy_assets_recursively(env, &asset_manager_obj, BUILTIN_MODEL_DIR, &base_path)
-    {
-        let _ = std::fs::remove_dir_all(&model_dir);
-        return Err(error);
-    }
+    // Only mark (and publish) the extraction if the model actually arrived.
+    let tmp_model_dir = tmp_root.join(BUILTIN_MODEL_DIR);
+    find_gguf(&tmp_model_dir)?;
+    std::fs::write(tmp_model_dir.join(EXTRACTION_COMPLETE_MARKER), "ok")?;
+    Ok(tmp_model_dir)
+}
 
-    // Prove the model exists before recording completion. This also prevents a
-    // missing/non-bundled asset directory from poisoning a later app upgrade.
-    let model_path = match find_gguf(&model_dir) {
-        Ok(path) => path,
-        Err(error) => {
-            let _ = std::fs::remove_dir_all(&model_dir);
-            return Err(error);
+/// Lock file in filesDir serializing extraction across processes.
+const EXTRACTION_LOCK: &str = ".builtin-model.lock";
+/// Scratch directory in filesDir that extraction writes into.
+const EXTRACTION_TMP_DIR: &str = ".builtin-model.tmp";
+
+/// An exclusive `flock` on a file, released when dropped (or when the
+/// process dies, so a killed extraction never leaves a stale lock).
+struct ExtractionLock(std::fs::File);
+
+impl ExtractionLock {
+    fn acquire(path: &Path) -> anyhow::Result<ExtractionLock> {
+        use std::os::unix::io::AsRawFd;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(path)?;
+        loop {
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+                return Ok(ExtractionLock(file));
+            }
+            let err = std::io::Error::last_os_error();
+            if err.kind() != std::io::ErrorKind::Interrupted {
+                return Err(err.into());
+            }
         }
-    };
-    std::fs::write(&marker_file, "ok")?;
-    log::info!("Asset extraction complete, marker written");
+    }
+}
 
-    Ok(model_path)
+impl Drop for ExtractionLock {
+    fn drop(&mut self) {
+        use std::os::unix::io::AsRawFd;
+        unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+    }
 }
 
 /// Removes the extraction marker so the next load re-extracts the bundled
@@ -121,9 +171,10 @@ pub fn invalidate_builtin_model(model_path: &Path) {
 fn find_gguf(dir: &Path) -> anyhow::Result<PathBuf> {
     for entry in std::fs::read_dir(dir)? {
         let path = entry?.path();
-        if path
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("gguf"))
+        if path.is_file()
+            && path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("gguf"))
         {
             return Ok(path);
         }
@@ -239,5 +290,72 @@ fn copy_asset_file(
             }
             anyhow::bail!("could not open packaged asset {asset_path}: {error}")
         }
+    }
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+    fn fixture() -> PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "speech-extraction-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+    #[test]
+    fn incomplete_stage_does_not_replace_existing_model() {
+        let base = fixture();
+        let existing = base.join("existing");
+        let staged = base.join("staged");
+        std::fs::create_dir(&existing).unwrap();
+        std::fs::create_dir(&staged).unwrap();
+        std::fs::write(existing.join("model.gguf"), b"previous").unwrap();
+        std::fs::write(staged.join("model.gguf"), b"partial").unwrap();
+        assert!(publish_extracted_model(&staged, &existing).is_err());
+        assert_eq!(
+            std::fs::read(existing.join("model.gguf")).unwrap(),
+            b"previous"
+        );
+        std::fs::remove_dir_all(base).unwrap();
+    }
+    #[test]
+    fn complete_stage_is_published_with_its_marker() {
+        let base = fixture();
+        let destination = base.join("published");
+        let staged = base.join("staged");
+        std::fs::create_dir(&staged).unwrap();
+        std::fs::write(staged.join("model.gguf"), b"complete").unwrap();
+        std::fs::write(staged.join(EXTRACTION_COMPLETE_MARKER), b"ok").unwrap();
+        assert_eq!(
+            publish_extracted_model(&staged, &destination).unwrap(),
+            destination.join("model.gguf")
+        );
+        assert!(destination.join(EXTRACTION_COMPLETE_MARKER).is_file());
+        assert!(!staged.exists());
+        std::fs::remove_dir_all(base).unwrap();
+    }
+    #[test]
+    fn extraction_lock_excludes_another_writer_until_drop() {
+        let base = fixture();
+        let path = base.join("lock");
+        let lock = ExtractionLock::acquire(&path).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let _lock = ExtractionLock::acquire(&path).unwrap();
+            tx.send(()).unwrap();
+        });
+        assert!(rx
+            .recv_timeout(std::time::Duration::from_millis(30))
+            .is_err());
+        drop(lock);
+        rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        writer.join().unwrap();
+        std::fs::remove_dir_all(base).unwrap();
     }
 }

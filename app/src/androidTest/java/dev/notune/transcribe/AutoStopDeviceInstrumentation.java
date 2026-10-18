@@ -19,6 +19,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
     private boolean callerAudio;
     private boolean fileDecoder;
     private boolean modelFixture;
+    private boolean fileTranscription;
     private boolean preparedWindows;
     private static final class InjectedFixtureFailure extends Exception {}
 
@@ -26,6 +27,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
     public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
         failFixture = arguments != null && "true".equals(arguments.getString("fixture_failure"));
+        fileTranscription = arguments != null && "true".equals(arguments.getString("file_transcription"));
         modelFixture = arguments != null && "true".equals(arguments.getString("model_fixture"));
         fileDecoder = arguments != null && "true".equals(arguments.getString("file_decoder"));
         callerAudio = arguments != null && "true".equals(arguments.getString("caller_audio"));
@@ -75,6 +77,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             Files.deleteIfExists(enabledFile.toPath());
             AutoStopDelay.set(directory, 2000);
             launchMain();
+            result.putString("stage", "microphone meter");
             testMicLevelAnimation();
             if (preparedWindows) {
                 long[] evidence = PreparedWindowsDeviceTest.run(this, current);
@@ -83,6 +86,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
                 result.putLong("early_decode_ms", evidence[3]);
                 result.putLong("prepared_stop_decode_ms", evidence[4]);
             }
+            result.putString("stage", "troubleshooting controls");
             testTroubleshootingControls(directory);
             runSafelyOnMainSync(() -> {
                 current.findViewById(R.id.btn_more_settings).performClick();
@@ -114,6 +118,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
                 ((CompoundButton) current.findViewById(R.id.switch_auto_stop)).setChecked(true);
             });
             closeCurrent();
+            result.putString("stage", "partial file recovery");
             // A failed file must leave already recovered text available to copy.
             current = startActivitySync(new Intent(getTargetContext(), TranscribeFileActivity.class)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
@@ -128,6 +133,12 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
                         "file error erased recovered partial text");
             });
             closeCurrent();
+            if (fileTranscription) {
+                result.putString("stage", "shared-file native transcription");
+                FileTranscriptionDeviceTest.run(this);
+                result.putBoolean("file_transcription_ran", true);
+            }
+            result.putString("stage", "popup JNI");
             // Exercise the changed Java/JNI popup path without running inference
             // or modifying the IME's existing private recovery record.
             Intent popup = new Intent(getTargetContext(), RecognizeActivity.class)
@@ -148,6 +159,9 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             // Fixed failure reasons above contain no input, transcript, or path.
             result.putString("failure_type", failure.getClass().getSimpleName());
             if (failure instanceof AssertionError) result.putString("failure", failure.getMessage());
+            java.io.StringWriter trace = new java.io.StringWriter();
+            failure.printStackTrace(new java.io.PrintWriter(trace));
+            result.putString("failure_stack", trace.toString());
         } finally {
             try {
                 closeCurrent();
@@ -242,7 +256,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         try {
             CustomTerms.write(root.toFile(), "wi-fi\nO’Reilly\n");
             check(CustomTerms.read(root.toFile()).terms.size() == 2, "dictionary save/read failed");
-            PersonalCorrections.write(root.toFile(), "white noise => WhiteNoise\n");
+            PersonalCorrections.write(root.toFile(), "sample phrase => SamplePhrase\n");
             PersonalCorrections.setEnabled(root.toFile(), true);
             check(PersonalCorrections.reconcileEnabled(root.toFile()), "valid rules not enabled");
             byte[] corrupt = {(byte) 0xFF};
@@ -332,14 +346,14 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
                 ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(true);
                 check(!DiagnosticLog.isTroubleshootingEnabled(directory), "switch bypassed consent warning");
             });
-            androidx.appcompat.app.AlertDialog warning = (androidx.appcompat.app.AlertDialog) warningField.get(controls);
-            runSafelyOnMainSync(() -> warning.getButton(android.content.DialogInterface.BUTTON_NEGATIVE).performClick());
+            android.app.Dialog warning = (android.app.Dialog) warningField.get(controls);
+            runSafelyOnMainSync(() -> warning.findViewById(android.R.id.button2).performClick());
             // AlertController posts button callbacks to the main message queue.
             waitForIdleSync();
             check(!DiagnosticLog.isTroubleshootingEnabled(directory), "Cancel enabled detailed mode");
             runSafelyOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(true));
-            androidx.appcompat.app.AlertDialog confirmation = (androidx.appcompat.app.AlertDialog) warningField.get(controls);
-            runSafelyOnMainSync(() -> confirmation.getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick());
+            android.app.Dialog confirmation = (android.app.Dialog) warningField.get(controls);
+            runSafelyOnMainSync(() -> confirmation.findViewById(android.R.id.button1).performClick());
             // AlertController posts button callbacks to the main message queue.
             waitForIdleSync();
             check(DiagnosticLog.isTroubleshootingEnabled(directory), "explicit confirmation did not enable");
@@ -358,10 +372,10 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             check(!lease.exists(), "expired consent was not removed");
             runSafelyOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(true));
             check(!DiagnosticLog.isTroubleshootingEnabled(directory), "renewal bypassed consent warning");
-            androidx.appcompat.app.AlertDialog renewal = (androidx.appcompat.app.AlertDialog) warningField.get(controls);
+            android.app.Dialog renewal = (android.app.Dialog) warningField.get(controls);
             check(renewal != confirmation, "renewal reused a dismissed warning");
             runSafelyOnMainSync(() -> check(renewal != null && renewal.isShowing(), "renewal warning not shown"));
-            runSafelyOnMainSync(() -> renewal.getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick());
+            runSafelyOnMainSync(() -> renewal.findViewById(android.R.id.button1).performClick());
             // AlertController posts button callbacks to the main message queue.
             waitForIdleSync();
             check(DiagnosticLog.isTroubleshootingEnabled(directory), "renewal did not enable detailed mode");
@@ -371,8 +385,8 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             check(!DiagnosticLog.isTroubleshootingEnabled(directory), "toggle off did not revoke");
             runSafelyOnMainSync(() -> ((CompoundButton) current.findViewById(R.id.switch_troubleshooting)).setChecked(true));
             check(!DiagnosticLog.isTroubleshootingEnabled(directory), "day choice bypassed consent warning");
-            androidx.appcompat.app.AlertDialog dayWarning = (androidx.appcompat.app.AlertDialog) warningField.get(controls);
-            runSafelyOnMainSync(() -> dayWarning.getButton(android.content.DialogInterface.BUTTON_NEUTRAL).performClick());
+            android.app.Dialog dayWarning = (android.app.Dialog) warningField.get(controls);
+            runSafelyOnMainSync(() -> dayWarning.findViewById(android.R.id.button3).performClick());
             waitForIdleSync();
             check(DiagnosticLog.isTroubleshootingEnabled(directory), "day confirmation did not enable");
             java.nio.ByteBuffer dayLease = java.nio.ByteBuffer.wrap(Files.readAllBytes(lease.toPath()));

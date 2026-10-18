@@ -423,8 +423,9 @@ public class RustInputMethodService extends InputMethodService {
         boolean sameEditorRestart = restarting && inputActive;
         if (!sameEditorRestart) editorGeneration++;
         super.onStartInput(attribute, restarting);
-        inputActive = true;
-        editorSafeForDictation = attribute != null
+        inputActive = attribute != null && ImeTextEdit.isTextEditor(
+                attribute.inputType, attribute.initialSelStart, attribute.fieldId);
+        editorSafeForDictation = inputActive
                 && !ImeTextEdit.isSensitiveEditor(attribute.inputType, attribute.imeOptions);
         if (!editorSafeForDictation) unbindLongRecordingState();
         if (isRecording && (!sameEditorRestart || !editorSafeForDictation)) {
@@ -435,8 +436,9 @@ public class RustInputMethodService extends InputMethodService {
     @Override
     public void onStartInputView(EditorInfo info, boolean restarting) {
         super.onStartInputView(info, restarting);
-        inputActive = true;
-        editorSafeForDictation = info != null
+        inputActive = info != null && ImeTextEdit.isTextEditor(
+                info.inputType, info.initialSelStart, info.fieldId);
+        editorSafeForDictation = inputActive
                 && !ImeTextEdit.isSensitiveEditor(info.inputType, info.imeOptions);
         if (isRecording && !recordingSession.canCommitTo(
                 getCurrentInputConnection(), editorGeneration,
@@ -983,9 +985,9 @@ public class RustInputMethodService extends InputMethodService {
                     isProcessing && !recoveryPending ? View.VISIBLE : View.GONE);
         }
 
-        // Disable button only during transcription/processing/waiting or fatal errors
+        // A transient model/microphone error must leave an explicit retry available.
         if (recordContainer != null) {
-            boolean disable = !recoveryPending && (isProcessing || isError);
+            boolean disable = !recoveryPending && isProcessing;
             recordContainer.setEnabled(!disable);
             recordContainer.setAlpha(disable ? 0.5f : 1.0f);
         }
@@ -1183,22 +1185,26 @@ public class RustInputMethodService extends InputMethodService {
     // selecting it afterwards (select_transcription setting).
     private boolean commitTranscribedText(InputConnection ic, String committed) {
         try {
+            committed = ImeTextEdit.separateDictation(ic.getTextBeforeCursor(1, 0), committed);
+        } catch (RuntimeException unavailableContext) {
+            // Some editors cannot supply surrounding text; insertion still works.
+        }
+        try {
             if (!ic.commitText(committed, 1)) return false;
-
-            if (!pendingSwitchBack && new File(getFilesDir(), "select_transcription").exists()) {
-                ExtractedText et = ic.getExtractedText(new ExtractedTextRequest(), 0);
-                if (et != null) {
-                    int end = et.selectionStart;
-                    int start = end - committed.length();
-                    if (start >= 0) {
-                        ic.setSelection(start, end);
-                    }
-                }
-            }
-            return true;
         } catch (RuntimeException rejected) {
             return false;
         }
+        // Selection is optional after acknowledged insertion. Its failure must
+        // never mark already-inserted text pending and cause a duplicate retry.
+        try {
+            if (!pendingSwitchBack && new File(getFilesDir(), "select_transcription").exists()) {
+                ExtractedText et = ic.getExtractedText(new ExtractedTextRequest(), 0);
+                ImeTextEdit.Range range = et == null ? null : ImeTextEdit.insertedSelection(
+                        et.startOffset, et.selectionStart, committed.length());
+                if (range != null) ic.setSelection(range.start, range.end);
+            }
+        } catch (RuntimeException optionalSelectionFailed) { }
+        return true;
     }
 
 

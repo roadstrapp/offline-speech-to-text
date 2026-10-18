@@ -127,11 +127,11 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("selectModel(null);", models)
         assets = (ROOT / "src/assets.rs").read_text()
         marker_branch = assets[assets.index("if marker_file.exists()"):
-                               assets.index("// Incomplete or missing")]
+                               assets.index("let _lock = ExtractionLock::acquire")]
         self.assertIn("find_gguf(&model_dir)", marker_branch)
         self.assertIn("re-extracting", marker_branch)
-        self.assertLess(assets.index("let model_path = match find_gguf(&model_dir) {"),
-                        assets.index('std::fs::write(&marker_file, "ok")?;'))
+        self.assertLess(assets.index("find_gguf(&tmp_model_dir)?;"),
+                        assets.index('std::fs::write(tmp_model_dir.join(EXTRACTION_COMPLETE_MARKER), "ok")?;'))
         inventory = (ROOT / "app/src/main/java/dev/notune/transcribe/SpeechModelInventory.java").read_text()
         self.assertIn('new File(filesDir, "builtin-model")', inventory)
         self.assertIn('new File(directory, ".extraction_complete")', inventory)
@@ -434,7 +434,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         missing_asset_guard = assets.index(
             "list_asset_children(env, &asset_manager_obj, BUILTIN_MODEL_DIR)?.is_empty()")
         recursive_copy = assets.index(
-            "copy_assets_recursively(env, &asset_manager_obj, BUILTIN_MODEL_DIR, &base_path)")
+            "copy_assets_recursively(env, &asset_manager_obj, BUILTIN_MODEL_DIR, tmp_root)")
         self.assertLess(missing_asset_guard, recursive_copy)
         self.assertIn("no bundled model is packaged in this build", assets)
         self.assertIn("env.exception_clear()", assets)

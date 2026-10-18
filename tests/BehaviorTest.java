@@ -42,6 +42,7 @@ public final class BehaviorTest {
         verifiedModelLabelsRequirePersistedProvenance();
         setupStatesAreExplicit();
         imeEditorSafetyIsFailClosed();
+        imeInsertionHandlesPlaceholdersSpacingAndExtractedOffsets();
         recordingSessionTracksTheSafeEditorLifecycleNotWrapperIdentity();
         deletePreviewMovesByWholeGraphemeClusters();
         deletePreviewExtendsAnExistingSelectionByCluster();
@@ -605,6 +606,21 @@ public final class BehaviorTest {
                 "numeric passwords reject dictation");
         assertEquals(false, ImeTextEdit.isSensitiveEditor(0x00000001, 0x01000000),
                 "private no-learning fields allow content-free local dictation");
+    }
+
+    private static void imeInsertionHandlesPlaceholdersSpacingAndExtractedOffsets() {
+        assertEquals(false, ImeTextEdit.isTextEditor(0, -1, 0), "placeholder is not an editor");
+        assertEquals(true, ImeTextEdit.isTextEditor(0, -1, 42), "terminal view retains dictation");
+        assertEquals(true, ImeTextEdit.isTextEditor(1, -1, 0), "text editor may omit selection");
+        assertEquals(" Weather ", ImeTextEdit.separateDictation("r", "Weather "), "separate adjacent words");
+        assertEquals("Weather ", ImeTextEdit.separateDictation(" ", "Weather "), "existing separator");
+        assertEquals(" Weather ", ImeTextEdit.separateDictation("r", " Weather "), "preserve leading whitespace");
+        assertEquals("Weather ", ImeTextEdit.separateDictation(null, "Weather "), "missing cursor context");
+        assertEquals(new ImeTextEdit.Range(1010, 1020), ImeTextEdit.insertedSelection(1000, 20, 10),
+                "selection uses absolute extracted offset");
+        assertEquals(true, ImeTextEdit.insertedSelection(0, -1, 10) == null, "unknown selection is skipped");
+        assertEquals(true, ImeTextEdit.insertedSelection(0, 2, 10) == null, "negative range is skipped");
+        assertEquals(true, ImeTextEdit.insertedSelection(Integer.MAX_VALUE, 2, 1) == null, "overflow is skipped");
     }
 
     private static void recordingSessionTracksTheSafeEditorLifecycleNotWrapperIdentity() {
