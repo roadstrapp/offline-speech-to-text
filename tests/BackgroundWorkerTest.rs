@@ -218,6 +218,7 @@ mod engine {
             &mut self,
             job: &mut TranscriptionJob,
             samples: &[f32],
+            pad_final: bool,
         ) -> Result<(), String> {
             let windows = self
                 .limit
@@ -226,7 +227,7 @@ mod engine {
             assert!(job.count < windows.len());
             for (index, window) in windows.iter().enumerate().skip(job.count) {
                 let mut audio = samples[window.clone()].to_vec();
-                if index + 1 < windows.len() {
+                if index + 1 < windows.len() || pad_final {
                     audio_finalization::append_final_decode_silence(&mut audio);
                 }
                 let text = self.decode(&audio)?;
@@ -465,6 +466,18 @@ fn short_audio_and_whisper_never_decode_during_capture() {
         assert_eq!(prepared, 0);
         assert_eq!(control.0.lock().unwrap().calls, 1);
     }
+}
+
+#[test]
+fn final_padding_cannot_create_an_extra_window_below_raw_audio_limit() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    let limit = 59 * 16_000 + 8_000;
+    let (worker, capture, control) = setup(Some(limit), None, None, false);
+    // 59.2s fits the raw59.5s budget; adding500ms before planning used to split it.
+    capture.lock().unwrap().push(&vec![0.25; 59 * 16_000 + 3_200]);
+    let (_, prepared) = finish(&worker, &capture);
+    assert_eq!(prepared, 0);
+    assert_eq!(control.0.lock().unwrap().calls, 1);
 }
 
 #[test]

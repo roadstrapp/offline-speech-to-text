@@ -107,7 +107,7 @@ fn ensure_job(s: &mut FileSession) -> Result<usize, String> {
         .map_err(|_| "model unavailable")?
         .file_window_limit())
 }
-fn piece(s: &mut FileSession, audio: &[f32], intermediate: bool) -> Result<(), String> {
+fn piece(s: &mut FileSession, audio: &[f32]) -> Result<(), String> {
     let _permit = engine::INFERENCE_GATE.acquire(false);
     s.engine
         .as_ref()
@@ -117,7 +117,7 @@ fn piece(s: &mut FileSession, audio: &[f32], intermediate: bool) -> Result<(), S
         .decode_window(
             s.job.as_mut().unwrap(),
             audio,
-            intermediate,
+            true,
             &mut s.assembled,
         )
 }
@@ -151,7 +151,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_TranscribeFileActivity_
             if cancelled.load(Ordering::SeqCst) {
                 return Ok(());
             }
-            piece(&mut s, &audio, true)?;
+            piece(&mut s, &audio)?;
             if !cancelled.load(Ordering::SeqCst) {
                 let text =
                     Engine::finish_file_job(s.job.as_ref().unwrap().clone(), s.assembled.clone());
@@ -192,7 +192,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_TranscribeFileActivity_
         ensure_job(&mut s)?;
         let tail = s.buffer.finish();
         if !tail.is_empty() {
-            piece(&mut s, &tail, false)?;
+            piece(&mut s, &tail)?;
         }
         Ok(Engine::finish_file_job(
             s.job.take().unwrap(),

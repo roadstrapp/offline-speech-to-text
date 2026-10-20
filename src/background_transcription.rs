@@ -15,7 +15,6 @@ use std::time::Instant;
 use crossbeam_channel::{Receiver, Sender};
 use jni::objects::GlobalRef;
 
-use crate::audio_finalization::append_final_decode_silence;
 use crate::background_chunking::CaptureBuffer;
 use crate::engine;
 
@@ -356,7 +355,7 @@ fn worker_loop(
             return;
         }
 
-        let (mut audio, total_samples, stop_started) = match command {
+        let (audio, total_samples, stop_started) = match command {
             Command::Finish(audio, total_samples, started) => (audio, total_samples, started),
             Command::Cancel => unreachable!(),
             Command::Prepare => unreachable!(),
@@ -371,7 +370,6 @@ fn worker_loop(
             });
             return;
         }
-        append_final_decode_silence(&mut audio);
 
         let created_during_capture = prepared.is_some();
         let result = prepared
@@ -461,7 +459,7 @@ fn transcribe_complete(
         engine
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .transcribe_into(job, audio)
+            .transcribe_into(job, audio, true)
     }))
     .unwrap_or_else(|_| Err("transcription failed unexpectedly, please try again".to_string()))
 }

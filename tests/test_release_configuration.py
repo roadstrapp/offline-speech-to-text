@@ -612,15 +612,15 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("FINAL_DECODE_SILENCE_MS: usize = 500", helper)
         self.assertIn("if samples.is_empty()", helper)
         self.assertIn("samples.resize", helper)
-        self.assertEqual(1, background.count("append_final_decode_silence(&mut audio)"))
+        self.assertNotIn("append_final_decode_silence(&mut audio)", background)
         # Only a private bounded preparation snapshot may be shortened; never
         # truncate the complete Finish recording.
-        finalization = background[background.index("let (mut audio, total_samples, stop_started)"):]
+        finalization = background[background.index("let (audio, total_samples, stop_started)"):]
         self.assertNotIn("audio.truncate", finalization)
         self.assertIn("buffer.window_snapshot(next_sample, limit)", background)
         self.assertNotIn("retry_complete_recording", background)
-        self.assertLess(background.index("append_final_decode_silence(&mut audio)"),
-                        background.index("transcribe_complete(&eng"))
+        engine = (ROOT / "src/engine.rs").read_text()
+        self.assertIn("index + 1 < windows.len() || pad_final", engine)
 
     def test_complete_dictation_is_never_split_on_a_pause(self):
         capture = (ROOT / "src/background_chunking.rs").read_text()
@@ -1060,7 +1060,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertLess(prompt_snapshot,
                         engine.index("TranscriptionJob {", prompt_snapshot))
         self.assertIn("let mut job = self.begin_transcription()", engine)
-        self.assertIn("self.transcribe_into(&mut job, &samples)?", engine)
+        self.assertIn("self.transcribe_into(&mut job, &samples, false)?", engine)
         self.assertIn("custom-term list", native_terms)
         self.assertNotIn("log::", native_terms)
         self.assertIn('@+id/personal_corrections_enabled', editor_layout)

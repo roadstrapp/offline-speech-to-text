@@ -224,7 +224,7 @@ impl Engine {
     /// their safe compute bound.
     pub fn transcribe(&mut self, samples: Vec<f32>) -> Result<String, String> {
         let mut job = self.begin_transcription();
-        self.transcribe_into(&mut job, &samples)?;
+        self.transcribe_into(&mut job, &samples, false)?;
         Ok(job.finish())
     }
 
@@ -254,11 +254,13 @@ impl Engine {
         }
     }
 
-    /// Adds one complete utterance to a message job.
+    /// Plans windows over raw audio; final-only silence never creates a boundary.
+    /// Partial subtitle decoding passes false to preserve its existing latency contract.
     pub(crate) fn transcribe_into(
         &mut self,
         job: &mut TranscriptionJob,
         samples: &[f32],
+        pad_final: bool,
     ) -> Result<(), String> {
         if let Some(max_window_samples) = self.bounded_window_samples {
             let windows = crate::long_audio::windows(samples, max_window_samples);
@@ -278,12 +280,20 @@ impl Engine {
                 self.decode_window(
                     job,
                     &samples[window.clone()],
-                    index + 1 < windows.len(),
+                    index + 1 < windows.len() || pad_final,
                     &mut assembled,
                 )?;
             }
             append_piece(&mut job.text, &assembled);
         } else {
+            let mut audio;
+            let samples = if pad_final {
+                audio = samples.to_vec();
+                crate::audio_finalization::append_final_decode_silence(&mut audio);
+                audio.as_slice()
+            } else {
+                samples
+            };
             let transcript = self.run(samples, &job.run_ext)?;
             if !transcript.text.trim().is_empty() {
                 job.english_output &= self.output_is_english(transcript.language.as_deref());
