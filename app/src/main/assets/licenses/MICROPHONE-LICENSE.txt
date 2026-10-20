@@ -1,0 +1,4 @@
+Microphone path: Google Material Design Icons, av/mic/materialicons/24px.svg.
+Source: https://github.com/google/material-design-icons
+License: Apache License 2.0. Copyright Google LLC.
+Modifications: white fill, centered uniform scale on a black circular background.

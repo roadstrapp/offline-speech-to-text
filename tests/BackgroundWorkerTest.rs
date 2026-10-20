@@ -99,6 +99,7 @@ mod long_audio;
 #[derive(Default)]
 struct Control {
     calls: usize,
+    decoded_lengths: Vec<usize>,
     refreshes: usize,
     panic_on_refresh: bool,
     entered: bool,
@@ -173,6 +174,7 @@ mod engine {
             let (state, changed) = &*self.control;
             let mut state = state.lock().unwrap();
             state.calls += 1;
+            state.decoded_lengths.push(samples.len());
             let call = state.calls;
             state.entered = true;
             changed.notify_all();
@@ -477,7 +479,9 @@ fn final_padding_cannot_create_an_extra_window_below_raw_audio_limit() {
     capture.lock().unwrap().push(&vec![0.25; 59 * 16_000 + 3_200]);
     let (_, prepared) = finish(&worker, &capture);
     assert_eq!(prepared, 0);
-    assert_eq!(control.0.lock().unwrap().calls, 1);
+    let state = control.0.lock().unwrap();
+    assert_eq!(state.calls, 1);
+    assert_eq!(state.decoded_lengths, vec![59 * 16_000 + 3_200 + 8_000]);
 }
 
 #[test]

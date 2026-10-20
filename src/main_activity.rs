@@ -148,14 +148,13 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_MainActivity_verifyPrep
             let limit = guard
                 .background_window_limit()
                 .ok_or("bounded model required")?;
-            let final_audio = audio.clone();
-            let windows = crate::long_audio::windows(&final_audio, limit);
+            let windows = crate::long_audio::windows(&audio, limit);
             if windows.len() < 2 {
                 return Err("long fixture required".into());
             }
             let mut deferred = guard.begin_transcription();
             let started = std::time::Instant::now();
-            guard.transcribe_into(&mut deferred, &final_audio, true)?;
+            guard.transcribe_into(&mut deferred, &audio, true)?;
             let expected = deferred.finish();
             let deferred_ms = started.elapsed().as_millis() as i64;
             let mut early = guard.begin_transcription();
@@ -171,7 +170,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_MainActivity_verifyPrep
             }
             let prepare_ms = started.elapsed().as_millis() as i64;
             let started = std::time::Instant::now();
-            guard.transcribe_into(&mut early, &final_audio, true)?;
+            guard.transcribe_into(&mut early, &audio, true)?;
             let actual = early.finish();
             let stop_ms = started.elapsed().as_millis() as i64;
             Ok(vec![
