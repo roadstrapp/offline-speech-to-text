@@ -286,3 +286,12 @@ fn mixed_letter_digit_names_restore_only_exact_whole_tokens() {
     }
     assert_eq!(apply("123", &["456"]), "123");
 }
+
+#[test]
+fn greek_phrases_use_the_same_contextual_lowercase_as_single_words() {
+    assert_eq!(apply("ΚΌΣΜΟΣ ΝΈΟΣ", &["Κόσμος Νέος"]), "Κόσμος Νέος");
+    assert_eq!(
+        apply("\"ΚΌΣΜΟΣ ΝΈΟΣ\"", &["Κόσμος Νέος"]),
+        "\"ΚΌΣΜΟΣ ΝΈΟΣ\""
+    );
+}

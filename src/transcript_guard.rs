@@ -82,16 +82,23 @@ pub(crate) fn right_boundary(text: &str, offset: usize) -> bool {
 }
 
 /// Match lowercase scalars without slicing a Unicode lowercase expansion.
+/// Capital sigma needs whole-candidate context, just like the saved spelling's
+/// String::to_lowercase; scalar lowercase alone always produces medial sigma.
 pub(crate) fn match_folded(text: &str, start: usize, folded: &str) -> Option<usize> {
     let mut expected = folded.chars();
+    let mut has_capital_sigma = false;
     for (relative, ch) in text[start..].char_indices() {
+        has_capital_sigma |= ch == 'Σ';
         for lower in ch.to_lowercase() {
-            if expected.next()? != lower {
+            let wanted = expected.next()?;
+            if wanted != lower && !(ch == 'Σ' && wanted == 'ς') {
                 return None;
             }
         }
         if expected.clone().next().is_none() {
-            return Some(start + relative + ch.len_utf8());
+            let end = start + relative + ch.len_utf8();
+            return (!has_capital_sigma || text[start..end].to_lowercase() == folded)
+                .then_some(end);
         }
     }
     None

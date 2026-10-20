@@ -120,3 +120,16 @@ fn long_protected_tokens_and_many_quotes_remain_unchanged() {
     );
     assert_eq!(personal_corrections::apply(&input, &rules), expected);
 }
+
+#[test]
+fn contextual_greek_lowercase_matches_whole_source_and_preserves_literals() {
+    let rules = personal_corrections::parse("κόσμος => Planète\n").unwrap();
+    assert_eq!(
+        personal_corrections::apply("ΚΌΣΜΟΣ και κόσμος", &rules),
+        "Planète και Planète"
+    );
+    assert_eq!(
+        personal_corrections::apply("κόσμοσι \"ΚΌΣΜΟΣ\" /ΚΌΣΜΟΣ", &rules),
+        "κόσμοσι \"ΚΌΣΜΟΣ\" /ΚΌΣΜΟΣ"
+    );
+}
