@@ -332,13 +332,13 @@ public class RustInputMethodService extends InputMethodService {
                 // Check microphone permission
                 if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
                         != PackageManager.PERMISSION_GRANTED) {
-                    if (statusView != null) statusView.setText("No mic permission - grant in app");
+                    if (statusView != null) setStatusText("No mic permission - grant in app");
                     if (hintView != null) hintView.setText("Open the app to grant permission");
                     return;
                 }
 
                 if (!editorSafeForDictation || !inputActive || getCurrentInputConnection() == null) {
-                    if (statusView != null) statusView.setText(R.string.ime_sensitive_field);
+                    if (statusView != null) setStatusText(R.string.ime_sensitive_field);
                     if (hintView != null) hintView.setText(R.string.ime_sensitive_field);
                     return;
                 }
@@ -356,7 +356,7 @@ public class RustInputMethodService extends InputMethodService {
             recordContainer.setOnLongClickListener(v -> {
                 if (!editorSafeForDictation || !inputActive
                         || getCurrentInputConnection() == null) {
-                    if (statusView != null) statusView.setText(R.string.ime_sensitive_field);
+                    if (statusView != null) setStatusText(R.string.ime_sensitive_field);
                     if (hintView != null) hintView.setText(R.string.ime_sensitive_field);
                     return true;
                 }
@@ -552,10 +552,10 @@ public class RustInputMethodService extends InputMethodService {
         }
         if (statusView != null) {
             switch (states[ordinal]) {
-                case STARTING: statusView.setText("Preparing long recording"); break;
-                case RECORDING: statusView.setText("Long recording active · use notification controls"); break;
-                case TRANSCRIBING: statusView.setText("Long recording is transcribing"); break;
-                default: statusView.setText("Long recording is stopping"); break;
+                case STARTING: setStatusText("Preparing long recording"); break;
+                case RECORDING: setStatusText("Long recording active · use notification controls"); break;
+                case TRANSCRIBING: setStatusText("Long recording is transcribing"); break;
+                default: setStatusText("Long recording is stopping"); break;
             }
         }
         if (hintView != null) hintView.setText("Transcript returns only to private review");
@@ -578,7 +578,7 @@ public class RustInputMethodService extends InputMethodService {
         releasePauseAudio();
         updateRecordButtonUI(false);
         lastStatus = "Ready";
-        if (statusView != null) statusView.setText(R.string.ime_recording_discarded);
+        if (statusView != null) setStatusText(R.string.ime_recording_discarded);
     }
 
     private void toggleRecordingPaused() {
@@ -649,7 +649,7 @@ public class RustInputMethodService extends InputMethodService {
             if (switchAfterEmptyStop) {
                 switchToOtherInputMethod();
             } else if (!lifecycleHandoff && statusView != null) {
-                statusView.setText(R.string.ime_no_audio_captured);
+                setStatusText(R.string.ime_no_audio_captured);
             }
             return;
         }
@@ -698,7 +698,7 @@ public class RustInputMethodService extends InputMethodService {
             if (backspaceButton != null) {
                 backspaceButton.announceForAccessibility("Selection preview unavailable");
             }
-            if (statusView != null) statusView.setText("Selection preview unavailable");
+            if (statusView != null) setStatusText("Selection preview unavailable");
             return;
         }
         deletePreviewActive = true;
@@ -868,7 +868,7 @@ public class RustInputMethodService extends InputMethodService {
         tintRecordButton(recording);
         if (recording) {
             if (statusView != null) {
-                statusView.setText(recordingPaused ? "Paused" : "Listening...");
+                setStatusText(recordingPaused ? "Paused" : "Listening...");
             }
             if (hintView != null) hintView.setText("Pause, cancel, or insert");
         } else {
@@ -885,7 +885,7 @@ public class RustInputMethodService extends InputMethodService {
                 recordingPaused ? R.string.ime_resume_recording : R.string.ime_pause_recording));
         pauseResumeButton.setSelected(recordingPaused);
         if (isRecording && statusView != null) {
-            statusView.setText(recordingPaused ? "Paused" : "Listening...");
+            setStatusText(recordingPaused ? "Paused" : "Listening...");
         }
     }
 
@@ -960,6 +960,17 @@ public class RustInputMethodService extends InputMethodService {
         });
     }
 
+    private void setStatusText(int resource) {
+        setStatusText(getString(resource));
+    }
+
+    private void setStatusText(CharSequence text) {
+        // The polite live region announces phase changes, not repeated redraws.
+        if (statusView != null && !android.text.TextUtils.equals(statusView.getText(), text)) {
+            statusView.setText(text);
+        }
+    }
+
     private void updateUiState() {
         boolean recoveryPending = hasPendingTranscriptRecovery();
         boolean isWaiting = NativeStatus.isWaiting(lastStatus);
@@ -970,13 +981,13 @@ public class RustInputMethodService extends InputMethodService {
         // Don't show internal loading states to the user
         if (statusView != null && !isRecording) {
             if (recoveryPending) {
-                statusView.setText(R.string.ime_recovery_ready);
+                setStatusText(R.string.ime_recovery_ready);
             } else if (isError) {
-                statusView.setText(lastStatus);
+                setStatusText(lastStatus);
             } else if (isProcessing) {
-                statusView.setText("Processing...");
+                setStatusText("Processing...");
             } else {
-                statusView.setText(R.string.ime_tap_to_record);
+                setStatusText(R.string.ime_tap_to_record);
             }
         }
 
@@ -1024,7 +1035,7 @@ public class RustInputMethodService extends InputMethodService {
                 // Nothing recognized — don't insert a stray space.
                 recordingSession.finish();
                 updateRecordButtonUI(false);
-                if (statusView != null) statusView.setText(R.string.ime_tap_to_record);
+                if (statusView != null) setStatusText(R.string.ime_tap_to_record);
                 if (pauseAudioActive) {
                     audioPauser.abandon(this);
                     pauseAudioActive = false;
@@ -1095,7 +1106,7 @@ public class RustInputMethodService extends InputMethodService {
             // of opening OSTT over the app or declaring the result lost.
             processingResult = true;
             lastStatus = "Processing...";
-            if (statusView != null) statusView.setText(R.string.ime_waiting_for_composer);
+            if (statusView != null) setStatusText(R.string.ime_waiting_for_composer);
             mainHandler.postDelayed(
                     () -> deliverStagedTranscription(text, staged, attempt + 1),
                     DELIVERY_RETRY_DELAY_MS);
@@ -1118,7 +1129,7 @@ public class RustInputMethodService extends InputMethodService {
         if (!inserted) {
             pendingSwitchBack = false;
             if (staged) {
-                if (statusView != null) statusView.setText(R.string.ime_recovery_ready);
+                if (statusView != null) setStatusText(R.string.ime_recovery_ready);
             } else {
                 EmergencyTranscriptBuffer.putIfEmpty(text);
                 copyEmergencyTranscript(text);
@@ -1130,12 +1141,12 @@ public class RustInputMethodService extends InputMethodService {
     private void finishTranscriptDelivery(boolean inserted, boolean recoveryCleared) {
         if (inserted && !recoveryCleared) {
             String message = getString(R.string.ime_recovery_inserted_clear_failed);
-            if (statusView != null) statusView.setText(message);
+            if (statusView != null) setStatusText(message);
             Toast.makeText(getApplicationContext(), message, Toast.LENGTH_LONG).show();
         }
         updateRecordButtonUI(false);
         if (inserted && statusView != null && recoveryCleared) {
-            statusView.setText(R.string.ime_tap_to_record);
+            setStatusText(R.string.ime_tap_to_record);
         }
         if (inserted && pendingSwitchBack) {
             pendingSwitchBack = false;
@@ -1172,7 +1183,7 @@ public class RustInputMethodService extends InputMethodService {
         try {
             if (TranscriptClipboard.copy(this, text)) {
                 String message = getString(R.string.ime_recovery_storage_failed);
-                if (statusView != null) statusView.setText(message);
+                if (statusView != null) setStatusText(message);
                 Toast.makeText(getApplicationContext(), message, Toast.LENGTH_LONG).show();
             }
         } catch (RuntimeException ignored) {

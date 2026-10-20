@@ -246,7 +246,7 @@
     <string name="custom_terms_hints_title">Preferred words</string>
     <string name="custom_terms_hint">One preferred word or phrase per line</string>
     <string name="custom_terms_support_whisper">Whisper uses the first words or phrases as recognition hints, then restores exact and close spellings after transcription.</string>
-    <string name="custom_terms_support_unavailable">Parakeet restores exact preferred words and phrases after transcription, plus close single-word spellings and a few known spoken forms. Other errors need an exact correction.</string>
+    <string name="custom_terms_support_unavailable">Parakeet applies dictionary spellings after recognition. Names with letters and digits support exact matching; symbol names and other recognition errors need an exact correction. English filler cleanup needs English selected in model language settings.</string>
     <string name="custom_terms_support_unknown">All models restore exact and close spellings afterward; Whisper also uses the first terms as recognition hints.</string>
     <string name="custom_dictionary_summary">%1$d preferred terms · %2$d exact corrections (%3$s)</string>
     <string name="personal_corrections_on">on</string>

@@ -269,3 +269,20 @@ fn spaced_quotes_and_unknown_compound_names_stay_literal() {
     }
     assert_eq!(apply("helibord’s", &["HeliBoard"]), "HeliBoard’s");
 }
+
+#[test]
+fn mixed_letter_digit_names_restore_only_exact_whole_tokens() {
+    let terms = &["Model7", "B2B", "3D", "RX-7"];
+    assert_eq!(apply("model7 b2b 3d rx-7", terms), "Model7 B2B 3D RX-7");
+    for text in [
+        "model8 model77 b3b 4d rx-8",
+        "premodel7 model7x x3d",
+        "folder/model7 folder\\b2b",
+        "model7.example user@b2b.example",
+        "`model7 b2b`",
+        "model7-variant",
+    ] {
+        assert_eq!(apply(text, terms), text);
+    }
+    assert_eq!(apply("123", &["456"]), "123");
+}

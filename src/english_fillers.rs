@@ -1,7 +1,10 @@
 //! Small, conservative final-text cleanup for known-English dictation.
 //!
-//! Do not run this on an unknown-language transcript: `uh` can be meaningful
+//! Do not run this on an unknown-language transcript: `uh` and `um` can be meaningful
 //! elsewhere, and the recognizer may not report a language in automatic mode.
+
+use crate::transcript_guard::ProtectedText;
+use std::ops::Range;
 
 pub(crate) fn is_english_tag(tag: &str) -> bool {
     tag.eq_ignore_ascii_case("en")
@@ -24,15 +27,20 @@ pub(crate) fn known_english_output(
             .unwrap_or(english_only_model)
 }
 
-pub(crate) fn remove_uh_owned(text: String) -> String {
+#[cfg(test)]
+pub(crate) fn remove_fillers_owned(text: String) -> String {
+    remove_with_protected_owned(text, &[])
+}
+
+pub(crate) fn remove_with_protected_owned(text: String, protected: &[Range<usize>]) -> String {
     if !text
         .as_bytes()
         .windows(2)
-        .any(|pair| pair.eq_ignore_ascii_case(b"uh"))
+        .any(|pair| pair.eq_ignore_ascii_case(b"uh") || pair.eq_ignore_ascii_case(b"um"))
     {
         return text;
     }
-    let cleaned = remove_uh(&text);
+    let cleaned = remove_with_protected(&text, protected);
     if cleaned == text {
         text
     } else {
@@ -40,40 +48,29 @@ pub(crate) fn remove_uh_owned(text: String) -> String {
     }
 }
 
-pub(crate) fn remove_uh(text: &str) -> String {
+#[cfg(test)]
+pub(crate) fn remove_fillers(text: &str) -> String {
+    remove_with_protected(text, &[])
+}
+
+fn remove_with_protected(text: &str, protected: &[Range<usize>]) -> String {
     let mut output = String::with_capacity(text.len());
     let mut copy_from = 0;
     let mut has_prefix_content = false;
     let mut removed_initial_capitalized_filler = false;
-    let mut double_quote = false;
-    let mut single_quote = false;
+    let guard = ProtectedText::new(text, protected);
+    let mut can_capitalize_next = true;
 
     for (start, character) in text.char_indices() {
-        if start < copy_from {
-            continue;
-        }
-        match character {
-            '"' => double_quote = !double_quote,
-            '“' => double_quote = true,
-            '”' => double_quote = false,
-            '‘' => single_quote = true,
-            '’' if !apostrophe_inside_word(text, start, character.len_utf8()) => {
-                single_quote = false
-            }
-            '\'' if !apostrophe_inside_word(text, start, character.len_utf8()) => {
-                single_quote = !single_quote
-            }
-            _ => {}
-        }
-        if double_quote || single_quote || !matches!(character, 'u' | 'U') {
+        if start < copy_from || !matches!(character, 'u' | 'U') {
             continue;
         }
         let Some(word) = text.get(start..start + 2) else {
             continue;
         };
-        if word.eq_ignore_ascii_case("UH")
+        if matches!(word, "uh" | "Uh" | "um" | "Um")
             && is_standalone(text, start, start + 2)
-            && !is_protected_token(text, start)
+            && guard.allows(start, start + 2)
         {
             let paired_brackets = (text[..start].ends_with('(')
                 && text[start + 2..].starts_with(')'))
@@ -117,11 +114,19 @@ pub(crate) fn remove_uh(text: &str) -> String {
                     end += text[end..].chars().next().unwrap().len_utf8();
                 }
             }
+            if !has_prefix_content {
+                can_capitalize_next = text[end..]
+                    .char_indices()
+                    .find(|(_, next)| !next.is_whitespace())
+                    .is_none_or(|(relative, next)| {
+                        guard.allows(end + relative, end + relative + next.len_utf8())
+                    });
+            }
             copy_from = end;
         }
     }
     output.push_str(&text[copy_from..]);
-    if removed_initial_capitalized_filler {
+    if removed_initial_capitalized_filler && can_capitalize_next {
         // The recognizer capitalizes a filler at the beginning of a sentence.
         // Preserve that sentence case when the filler itself disappears.
         if let Some((index, first)) = output
@@ -157,45 +162,6 @@ fn is_word_or_hyphen(character: char) -> bool {
     character.is_alphanumeric() || matches!(character, '_' | '-' | '‐' | '‑' | '–' | '—')
 }
 
-fn apostrophe_inside_word(text: &str, index: usize, character_bytes: usize) -> bool {
-    text[..index]
-        .chars()
-        .next_back()
-        .is_some_and(char::is_alphanumeric)
-        && text[index + character_bytes..]
-            .chars()
-            .next()
-            .is_some_and(char::is_alphanumeric)
-}
-
-fn is_protected_token(text: &str, index: usize) -> bool {
-    let start = text[..index].rfind(char::is_whitespace).map_or(0, |space| {
-        space + text[space..].chars().next().unwrap().len_utf8()
-    });
-    let end = text[index..]
-        .find(char::is_whitespace)
-        .map_or(text.len(), |space| index + space);
-    let token = &text[start..end];
-    token.contains("://")
-        || token.contains('@')
-        || token.contains('/')
-        || token.contains('\\')
-        || token.char_indices().any(|(index, character)| {
-            character == '.'
-                && token[..index]
-                    .chars()
-                    .next_back()
-                    .is_some_and(char::is_alphanumeric)
-                && token[index + 1..]
-                    .chars()
-                    .next()
-                    .is_some_and(char::is_alphanumeric)
-        })
-        || token
-            .get(..4)
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("www."))
-}
-
 fn is_tight_punctuation(character: char) -> bool {
     matches!(character, '.' | '?' | '!' | ':' | ';' | '…')
 }
@@ -218,13 +184,13 @@ fn trim_end_inline_space(output: &mut String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{known_english_output, remove_uh, remove_uh_owned};
+    use super::{known_english_output, remove_fillers, remove_fillers_owned};
 
     #[test]
     fn unchanged_text_reuses_the_original_allocation() {
         let original = String::from("A different sentence.");
         let original_pointer = original.as_ptr();
-        let cleaned = remove_uh_owned(original);
+        let cleaned = remove_fillers_owned(original);
         assert_eq!(cleaned, "A different sentence.");
         assert_eq!(cleaned.as_ptr(), original_pointer);
     }
@@ -244,40 +210,63 @@ mod tests {
 
     #[test]
     fn removes_standalone_filler_and_its_comma() {
-        assert_eq!(remove_uh("I uh think so"), "I think so");
-        assert_eq!(remove_uh("Well, uh, I agree"), "Well, I agree");
-        assert_eq!(remove_uh("Uh, we should go"), "We should go");
-        assert_eq!(remove_uh("I, uh, think so"), "I, think so");
-        assert_eq!(remove_uh("I think uh."), "I think.");
-        assert_eq!(remove_uh("I said uh: maybe"), "I said: maybe");
-        assert_eq!(remove_uh("I, uh. Okay"), "I. Okay");
-        assert_eq!(remove_uh("Uh. We should go"), "We should go");
-        assert_eq!(remove_uh("Uh... we should go"), "We should go");
-        assert_eq!(remove_uh("Uh, über alles"), "Über alles");
-        assert_eq!(remove_uh("I uh uh agree"), "I agree");
-        assert_eq!(remove_uh("I (uh) think"), "I think");
-        assert_eq!(remove_uh("I [uh] think"), "I think");
-        assert_eq!(remove_uh("I UH agree"), "I agree");
-        assert_eq!(remove_uh("I uh\nthink so"), "I\nthink so");
+        assert_eq!(remove_fillers("I uh think so"), "I think so");
+        assert_eq!(remove_fillers("Well, uh, I agree"), "Well, I agree");
+        assert_eq!(remove_fillers("Uh, we should go"), "We should go");
+        assert_eq!(remove_fillers("I, uh, think so"), "I, think so");
+        assert_eq!(remove_fillers("I think uh."), "I think.");
+        assert_eq!(remove_fillers("I said uh: maybe"), "I said: maybe");
+        assert_eq!(remove_fillers("I, uh. Okay"), "I. Okay");
+        assert_eq!(remove_fillers("Uh. We should go"), "We should go");
+        assert_eq!(remove_fillers("Uh... we should go"), "We should go");
+        assert_eq!(remove_fillers("Uh, über alles"), "Über alles");
+        assert_eq!(remove_fillers("I uh uh agree"), "I agree");
+        assert_eq!(remove_fillers("I (uh) think"), "I think");
+        assert_eq!(remove_fillers("I [uh] think"), "I think");
+        assert_eq!(remove_fillers("I UH agree"), "I UH agree");
+        assert_eq!(remove_fillers("I uh\nthink so"), "I\nthink so");
+    }
+
+    #[test]
+    fn removes_um_without_changing_literal_or_meaningful_tokens() {
+        assert_eq!(remove_fillers("Um, we um should uh go."), "We should go.");
+        assert_eq!(remove_fillers("I (um) think"), "I think");
+        for text in [
+            "um",
+            "Um, uh.",
+            "umbrella hum umber",
+            "um-hum",
+            "'um'",
+            "`uh um`",
+            "Use `uh` and `um` here",
+            "https://example.org/um",
+            "folder/um",
+            "um@example.org",
+            "I went to UM last year",
+            "University (UM) and UH",
+            "a ` stray um and uh",
+        ] {
+            assert_eq!(remove_fillers(text), text);
+        }
     }
 
     #[test]
     fn preserves_words_names_quotes_and_addresses() {
         let text = "huh uh-oh Uhuru 'uh' “uh” https://example.org/uh user@uh.example uh.example example.org/uh folder/uh";
-        assert_eq!(remove_uh(text), text);
+        assert_eq!(remove_fillers(text), text);
         assert_eq!(
-            remove_uh("She said \"uh, maybe\""),
+            remove_fillers("She said \"uh, maybe\""),
             "She said \"uh, maybe\""
         );
-        assert_eq!(remove_uh("uh's meaning"), "uh's meaning");
-        assert_eq!(remove_uh("uh’s meaning"), "uh’s meaning");
-        assert_eq!(remove_uh("uh–huh"), "uh–huh");
-        assert_eq!(remove_uh("Uhr umher"), "Uhr umher");
+        assert_eq!(remove_fillers("uh's meaning"), "uh's meaning");
+        assert_eq!(remove_fillers("uh’s meaning"), "uh’s meaning");
+        assert_eq!(remove_fillers("uh–huh"), "uh–huh");
+        assert_eq!(remove_fillers("Uhr umher"), "Uhr umher");
     }
 
     #[test]
     fn never_turns_a_complete_recognition_into_empty_text() {
-        assert_eq!(remove_uh("uh"), "uh");
-        assert_eq!(remove_uh("Uh, uh."), "Uh, uh.");
+        assert_eq!(remove_fillers("uh"), "uh");
+        assert_eq!(remove_fillers("Uh, uh."), "Uh, uh.");
     }
 }

@@ -50,23 +50,12 @@ pub(crate) struct TranscriptionJob {
 
 impl TranscriptionJob {
     pub(crate) fn finish(self) -> String {
-        let raw_text = if self.english_output {
-            crate::english_fillers::remove_uh_owned(self.text)
-        } else {
-            self.text
-        };
-        // Explicit user corrections take precedence over a close-spelling
-        // guess: apply them to the raw model result before preferred words.
-        let (text, protected) = if let Some(rules) = self.corrections.as_deref() {
-            crate::personal_corrections::apply_with_ranges(&raw_text, rules)
-        } else {
-            (raw_text, Vec::new())
-        };
-        if let Some(terms) = self.preferred_terms.as_deref() {
-            crate::preferred_terms::apply_with_protected(&text, terms, &protected)
-        } else {
-            text
-        }
+        crate::transcript_cleanup::finish(
+            self.text,
+            self.english_output,
+            self.preferred_terms.as_deref(),
+            self.corrections.as_deref(),
+        )
     }
 }
 

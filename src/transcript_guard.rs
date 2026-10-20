@@ -113,6 +113,8 @@ fn protected_token(token: &str) -> bool {
     }
     token.contains("://")
         || token.contains('@')
+        || token.contains('/')
+        || token.contains('\\')
         || token.contains('`')
         || token
             .get(..4)

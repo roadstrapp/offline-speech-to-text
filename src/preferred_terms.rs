@@ -5,7 +5,7 @@
 //! only their exact spelling and case, with identical punctuation. Exact correction pairs
 //! remain available for larger or ambiguous recognition errors.
 
-use crate::transcript_guard::{match_folded, right_boundary, ProtectedText};
+use crate::transcript_guard::{left_boundary, match_folded, right_boundary, ProtectedText};
 use std::collections::HashSet;
 use std::ops::Range;
 
@@ -29,13 +29,23 @@ pub(crate) fn apply(text: &str, terms: &[String]) -> String {
     apply_with_protected(text, terms, &[])
 }
 
+#[cfg(test)]
 pub(crate) fn apply_with_protected(
     text: &str,
     terms: &[String],
     protected: &[Range<usize>],
 ) -> String {
+    apply_with_ranges(text, terms, protected).0
+}
+
+/// Return protection in OUTPUT coordinates for the final filler pass.
+pub(crate) fn apply_with_ranges(
+    text: &str,
+    terms: &[String],
+    protected: &[Range<usize>],
+) -> (String, Vec<Range<usize>>) {
     if text.is_empty() || terms.is_empty() {
-        return text.to_string();
+        return (text.to_string(), protected.to_vec());
     }
     let mut words = Vec::new();
     let mut phrases = Vec::new();
@@ -74,13 +84,15 @@ pub(crate) fn apply_with_protected(
         }
     }
     if words.is_empty() && phrases.is_empty() {
-        return text.to_string();
+        return (text.to_string(), protected.to_vec());
     }
     // Longer exact phrases win; a user's exact phrase always beats a known
     // spoken alias of the same length.
     phrases.sort_by_key(|phrase| (std::cmp::Reverse(phrase.char_count), phrase.is_alias));
 
     let mut output = String::with_capacity(text.len());
+    let mut matched_ranges = Vec::new();
+    let mut edits = Vec::new();
     // Reuse the scalar buffer across candidates. Keep String's contextual
     // lowercase rules (for example Greek final sigma) when filling it.
     let mut folded = Vec::new();
@@ -88,6 +100,21 @@ pub(crate) fn apply_with_protected(
     let guard = ProtectedText::new(text, protected);
     while offset < text.len() {
         let ch = text[offset..].chars().next().unwrap();
+        // Exact names may contain digits (or start with one). Match the whole
+        // name before the alphabetic fuzzy-word scan; digits are never guessed.
+        if ch.is_alphanumeric() && left_boundary(text, offset) {
+            if let Some((end, written)) = match_phrase(text, offset, &phrases, &guard) {
+                let output_start = output.len();
+                output.push_str(written);
+                matched_ranges.push(output_start..output.len());
+                edits.push((end, output.len()));
+                if output.len() > text.len().saturating_add(MAX_EXPANSION_BYTES) {
+                    return (text.to_string(), protected.to_vec());
+                }
+                offset = end;
+                continue;
+            }
+        }
         if !ch.is_alphabetic() {
             output.push(ch);
             offset += ch.len_utf8();
@@ -112,14 +139,6 @@ pub(crate) fn apply_with_protected(
                 .is_some_and(|value| value.is_alphanumeric() || value == '_');
         if !guard.allows(start, offset) || joined_to_other_token {
             output.push_str(candidate);
-            continue;
-        }
-        if let Some((phrase_end, written)) = match_phrase(text, start, &phrases, &guard) {
-            output.push_str(written);
-            if output.len() > text.len().saturating_add(MAX_EXPANSION_BYTES) {
-                return text.to_string();
-            }
-            offset = phrase_end;
             continue;
         }
         if compound_component(text, start, offset) {
@@ -168,16 +187,36 @@ pub(crate) fn apply_with_protected(
                 nearby = Some(word.written.as_str());
             }
         }
-        output.push_str(
-            exact
-                .or(if ambiguous { None } else { nearby })
-                .unwrap_or(candidate),
-        );
+        let replacement = exact.or(if ambiguous { None } else { nearby });
+        let output_start = output.len();
+        output.push_str(replacement.unwrap_or(candidate));
+        if replacement.is_some() {
+            matched_ranges.push(output_start..output.len());
+            edits.push((offset, output.len()));
+        }
         if output.len() > text.len().saturating_add(MAX_EXPANSION_BYTES) {
-            return text.to_string();
+            return (text.to_string(), protected.to_vec());
         }
     }
-    output
+    // Explicit replacements cannot overlap edits because the guard rejected
+    // those matches. Remap their offsets using the last preceding edit.
+    let mut inherited = protected.to_vec();
+    inherited.sort_by_key(|range| range.start);
+    let mut edit_index = 0;
+    let mut delta = 0isize;
+    for range in inherited {
+        while let Some(&(input_end, output_end)) = edits.get(edit_index) {
+            if input_end > range.start {
+                break;
+            }
+            delta = output_end as isize - input_end as isize;
+            edit_index += 1;
+        }
+        matched_ranges
+            .push((range.start as isize + delta) as usize..(range.end as isize + delta) as usize);
+    }
+    matched_ranges.sort_by_key(|range| range.start);
+    (output, matched_ranges)
 }
 
 fn match_phrase<'a>(
@@ -202,14 +241,15 @@ fn match_phrase<'a>(
 
 fn exact_name(term: &str) -> bool {
     let chars: Vec<char> = term.chars().collect();
-    chars.iter().enumerate().all(|(index, ch)| {
-        ch.is_alphabetic()
-            || (matches!(ch, ' ' | '-' | '\'' | '‘' | '’')
-                && index > 0
-                && index + 1 < chars.len()
-                && chars[index - 1].is_alphabetic()
-                && chars[index + 1].is_alphabetic())
-    })
+    chars.iter().any(|ch| ch.is_alphabetic())
+        && chars.iter().enumerate().all(|(index, ch)| {
+            ch.is_alphanumeric()
+                || (matches!(ch, ' ' | '-' | '\'' | '‘' | '’')
+                    && index > 0
+                    && index + 1 < chars.len()
+                    && chars[index - 1].is_alphanumeric()
+                    && chars[index + 1].is_alphanumeric())
+        })
 }
 
 fn compound_component(text: &str, start: usize, end: usize) -> bool {
