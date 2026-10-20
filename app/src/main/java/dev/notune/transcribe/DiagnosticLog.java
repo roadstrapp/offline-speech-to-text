@@ -49,7 +49,7 @@ public final class DiagnosticLog {
             "app_start", "app_stop", "app_lifecycle", "service_state",
             "ime_start", "ime_stop", "ime_state",
             "model_state", "model_provenance", "timing", "resource",
-            "notification_state", "error_code", "recognition_outcome", "callback_delivery", "session", "pipeline"));
+            "notification_state", "error_code", "recognition_outcome", "callback_delivery", "session", "pipeline", "window_plan"));
     private static final Pattern UNSIGNED_METADATA = Pattern.compile("[0-9]{1,12}");
     private static final Pattern BATTERY_METADATA = Pattern.compile("[0-9]{1,3}");
     private static final Pattern THERMAL_METADATA = Pattern.compile("[0-6]");
@@ -332,6 +332,8 @@ public final class DiagnosticLog {
                 case "decode_ms":
                 case "postprocess_ms":
                 case "prepared_windows":
+                case "planned_windows":
+                case "raw_window_limit_ms":
                 case "model_warm":
                     safe = UNSIGNED_METADATA.matcher(value).matches();
                     break;

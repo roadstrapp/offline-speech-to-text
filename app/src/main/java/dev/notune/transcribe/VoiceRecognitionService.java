@@ -322,6 +322,11 @@ public class VoiceRecognitionService extends RecognitionService {
         return session == null ? 0L : session.id();
     }
 
+    public void onWindowPlan(long sessionId, long rawLimitMs, int plannedWindows) {
+        TroubleshootingSession session = troubleshooting;
+        if (session != null && session.id() == sessionId) session.windowPlan(rawLimitMs, plannedWindows);
+    }
+
     public void onPipelineMetrics(long sessionId, long prepareMs, long decodeMs, long postprocessMs, long stopWaitMs, int windows, int family, int warm) {
         TroubleshootingSession session = troubleshooting;
         if (session != null && session.id() == sessionId) session.pipeline(prepareMs, decodeMs, postprocessMs, stopWaitMs, windows, family, warm);
@@ -377,6 +382,9 @@ public class VoiceRecognitionService extends RecognitionService {
         public void onTranscriptionMetrics(long audio, long compute, int threads) { deliver(() -> VoiceRecognitionService.this.onTranscriptionMetrics(audio, compute, threads)); }
         public long getTroubleshootingSessionId() { return sessionId; }
         public void onRecognitionOutcome(int reason, long audio) { deliver(() -> VoiceRecognitionService.this.onRecognitionOutcome(reason, audio)); }
+        public void onWindowPlan(long id, long rawLimitMs, int plannedWindows) {
+            deliver(() -> VoiceRecognitionService.this.onWindowPlan(id, rawLimitMs, plannedWindows));
+        }
         public void onPipelineMetrics(long id, long prepare, long decode, long post, long wait, int windows, int family, int warm) {
             deliver(() -> VoiceRecognitionService.this.onPipelineMetrics(id, prepare, decode, post, wait, windows, family, warm));
         }

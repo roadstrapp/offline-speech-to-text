@@ -1059,6 +1059,11 @@ public class RustInputMethodService extends InputMethodService {
         return session == null ? 0L : session.id();
     }
 
+    public void onWindowPlan(long sessionId, long rawLimitMs, int plannedWindows) {
+        TroubleshootingSession session = troubleshooting;
+        if (session != null && session.id() == sessionId) session.windowPlan(rawLimitMs, plannedWindows);
+    }
+
     public void onPipelineMetrics(long sessionId, long prepareMs, long decodeMs, long postprocessMs, long stopWaitMs, int windows, int family, int warm) {
         TroubleshootingSession session = troubleshooting;
         if (session != null && session.id() == sessionId) session.pipeline(prepareMs, decodeMs, postprocessMs, stopWaitMs, windows, family, warm);

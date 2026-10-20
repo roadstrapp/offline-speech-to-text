@@ -44,6 +44,8 @@ pub(crate) struct PipelineMetrics {
     pub postprocess_ms: u64,
     pub stop_wait_ms: u64,
     pub prepared_windows: usize,
+    pub planned_windows: usize,
+    pub raw_window_limit_ms: u64,
     pub model_family: i32,
     pub model_warm: i32,
 }
@@ -76,6 +78,14 @@ pub(crate) fn notify_pipeline(
         )
         .is_err()
     {
+        let _ = env.exception_clear();
+    }
+    // Separate optional callback preserves compatibility with older Java targets.
+    if env.call_method(target, "onWindowPlan", "(JJI)V", &[
+        jni::objects::JValue::Long(metrics.session_id),
+        jni::objects::JValue::Long(metrics.raw_window_limit_ms as i64),
+        jni::objects::JValue::Int(metrics.planned_windows as i32),
+    ]).is_err() {
         let _ = env.exception_clear();
     }
 }
@@ -388,6 +398,15 @@ fn worker_loop(
                     pipeline.model_family = guard.diagnostic_family();
                     if created_during_capture {
                         guard.refresh_final_terms(&mut job);
+                    }
+                    if pipeline.session_id != 0 {
+                        if let Some(limit) = guard.background_window_limit() {
+                            pipeline.raw_window_limit_ms = limit as u64 * 1000 / SAMPLE_RATE;
+                            pipeline.planned_windows = crate::long_audio::windows(&audio, limit).len();
+                        } else {
+                            // App-level plan only: Whisper may window internally.
+                            pipeline.planned_windows = usize::from(!audio.is_empty());
+                        }
                     }
                 }))
                 .map_err(|_| "transcription setup failed unexpectedly".to_string());

@@ -50,6 +50,10 @@ public final class TroubleshootingLeaseTest {
                 "process=ime,session_id=12,cpu_ms=34,battery_pct=99,power=battery,thermal=0");
         DiagnosticLog.troubleshootingEvent(dir, "pipeline",
                 "process=ime,prepare_ms=1,decode_ms=2,postprocess_ms=3,stop_wait_ms=4,prepared_windows=2");
+        DiagnosticLog.troubleshootingEvent(dir, "window_plan",
+                "process=service,session_id=12,raw_window_limit_ms=59500,planned_windows=1");
+        DiagnosticLog.troubleshootingEvent(dir, "window_plan",
+                "planned_windows=private_transcript");
         for (String forbidden : new String[]{"model=secret", "route=secret", "reason=secret", "phase=secret",
                 "transcript=secret", "audio=secret", "editor=secret", "dictionary=secret", "thermal=8"}) {
             DiagnosticLog.troubleshootingEvent(dir, "session", forbidden);
@@ -57,11 +61,14 @@ public final class TroubleshootingLeaseTest {
         assert DiagnosticLog.awaitIdleForTest(5000);
         String log = new String(DiagnosticLog.snapshot(dir), StandardCharsets.UTF_8);
         assert log.contains("cpu_ms=34") && log.contains("prepared_windows=2");
+        assert log.contains("raw_window_limit_ms=59500,planned_windows=1");
+        assert !log.contains("private_transcript");
         assert log.contains("phase=capture,reason=start,elapsed_ms=0");
         assert !log.contains("secret") && !log.contains("thermal=8");
         DiagnosticLog.setTroubleshootingEnabled(dir, false);
         assert !DiagnosticLog.isTroubleshootingEnabled(dir);
         DiagnosticLog.troubleshootingEvent(dir, "session", "session_id=987,phase=capture,reason=start,elapsed_ms=0");
+        DiagnosticLog.troubleshootingEvent(dir, "window_plan", "session_id=987,planned_windows=1");
         assert DiagnosticLog.awaitIdleForTest(5000);
         assert !new String(DiagnosticLog.snapshot(dir), StandardCharsets.UTF_8).contains("session_id=987");
         Path lease = directory.resolve("diagnostic_troubleshooting");

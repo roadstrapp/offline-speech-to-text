@@ -37,6 +37,16 @@ also consume power. Attributing energy use to OSTT requires controlled profiling
 own overhead. Controlled power-rail/system profiling is a separate optional developer
 investigation; the initial report uses the app export. Unsupported readings remain unknown.
 
+The detailed `window_plan` event distinguishes the app's planned decoding windows
+from `prepared_windows`, which counts only work cached during capture. Service
+requests can have zero prepared windows and still need several windows at Stop.
+`raw_window_limit_ms` excludes the final decoder silence; zero means an app limit
+is unavailable or the runtime owns its windowing, as with Whisper.
+`planned_windows` counts app windows, including
+reused ones, rather than native calls or Whisper's internal windows. These fields
+contain no audio or transcript. Computing the plan adds diagnostic overhead only
+while detailed consent is active.
+
 ## Safe background preparation
 
 White Noise feeds serial non-overlapping quiet/size-ended caller chunks while its
