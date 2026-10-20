@@ -47,7 +47,18 @@ final class FileTranscriptionDeviceTest {
                         active.findViewById(R.id.progress_area).getVisibility() == View.GONE
                         && active.findViewById(R.id.btn_copy).getVisibility() == View.VISIBLE
                         && ((TextView) active.findViewById(R.id.txt_result)).length() > 0);
-                if (complete[0]) return;
+                if (complete[0]) {
+                    String[] transcript = new String[1];
+                    test.runOnMainSync(() -> transcript[0] =
+                            ((TextView) active.findViewById(R.id.txt_result)).getText().toString());
+                    // The pinned public JFK fixture ends with this phrase. A
+                    // non-empty result alone did not detect dropped EOF words.
+                    String words = transcript[0].toLowerCase(java.util.Locale.ROOT)
+                            .replaceAll("[^a-z]+", " ").trim();
+                    if (!words.endsWith("for your country"))
+                        throw new AssertionError("shared-file transcription lost the public fixture tail");
+                    return;
+                }
                 SystemClock.sleep(100);
             }
             throw new AssertionError("shared-file transcription did not finish after stale-owner cleanup");
