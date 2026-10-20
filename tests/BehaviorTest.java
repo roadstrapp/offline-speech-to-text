@@ -144,6 +144,8 @@ public final class BehaviorTest {
         Set<String> modelIds = new HashSet<>();
         Set<String> modelFiles = new HashSet<>();
         for (ModelDescriptor candidate : ModelCatalog.verifiedDownloads()) {
+            assertEquals(true, candidate.downloadUrl.matches("https://huggingface\\.co/[^/]+/[^/]+/resolve/[0-9a-f]{40}/.+"),
+                    "every verified model uses an immutable repository revision");
             assertEquals(true, modelIds.add(candidate.id), "catalog model IDs are unique");
             assertEquals(true, modelFiles.add(candidate.fileName),
                     "catalog model filenames are unique");
