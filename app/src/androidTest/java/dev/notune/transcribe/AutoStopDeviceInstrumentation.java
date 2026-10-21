@@ -220,7 +220,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
                 failure.set(error);
             }
         });
-        if (failure.get() != null) throw new AssertionError("main-thread test action failed", failure.get());
+        if (failure.get() != null) throw new AssertionError("main-thread test action failed: " + failure.get(), failure.get());
     }
 
     private void testMainThreadFailureHandling() {
@@ -554,12 +554,22 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
                 check(toolbar.getMenu().findItem(R.id.btn_models_browse).isVisible(), "other-models menu hidden");
                 check(toolbar.getMenu().performIdentifierAction(R.id.btn_models_browse, 0), "catalog menu did not handle action");
                 check(current.findViewById(R.id.card_download_catalog).isShown(), "other models route hidden");
+                android.view.ViewGroup defaultCatalog = current.findViewById(R.id.download_catalog);
+                int defaultRows = 0;
+                for (int i = 0; i < defaultCatalog.getChildCount(); i++) {
+                    if (defaultCatalog.getChildAt(i).findViewById(R.id.btn_download_model) != null) defaultRows++;
+                }
+                check(defaultRows == 3, "default Parakeet filter must show its three tested variants");
+                ((android.widget.Spinner) current.findViewById(R.id.spinner_catalog_family)).setSelection(0);
+            });
+            waitForIdleSync();
+            runSafelyOnMainSync(() -> {
                 android.view.ViewGroup catalog = current.findViewById(R.id.download_catalog);
                 int modelRows = 0;
                 for (int i = 0; i < catalog.getChildCount(); i++) {
                     if (catalog.getChildAt(i).findViewById(R.id.btn_download_model) != null) modelRows++;
                 }
-                check(modelRows == 10, "curated catalogue must expose ten tested models");
+                check(modelRows == 10, "curated catalogue must expose ten tested models; actual=" + modelRows);
                 ((androidx.activity.ComponentActivity) current).getOnBackPressedDispatcher().onBackPressed();
             });
             java.lang.reflect.Field lifecycle = ModelsActivity.class.getDeclaredField("DOWNLOAD_LIFECYCLE");
