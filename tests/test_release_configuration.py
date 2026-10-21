@@ -21,8 +21,12 @@ class ReleaseConfigurationTest(unittest.TestCase):
         gradle_properties = (ROOT / "gradle.properties").read_text()
         workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
         self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
-        self.assertIn("versionCode = 54", gradle)
-        self.assertIn('versionName = "0.18.0"', gradle)
+        code = int(re.search(r"versionCode = (\d+)", gradle).group(1))
+        version = re.search(r'versionName = "(\d+\.\d+\.\d+)"', gradle).group(1)
+        self.assertTrue(version)
+        changelogs = ROOT / "fastlane/metadata/android/en-US/changelogs"
+        self.assertEqual(code, max(int(path.stem) for path in changelogs.glob("*.txt")
+                                   if path.stem.isdigit()))
         self.assertIn('providers.gradleProperty("includeBundledModel")', gradle)
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: false', gradle)
         self.assertIn('ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,', gradle)
@@ -116,11 +120,9 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("included", values["models_builtin_sub"].lower())
         self.assertNotIn("download separately", values["models_builtin_sub"].lower())
         models = (ROOT / "app/src/main/java/dev/notune/transcribe/ModelsActivity.java").read_text()
-        self.assertIn("if (BuildConfig.HAS_BUNDLED_MODEL)", models)
+        self.assertIn("BuildConfig.HAS_BUNDLED_MODEL", models)
         self.assertIn("R.string.models_builtin_sub", models)
         self.assertIn("R.string.models_builtin_retained_sub", models)
-        self.assertIn("models_recommendation_included", models)
-        self.assertIn("models_recommendation_included_available", models)
         self.assertIn("models_included", models)
         self.assertIn("models_use_included", models)
         self.assertIn("if (recommendationUsesBundledModel)", models)
@@ -145,10 +147,10 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertNotIn("findViewById(R.id.text_models_desc)", source)
         self.assertIn("text_model_recommendation", layout)
         self.assertIn("addFamilyHeader(renderedFamily)", source)
-        self.assertIn("largestComfortableInFamily", source)
+        self.assertIn("ModelRecommendation.recommend", source)
         row = (ROOT / "app/src/main/res/layout/item_model_download.xml").read_text()
         self.assertIn("txt_download_model_fit_badge", row)
-        self.assertIn("bg_model_family_recommended", source)
+        self.assertNotIn("bg_model_family_recommended", source)
 
 
     def test_model_helper_copy_stays_dense_in_every_locale(self):
@@ -455,7 +457,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         android = "{http://schemas.android.com/apk/res/android}"
         headings = [node for node in root.iter()
                     if node.attrib.get(android + "accessibilityHeading") == "true"]
-        self.assertEqual(7, len(headings))
+        self.assertEqual(9, len(headings))
         self.assertTrue(all(node.attrib.get(android + "id", "").startswith("@+id/")
                             for node in headings))
 
@@ -501,7 +503,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
             if android + "id" in node.attrib
         }
         for expected in (
-            "@+id/home_content", "@+id/card_setup", "@+id/card_models",
+            "@+id/home_content", "@+id/page_home", "@+id/page_settings",
             "@+id/text_ime_status", "@+id/btn_ime_picker",
             "@+id/btn_ime_settings", "@+id/text_version",
         ):
@@ -509,7 +511,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
 
         main = (ROOT / "app/src/main/java/dev/notune/transcribe/MainActivity.java").read_text()
         layout_text = (ROOT / "app/src/main/res/layout/activity_main.xml").read_text()
-        self.assertLess(layout_text.index('@+id/card_models'), layout_text.index('@+id/card_setup'))
+        self.assertLess(layout_text.index('@+id/page_home'), layout_text.index('@+id/page_settings'))
         self.assertNotIn("homeContent.addView", main)
         self.assertIn("SetupState.microphone", main)
         self.assertIn("SetupState.ime", main)
@@ -539,16 +541,17 @@ class ReleaseConfigurationTest(unittest.TestCase):
         ):
             self.assertIn(f'@+id/{action}', layout_text)
 
-        self.assertIn('@+id/btn_more_settings', layout_text)
-        self.assertIn('@+id/advanced_home_sections', layout_text)
-        self.assertGreater(layout_text.index('@+id/btn_subs_advanced'),
-                           layout_text.index('@+id/advanced_home_sections'))
-        self.assertIn('android:visibility="gone"', layout_text[
-            layout_text.index('@+id/advanced_home_sections'):])
-        main = (ROOT / "app/src/main/java/dev/notune/transcribe/MainActivity.java").read_text()
-        self.assertIn("advancedSections.setVisibility", main)
-
-        self.assertLessEqual(layout_text.count("MaterialCardView"), 14)
+        root = ET.fromstring(layout_text)
+        android = "{http://schemas.android.com/apk/res/android}"
+        home = next(view for view in root.iter()
+                    if view.attrib.get(android + "id") == "@+id/page_home")
+        self.assertFalse(any("Switch" in view.tag for view in home.iter()))
+        for page in ("keyboard", "recording", "privacy", "advanced", "appearance"):
+            node = next(view for view in root.iter()
+                        if view.attrib.get(android + "id") == "@+id/page_" + page)
+            self.assertEqual("gone", node.attrib[android + "visibility"])
+        self.assertIn('@+id/main_navigation', layout_text)
+        self.assertEqual(0, layout_text.count("MaterialCardView"))
 
     def test_home_accessibility_contract_is_explicit_and_dynamic_type_safe(self):
         root = ET.parse(ROOT / "app/src/main/res/layout/activity_main.xml").getroot()
@@ -639,13 +642,13 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("crate::long_audio::MIN_WINDOW_SAMPLES", engine)
         self.assertNotIn("while !rest.is_empty()", engine)
 
-    def test_fixed_amber_palette_and_launcher_icon_have_no_blue_fallback(self):
+    def test_fixed_neutral_palette_preserves_monochrome_launcher(self):
         color_files = [
             ROOT / "app/src/main/res/values/colors.xml",
             ROOT / "app/src/main/res/values-night/colors.xml",
         ]
         combined = "\n".join(path.read_text() for path in color_files)
-        self.assertIn('<color name="colorPrimary">#FFB300</color>', combined)
+        self.assertIn('<color name="colorPrimary">#66D5DB</color>', combined)
         self.assertNotIn("#2196F3", combined.upper())
         self.assertNotIn("#1976D2", combined.upper())
 
@@ -738,7 +741,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
             if path.is_file() and path.suffix in {".xml", ".java", ".kt"}:
                 self.assertNotRegex(path.read_text(), r'@drawable/icon(?:["<\s])', str(path))
 
-    def test_amber_roles_meet_contrast_in_light_and_dark_modes(self):
+    def test_theme_roles_meet_contrast_in_light_and_dark_modes(self):
         def color_map(path):
             return {node.attrib["name"]: (node.text or "").strip()
                     for node in ET.parse(path).getroot().findall("color")}
@@ -781,10 +784,6 @@ class ReleaseConfigurationTest(unittest.TestCase):
                     ("colorOnSurfaceVariant", "colorSurfaceVariant")):
                 self.assertGreaterEqual(self._contrast(palette[foreground], palette[background]), 4.5,
                                         f"{foreground} must contrast with {background}")
-            for role in ("colorSurfaceInverse", "colorOnSurfaceInverse"):
-                red, green, blue = (int(palette[role][index:index + 2], 16)
-                                    for index in (1, 3, 5))
-                self.assertGreaterEqual(red, blue, f"{role} must stay warm or neutral")
 
     def test_privacy_and_migration_copy_is_truthful(self):
         strings = ET.parse(ROOT / "app/src/main/res/values/strings.xml").getroot()
@@ -858,7 +857,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
                                          activity.index("private ModelRecommendation.DeviceProfile")]
         self.assertLess(recommendation_method.index(
                             "if (result.status == ModelRecommendation.Status.RECOMMENDED)"),
-                        recommendation_method.index("models_recommendation_installed"))
+                        recommendation_method.index("File installed"))
         no_match = recommendation_method[recommendation_method.index("} else {"):]
         self.assertIn("models_recommendation_none", no_match)
         self.assertIn("downloadButton.setText(R.string.models_download_and_use)", no_match)
@@ -882,7 +881,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         values = {item.attrib["name"]: "".join(item.itertext()) for item in strings.findall("string")}
         self.assertIn("android.permission.ACCESS_NETWORK_STATE", manifest)
         self.assertIn("ModelRecommendation.Goal", activity)
-        self.assertIn("snapshot.modelId.equals(recommendedModel.id)", activity)
+        self.assertIn("transferCard.setVisibility(View.VISIBLE)", activity)
         self.assertIn("NET_CAPABILITY_INTERNET", activity)
         self.assertNotIn("NET_CAPABILITY_VALIDATED", activity)
         self.assertNotIn("benchmarkModelsNative", activity)
@@ -1000,17 +999,11 @@ class ReleaseConfigurationTest(unittest.TestCase):
         tree = ET.parse(ROOT / "app/src/main/res/layout/activity_models.xml")
         android = "{http://schemas.android.com/apk/res/android}"
         by_id = {view.attrib.get(android + "id"): view for view in tree.iter()}
-        card_order = [view.attrib.get(android + "id") for view in tree.iter()
-                      if view.tag.endswith("MaterialCardView")]
-        expected_cards = [
-            "@+id/card_installed_models",
-            "@+id/card_custom_terms",
-            "@+id/card_recommendation",
-            "@+id/card_model_guide",
-            "@+id/card_download_catalog",
-            "@+id/card_manual_models",
-        ]
-        self.assertEqual(expected_cards, card_order[:len(expected_cards)])
+        for required in ("card_recommendation", "card_installed_models",
+                         "card_download_catalog", "card_transfer"):
+            self.assertIn("@+id/" + required, by_id)
+        self.assertIn("showPage", source)
+        self.assertIn("models_cancel_and_leave", source)
         self.assertEqual("gone", by_id["@+id/txt_model_status"].attrib[android + "visibility"])
         self.assertEqual("gone", by_id["@+id/btn_model_retry"].attrib[android + "visibility"])
         self.assertIn("private void showModelStatus", source)
@@ -1037,12 +1030,16 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn('@+id/custom_terms_editor', editor_layout)
         self.assertIn('@+id/personal_corrections_toggle', editor_layout)
         self.assertIn('@+id/personal_corrections_content', editor_layout)
-        self.assertIn('setCorrectionsVisible(hasSavedRules || correctionsEnabledSwitch.isChecked())', activity)
+        self.assertIn('showSection(savedInstanceState == null ? 0', activity)
         self.assertIn('whisperPromptActive', activity)
         self.assertIn('R.string.custom_terms_count_whisper', activity)
-        self.assertIn('android:scrollbars="none"', editor_layout)
-        self.assertIn('android:minHeight="144dp"', editor_layout)
-        self.assertIn('android:minLines="5"', editor_layout)
+        android = "{http://schemas.android.com/apk/res/android}"
+        editor_node = next(node for node in ET.fromstring(editor_layout).iter()
+                           if node.get(android + "id") == "@+id/custom_terms_editor")
+        scroll_node = ET.fromstring(editor_layout).find("ScrollView")
+        self.assertEqual(scroll_node.get(android + "scrollbars"), "none")
+        self.assertEqual(editor_node.get(android + "minHeight"), "144dp")
+        self.assertEqual(editor_node.get(android + "minLines"), "5")
         self.assertIn('All models restore exact and close spellings afterward',
                       (ROOT / "app/src/main/res/values/strings.xml").read_text())
         self.assertIn("MAX_TERMS = 128", store)
@@ -1067,10 +1064,10 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn('@+id/personal_corrections_rows', editor_layout)
         self.assertIn('@+id/personal_corrections_add', editor_layout)
         self.assertNotIn('personal_corrections_editor', editor_layout)
-        self.assertIn('@+id/personal_correction_original', correction_row)
-        self.assertIn('@+id/personal_correction_replacement', correction_row)
-        self.assertIn('@string/personal_corrections_original_hint', correction_row)
-        self.assertIn('@string/personal_corrections_replacement_hint', correction_row)
+        self.assertIn('draftHeard.setId(R.id.personal_correction_original)', activity)
+        self.assertIn('draftWritten.setId(R.id.personal_correction_replacement)', activity)
+        self.assertIn('heardLayout.setHint(getString(R.string.personal_corrections_original_hint))', activity)
+        self.assertIn('writtenLayout.setHint(getString(R.string.personal_corrections_replacement_hint))', activity)
         self.assertIn('collectCorrectionPairs()', activity)
         self.assertIn('PersonalCorrections.writePairs(', activity)
         base_strings = ET.parse(ROOT / "app/src/main/res/values/strings.xml").getroot()

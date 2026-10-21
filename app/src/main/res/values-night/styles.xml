@@ -2,6 +2,11 @@
 <resources>
     <!-- Night variant of AppTheme: light status-bar icons on the dark background. -->
     <style name="AppTheme" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="elevationOverlayEnabled">false</item>
+        <item name="materialButtonStyle">@style/Widget.OSTT.Button</item>
+        <item name="shapeAppearanceSmallComponent">@style/ShapeAppearance.OSTT</item>
+        <item name="shapeAppearanceMediumComponent">@style/ShapeAppearance.OSTT</item>
+        <item name="shapeAppearanceLargeComponent">@style/ShapeAppearance.OSTT</item>
         <item name="colorPrimary">@color/colorPrimary</item>
         <item name="colorOnPrimary">@color/colorOnPrimary</item>
         <item name="colorPrimaryContainer">@color/colorPrimaryContainer</item>

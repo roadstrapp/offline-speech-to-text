@@ -13,6 +13,10 @@ PYTHON=${PYTHON_BIN:-python3}
     tests.test_documentation_contract -v
 )
 javac -d "$OUT" \
+  "$ROOT/app/src/main/java/dev/notune/transcribe/HomeNavigation.java" \
+  "$ROOT/app/src/main/java/dev/notune/transcribe/ModelPresentation.java" \
+  "$ROOT/tests/HomeNavigationTest.java" \
+  "$ROOT/tests/ModelPresentationTest.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/AutoStopDelay.java" \
   "$ROOT/tests/AutoStopDelayTest.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/DictionaryFiles.java" \
@@ -51,6 +55,8 @@ javac -d "$OUT" \
   "$ROOT/tests/CustomTermsStoreTest.java" \
   "$ROOT/tests/PersonalCorrectionsStoreTest.java" \
   "$ROOT/tests/PendingTranscriptRecordTest.java"
+java -ea -cp "$OUT" dev.notune.transcribe.HomeNavigationTest
+java -ea -cp "$OUT" dev.notune.transcribe.ModelPresentationTest
 java -ea -cp "$OUT" dev.notune.transcribe.BehaviorTest
 java -ea -cp "$OUT" dev.notune.transcribe.TroubleshootingLeaseTest
 java -ea -cp "$OUT" dev.notune.transcribe.DiagnosticRegressionTest

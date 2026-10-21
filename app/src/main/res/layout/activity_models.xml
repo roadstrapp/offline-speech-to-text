@@ -19,6 +19,7 @@
     </com.google.android.material.appbar.AppBarLayout>
 
     <ScrollView
+        android:id="@+id/models_scroll"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
@@ -33,9 +34,90 @@
             android:layout_height="wrap_content"
             android:orientation="vertical">
 
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_models_language"
+                style="@style/Widget.Material3.Button.TextButton"
+                app:cornerRadius="4dp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/models_language_section" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_models_installed"
+                style="@style/Widget.Material3.Button.TextButton"
+                app:cornerRadius="4dp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/models_active_section" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_models_browse"
+                style="@style/Widget.Material3.Button.TextButton"
+                app:cornerRadius="4dp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/models_catalog_section" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_models_import"
+                style="@style/Widget.Material3.Button.TextButton"
+                app:cornerRadius="4dp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/models_import_short" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_models_preferences"
+                style="@style/Widget.Material3.Button.TextButton"
+                app:cornerRadius="4dp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/models_preferences" />
+
+            <com.google.android.material.card.MaterialCardView
+                app:cardCornerRadius="4dp"
+                android:id="@+id/card_transfer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:visibility="gone"
+                app:contentPadding="12dp">
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+                    <TextView
+                        android:id="@+id/text_transfer"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textAppearance="?attr/textAppearanceBodyMedium" />
+                    <ProgressBar
+                        android:id="@+id/bar_transfer"
+                        style="?android:attr/progressBarStyleHorizontal"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:max="100" />
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_cancel_transfer"
+                        style="@style/Widget.Material3.Button.TextButton"
+                app:cornerRadius="4dp"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minHeight="48dp"
+                        android:text="@string/models_cancel_download" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
             <!-- Installed model selection stays first; downloads follow below. -->
             <com.google.android.material.card.MaterialCardView
+                app:cardCornerRadius="4dp"
                 android:id="@+id/card_installed_models"
+                android:visibility="gone"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
@@ -82,6 +164,7 @@
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btn_model_retry"
                         style="@style/Widget.Material3.Button.OutlinedButton"
+                app:cornerRadius="4dp"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:text="@string/models_retry"
@@ -90,7 +173,9 @@
             </com.google.android.material.card.MaterialCardView>
 
             <com.google.android.material.card.MaterialCardView
+                app:cardCornerRadius="4dp"
                 android:id="@+id/card_custom_terms"
+                android:visibility="gone"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="8dp"
@@ -119,6 +204,7 @@
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btn_custom_terms"
                         style="@style/Widget.Material3.Button.OutlinedButton"
+                app:cornerRadius="4dp"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="8dp"
@@ -128,6 +214,7 @@
             </com.google.android.material.card.MaterialCardView>
 
             <com.google.android.material.card.MaterialCardView
+                app:cardCornerRadius="4dp"
                 android:id="@+id/card_recommendation"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -156,6 +243,7 @@
 
                     <Spinner
                         android:id="@+id/spinner_model_goal"
+                        android:visibility="gone"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
@@ -168,6 +256,15 @@
                         android:layout_marginTop="8dp"
                         android:minHeight="48dp"
                         android:text="@string/models_download_and_use" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_recommended_details"
+                        style="@style/Widget.Material3.Button.TextButton"
+                app:cornerRadius="4dp"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minHeight="48dp"
+                        android:text="@string/models_details" />
 
                     <LinearLayout
                         android:id="@+id/recommended_download_progress_area"
@@ -193,6 +290,7 @@
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btn_cancel_recommended_download"
                             style="@style/Widget.Material3.Button.TextButton"
+                app:cornerRadius="4dp"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:minHeight="48dp"
@@ -202,7 +300,9 @@
             </com.google.android.material.card.MaterialCardView>
 
             <com.google.android.material.card.MaterialCardView
+                app:cardCornerRadius="4dp"
                 android:id="@+id/card_model_guide"
+                android:visibility="gone"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="8dp"
@@ -231,7 +331,9 @@
 
             <!-- Complete verified catalog for the pinned runtime. -->
             <com.google.android.material.card.MaterialCardView
+                app:cardCornerRadius="4dp"
                 android:id="@+id/card_download_catalog"
+                android:visibility="gone"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="8dp"
@@ -273,7 +375,9 @@
 
             <!-- Offline/manual acquisition fallbacks stay below direct downloads. -->
             <com.google.android.material.card.MaterialCardView
+                app:cardCornerRadius="4dp"
                 android:id="@+id/card_manual_models"
+                android:visibility="gone"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="8dp"
@@ -321,6 +425,7 @@
                     <Button
                         android:id="@+id/btn_model_links"
                         style="@style/Widget.Material3.Button.TextButton"
+                app:cornerRadius="4dp"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:text="@string/models_links"/>
@@ -329,6 +434,9 @@
 
             <!-- Language hint card -->
             <com.google.android.material.card.MaterialCardView
+                app:cardCornerRadius="4dp"
+                android:id="@+id/card_model_language"
+                android:visibility="gone"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="8dp"
@@ -398,6 +506,9 @@
 
             <!-- Advanced: inference thread count -->
             <com.google.android.material.card.MaterialCardView
+                app:cardCornerRadius="4dp"
+                android:id="@+id/card_model_threads"
+                android:visibility="gone"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="8dp"

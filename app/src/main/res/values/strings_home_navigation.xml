@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="home_voice_title">Set up voice input</string>
+    <string name="home_tab">Home</string>
+    <string name="dictionary_tab">Dictionary</string>
+    <string name="home_settings_title">Settings</string>
+    <string name="home_model_short">Speech model</string>
+    <string name="home_model_language">Model &amp; language</string>
+    <string name="home_recording_title">Recording &amp; pauses</string>
+    <string name="home_subtitles_short">Live subtitles</string>
+    <string name="home_privacy_title">Privacy &amp; diagnostics</string>
+    <string name="home_advanced_title">Advanced</string>
+    <string name="home_about_title">About &amp; help</string>
+    <string name="home_diagnostics_info">About diagnostic logging</string>
+    <string name="home_predecode_info">About early processing</string>
+    <string name="home_back">Back</string>
+    <string name="home_on_device_model">%1$s · On device</string>
+    <string name="home_choose_model">Choose a model to begin</string>
+    <string name="home_model_get">Get speech model</string>
+    <string name="home_model_change">Change speech model</string>
+    <string name="home_model_loading">Preparing speech model…</string>
+    <string name="home_model_attention">Speech model needs attention</string>
+    <string name="home_microphone_allowed">Microphone allowed</string>
+</resources>

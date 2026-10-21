@@ -308,13 +308,13 @@
 
     <!-- Primary voice-input flow: apps fire RECOGNIZE_SPEECH and RecognizeActivity handles it. -->
     <string name="section_voice">Voice input</string>
-    <string name="voice_status_ready">Microphone granted. Voice input is ready.</string>
-    <string name="voice_status_not_requested">Microphone access has not been requested.</string>
-    <string name="voice_status_denied">Microphone access was denied. Try again.</string>
-    <string name="voice_status_denied_permanently">Microphone access is blocked. Open Android app settings and allow it.</string>
-    <string name="voice_status_almost">Microphone granted. Tap “Try voice input,” then choose Offline Speech to Text → Always.</string>
+    <string name="voice_status_ready">Ready for voice input</string>
+    <string name="voice_status_not_requested">Allow microphone access to begin</string>
+    <string name="voice_status_denied">Microphone access denied</string>
+    <string name="voice_status_denied_permanently">Microphone blocked in Android settings</string>
+    <string name="voice_status_almost">Choose OSTT when voice input opens</string>
     <string name="btn_voice_try">Try voice input</string>
-    <string name="btn_foreground_record">Record while using other apps</string>
+    <string name="btn_foreground_record">Record across apps</string>
     <string name="btn_voice_grant">Grant microphone access</string>
     <string name="btn_voice_try_again">Request microphone again</string>
     <string name="btn_open_app_settings">Open app settings</string>

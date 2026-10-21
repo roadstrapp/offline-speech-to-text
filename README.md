@@ -4,6 +4,7 @@ Offline Speech to Text (OSTT) turns speech into text on your Android phone. Reco
 
 ## Features
 
+- Set up microphone access and a recommended speech model from Home. Dictionary and settings stay one tap away; advanced model choices remain available separately.
 - Dictate into apps through Android voice input or the optional voice keyboard. The popup supports left-handed and right-handed placement. Ordinary dictation keeps a complete model context through hesitations; long recordings use overlapping windows with boundary reconciliation.
 - Recover a completed keyboard transcript when the editor closes. OSTT inserts into the current safe composer after temporary UI recreation. Otherwise it preserves an exact pending transcript for later recovery. Password fields stay blocked.
 - Use pause/resume while recording, then choose whether to stay in the voice keyboard after inserting. Hold and drag Backspace to preview the selected range before deleting it. The globe returns to another keyboard.
@@ -12,22 +13,22 @@ Offline Speech to Text (OSTT) turns speech into text on your Android phone. Reco
 - Add preferred words or phrases in one private dictionary. Exact corrections have separate **What was heard** and **Replace with** fields. Matching protects quoted text and code. URLs and email addresses stay literal. Whisper also receives the preferred terms that fit its native prompt.
 - Select **Stop after silence** when you want automatic stopping. Choose a 2-second pause, 3 seconds or 5 seconds. Pause suspends microphone capture until Resume. Every interactive session has a ten-minute safety cap that transcribes the captured audio.
 - Run the built-in benchmark to compare thread settings for the active model. Automatic inference uses at most two performance cores. Optimized Arm64 inference has a baseline fallback for older phones.
-- Choose light or dark appearance, or follow the system setting. A bounded diagnostic log is available for troubleshooting. Detailed troubleshooting requires a separate timed consent; [the diagnostic guide](docs/power-diagnostics.md) explains its contents and limits.
+- Use a true-black AMOLED dark appearance, choose light, or follow the system setting. A bounded diagnostic log is available for troubleshooting. Detailed troubleshooting requires a separate timed consent; [the diagnostic guide](docs/power-diagnostics.md) explains its contents and limits.
 
 ## Screenshots
 
 <p float="left"><img src=".screenshots/screenshot_home.png" alt="Home and setup screen" width="30%" /> <img src=".screenshots/screenshot_models.png" alt="Speech model selection" width="30%" />
-<img src=".screenshots/screenshot_consent.png" width="30%" alt="Detailed troubleshooting duration choices"></p>
+<img src=".screenshots/screenshot_dictionary.png" width="30%" alt="Preferred words and personal corrections"></p>
 
 ## Set up
 
-1. Open **Manage speech models** and review the recommendation. Tap **Download and install** to fetch the verified model into update-safe private storage.
-2. Grant microphone permission when Android requests it. Tap a microphone in a compatible keyboard or app and choose OSTT as the voice-input handler.
-3. For the dedicated voice keyboard, open **Keyboard settings** and enable OSTT. Switch to it with Android's keyboard picker.
+1. Open speech-model setup from Home and review the recommendation. Tap **Download and install** to fetch the verified model into update-safe private storage.
+2. Grant microphone access from Home. Android requests permission when you choose this action. Tap a microphone in a compatible keyboard or app and choose OSTT as the voice-input handler.
+3. For the dedicated voice keyboard, open **Voice keyboard** from Home and enable OSTT. Switch to it with Android's keyboard picker.
 
 Model downloads resume after interruptions and verify their exact size and SHA-256 before activation. A failed download preserves the active model. Manual GGUF import through the system file picker remains available. Recognition works offline after setup.
 
-For extended capture, open **Long recording** and select **Start recording**. Its notification offers **Stop and transcribe** or **Stop and discard**. Review the result before explicitly sharing it. The foreground recording flow retains its own lifecycle and notification safeguards.
+For extended capture, open **Settings → Recording & pauses**, choose recording, and select **Start recording**. Its notification offers **Stop and transcribe** or **Stop and discard**. Review the result before explicitly sharing it. The foreground recording flow retains its own lifecycle and notification safeguards.
 
 ## Compatibility and fallback
 

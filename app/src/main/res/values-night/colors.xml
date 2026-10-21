@@ -1,45 +1,39 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <!-- True-black AMOLED palette. Explicit light and system choices remain
-         available; this palette is used when night mode is active. -->
     <color name="amoled_black">#000000</color>
     <color name="background">#000000</color>
     <color name="card_bg">#000000</color>
-    <!-- Brighter "ready" green so it reads on dark surfaces. -->
     <color name="status_ok">#81C784</color>
-
     <color name="ime_bg">#000000</color>
     <color name="ime_card_bg">#000000</color>
     <color name="ime_text">#ECECEC</color>
     <color name="ime_hint">#9E9E9E</color>
     <color name="ime_key_bg">#3A3A3A</color>
-
-    <color name="colorPrimary">#FFB300</color>
-    <color name="colorPrimaryDark">#E09A00</color>
-    <color name="colorAccent">#FFB300</color>
-    <color name="colorOnPrimary">#1F1300</color>
-    <color name="colorPrimaryContainer">#5D3B00</color>
-    <color name="colorOnPrimaryContainer">#FFE2A4</color>
-    <color name="colorSecondary">#FFB300</color>
-    <color name="colorOnSecondary">#1F1300</color>
-    <color name="colorSecondaryContainer">#5D3B00</color>
-    <color name="colorOnSecondaryContainer">#FFE2A4</color>
-    <color name="colorTertiary">#FFB300</color>
-    <color name="colorOnTertiary">#1F1300</color>
-    <color name="colorTertiaryContainer">#5D3B00</color>
-    <color name="colorOnTertiaryContainer">#FFE2A4</color>
+    <color name="colorPrimary">#66D5DB</color>
+    <color name="colorPrimaryDark">#3DBBC2</color>
+    <color name="colorAccent">#66D5DB</color>
+    <color name="colorOnPrimary">#002E31</color>
+    <color name="colorPrimaryContainer">#004F54</color>
+    <color name="colorOnPrimaryContainer">#B7F1F4</color>
+    <color name="colorSecondary">#66D5DB</color>
+    <color name="colorOnSecondary">#002E31</color>
+    <color name="colorSecondaryContainer">#004F54</color>
+    <color name="colorOnSecondaryContainer">#B7F1F4</color>
+    <color name="colorTertiary">#66D5DB</color>
+    <color name="colorOnTertiary">#002E31</color>
+    <color name="colorTertiaryContainer">#004F54</color>
+    <color name="colorOnTertiaryContainer">#B7F1F4</color>
     <color name="colorSurface">#000000</color>
     <color name="colorOnSurface">#ECECEC</color>
-    <color name="colorSurfaceInverse">#F2EEE6</color>
-    <color name="colorOnSurfaceInverse">#29251E</color>
-    <color name="colorSurfaceVariant">#2A261F</color>
-    <color name="colorOnSurfaceVariant">#D4C5AA</color>
+    <color name="colorSurfaceInverse">#EDF2F2</color>
+    <color name="colorOnSurfaceInverse">#182021</color>
+    <color name="colorSurfaceVariant">#000000</color>
+    <color name="colorOnSurfaceVariant">#BBC8CA</color>
     <color name="colorSurfaceContainerLowest">#000000</color>
-    <color name="colorSurfaceContainerLow">#11100E</color>
-    <color name="colorSurfaceContainer">#171512</color>
-    <color name="colorSurfaceContainerHigh">#211E19</color>
-    <color name="colorSurfaceContainerHighest">#2B2721</color>
-    <color name="colorOutline">#9B9282</color>
-    <color name="colorOutlineVariant">#4C453A</color>
-
+    <color name="colorSurfaceContainerLow">#000000</color>
+    <color name="colorSurfaceContainer">#000000</color>
+    <color name="colorSurfaceContainerHigh">#000000</color>
+    <color name="colorSurfaceContainerHighest">#000000</color>
+    <color name="colorOutline">#879496</color>
+    <color name="colorOutlineVariant">#354144</color>
 </resources>

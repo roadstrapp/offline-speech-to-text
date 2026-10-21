@@ -3,47 +3,28 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginTop="8dp"
-    android:baselineAligned="false"
-    android:orientation="horizontal">
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:minHeight="56dp">
 
-    <com.google.android.material.textfield.TextInputLayout
-        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/personal_correction_edit"
+        style="@style/Widget.Material3.Button.TextButton"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginEnd="4dp"
         android:layout_weight="1"
-        android:hint="@string/personal_corrections_original_hint">
+        android:gravity="start|center_vertical"
+        android:minHeight="48dp"
+        android:maxLines="2"
+        android:ellipsize="end"
+        app:cornerRadius="4dp"
+        android:text="@string/dictionary_correction_item" />
 
-        <com.google.android.material.textfield.TextInputEditText
-            android:id="@+id/personal_correction_original"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:imeOptions="actionNext"
-            android:inputType="textCapSentences"
-            android:maxLines="1"
-            android:singleLine="true" />
-    </com.google.android.material.textfield.TextInputLayout>
-
-    <com.google.android.material.textfield.TextInputLayout
-        android:id="@+id/personal_correction_replacement_layout"
-        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="4dp"
-        android:layout_weight="1"
-        android:hint="@string/personal_corrections_replacement_hint"
-        app:endIconContentDescription="@string/personal_corrections_remove"
-        app:endIconDrawable="@drawable/ic_close"
-        app:endIconMode="custom">
-
-        <com.google.android.material.textfield.TextInputEditText
-            android:id="@+id/personal_correction_replacement"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:imeOptions="actionDone"
-            android:inputType="textCapSentences"
-            android:maxLines="1"
-            android:singleLine="true" />
-    </com.google.android.material.textfield.TextInputLayout>
+    <ImageButton
+        android:id="@+id/personal_correction_delete"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:src="@drawable/ic_delete"
+        android:contentDescription="@string/personal_corrections_remove" />
 </LinearLayout>

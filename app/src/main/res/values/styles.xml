@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Fixed accessible amber palette. Wallpaper-derived dynamic color is
-         intentionally not applied so core screens are deterministic. -->
+    <!-- Fixed neutral palette; preserve explicit light/dark/system choices. -->
     <style name="AppTheme" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="materialButtonStyle">@style/Widget.OSTT.Button</item>
+        <item name="shapeAppearanceSmallComponent">@style/ShapeAppearance.OSTT</item>
+        <item name="shapeAppearanceMediumComponent">@style/ShapeAppearance.OSTT</item>
+        <item name="shapeAppearanceLargeComponent">@style/ShapeAppearance.OSTT</item>
         <item name="colorPrimary">@color/colorPrimary</item>
         <item name="colorOnPrimary">@color/colorOnPrimary</item>
         <item name="colorPrimaryContainer">@color/colorPrimaryContainer</item>
@@ -45,5 +48,13 @@
         <item name="android:windowContentOverlay">@null</item>
         <item name="android:windowAnimationStyle">@android:style/Animation.InputMethod</item>
         <item name="android:windowSoftInputMode">stateUnspecified</item>
+    </style>
+    <style name="ShapeAppearance.OSTT" parent="ShapeAppearance.Material3.Corner.Small">
+        <item name="cornerFamily">cut</item>
+        <item name="cornerSize">4dp</item>
+    </style>
+    <style name="Widget.OSTT.Button" parent="Widget.Material3.Button">
+        <item name="cornerRadius">4dp</item>
+        <item name="android:minHeight">48dp</item>
     </style>
 </resources>

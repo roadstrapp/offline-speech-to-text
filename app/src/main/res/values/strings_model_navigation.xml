@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="models_preferences">Model preferences</string>
+    <string name="models_back">Back</string>
+    <string name="models_import_short">Import model</string>
+    <string name="models_language_choice">Language · %1$s</string>
+    <string name="models_details">Details</string>
+    <string name="models_details_title">Model details</string>
+    <string name="models_details_body">%1$s\nFile: %2$s\nSize: %3$s\nLanguages: %4$d\nEngine: %5$s\nLicense: %6$s\nSource: %7$s</string>
+    <string name="models_recommendation_short">%1$s\n%2$s · %3$s</string>
+    <string name="models_fit_short_good">Fits this phone</string>
+    <string name="models_fit_short_demanding">May be demanding</string>
+    <string name="models_in_use">In use</string>
+    <string name="models_imported_short">Imported</string>
+    <string name="models_use_model">Use model</string>
+    <string name="models_cancel_leave_title">Cancel download?</string>
+    <string name="models_cancel_leave_body">Leaving now cancels the download. Stay here to let it finish.</string>
+    <string name="models_stay">Stay</string>
+    <string name="models_cancel_and_leave">Cancel and leave</string>
+    <string name="models_import_leave_body">An import is in progress. Stay here until it finishes.</string>
+    <string name="models_checking_installing">Checking and installing…</string>
+    <string name="models_delete_failed">Could not delete model</string>
+</resources>

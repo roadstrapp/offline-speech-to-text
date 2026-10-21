@@ -1,0 +1,4 @@
+Simpler setup for microphone permission and an offline speech model.
+Show one model recommendation first, with installed models and advanced choices available separately.
+Rework the dictionary into preferred words and explicit corrections, with protected drafts and clearer recovery.
+Use a compact true-black dark interface. Keep recording, subtitles and advanced controls in Settings.

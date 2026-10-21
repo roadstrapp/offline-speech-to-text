@@ -21,6 +21,8 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
     private boolean modelFixture;
     private boolean fileTranscription;
     private boolean preparedWindows;
+    private boolean redesignUi;
+    private boolean seedUiUpgrade;
     private static final class InjectedFixtureFailure extends Exception {}
 
     @Override
@@ -32,11 +34,15 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         fileDecoder = arguments != null && "true".equals(arguments.getString("file_decoder"));
         callerAudio = arguments != null && "true".equals(arguments.getString("caller_audio"));
         preparedWindows = arguments != null && "true".equals(arguments.getString("prepared_windows"));
+        redesignUi = arguments != null && "true".equals(arguments.getString("redesign_ui"));
+        seedUiUpgrade = arguments != null && "true".equals(arguments.getString("seed_ui_upgrade"));
         start();
     }
 
     @Override
     public void onStart() {
+        if (seedUiUpgrade) { seedUiUpgrade(); return; }
+        if (redesignUi) { testRedesignUi(); return; }
         Bundle result = new Bundle();
         result.putBoolean("caller_audio_ran", false);
         File directory = getTargetContext().getFilesDir();
@@ -89,7 +95,10 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             result.putString("stage", "troubleshooting controls");
             testTroubleshootingControls(directory);
             runSafelyOnMainSync(() -> {
-                current.findViewById(R.id.btn_more_settings).performClick();
+                ((com.google.android.material.bottomnavigation.BottomNavigationView)
+                        current.findViewById(R.id.main_navigation))
+                        .setSelectedItemId(R.id.navigation_settings);
+                current.findViewById(R.id.nav_recording).performClick();
                 check(current.findViewById(R.id.auto_stop_delay_controls).getVisibility() == View.GONE,
                         "delay visible while disabled");
                 ((CompoundButton) current.findViewById(R.id.switch_auto_stop)).setChecked(true);
@@ -110,7 +119,10 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             closeCurrent();
             launchMain();
             runSafelyOnMainSync(() -> {
-                current.findViewById(R.id.btn_more_settings).performClick();
+                ((com.google.android.material.bottomnavigation.BottomNavigationView)
+                        current.findViewById(R.id.main_navigation))
+                        .setSelectedItemId(R.id.navigation_settings);
+                current.findViewById(R.id.nav_recording).performClick();
                 check(((Spinner) current.findViewById(R.id.spinner_auto_stop_delay))
                         .getSelectedItemPosition() == 2, "activity restart lost choice");
                 check(current.findViewById(R.id.auto_stop_delay_controls).getVisibility() == View.GONE,
@@ -456,6 +468,136 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             if (original == null) Files.deleteIfExists(lease.toPath());
             else Files.write(lease.toPath(), original);
         }
+    }
+
+    private void seedUiUpgrade() {
+        Bundle result = new Bundle();
+        int code = Activity.RESULT_OK;
+        try {
+            check(getTargetContext().getPackageName().equals("app.offlinespeechtotext.validation"),
+                    "upgrade seed requires isolated fixture");
+            CustomTerms.write(getTargetContext().getFilesDir(), "Synthetic Upgrade");
+            AutoStopDelay.set(getTargetContext().getFilesDir(), 5000);
+            ThemePrefs.setMode(getTargetContext(), androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES);
+            result.putBoolean("seed_ui_upgrade", true);
+        } catch (Throwable error) {
+            code = Activity.RESULT_CANCELED;
+            result.putString("failure", error.toString());
+        }
+        finish(code, result);
+    }
+
+    private void testRedesignUi() {
+        Bundle result = new Bundle();
+        int code = Activity.RESULT_OK;
+        File corrections = new File(getTargetContext().getFilesDir(), PersonalCorrections.FILE_NAME);
+        boolean ownsCorrections = false;
+        try {
+            check(getTargetContext().getPackageName().equals("app.offlinespeechtotext.validation"),
+                    "UI fixtures require isolated package");
+            check(CustomTerms.read(getTargetContext().getFilesDir()).terms.contains("Synthetic Upgrade"),
+                    "upgrade lost preferred words");
+            check(AutoStopDelay.get(getTargetContext().getFilesDir()) == 5000,
+                    "upgrade lost pause setting");
+            check(ThemePrefs.getMode(getTargetContext()) == androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES,
+                    "upgrade lost explicit dark theme");
+            launchMain();
+            runSafelyOnMainSync(() -> {
+                check(current.findViewById(R.id.btn_models).isShown(), "setup model action hidden");
+                check(!current.findViewById(R.id.btn_foreground_record).isShown(), "recording promoted on Home");
+                check(!current.findViewById(R.id.btn_subs_start).isShown(), "subtitles promoted on Home");
+                ((com.google.android.material.bottomnavigation.BottomNavigationView)
+                        current.findViewById(R.id.main_navigation)).setSelectedItemId(R.id.navigation_settings);
+                current.findViewById(R.id.nav_keyboard_settings).performClick();
+                check(current.findViewById(R.id.page_keyboard).isShown(), "keyboard page hidden");
+                ((androidx.activity.ComponentActivity) current).getOnBackPressedDispatcher().onBackPressed();
+                check(current.findViewById(R.id.page_settings).isShown(), "detail Back skipped Settings");
+                ((androidx.activity.ComponentActivity) current).getOnBackPressedDispatcher().onBackPressed();
+                check(current.findViewById(R.id.page_home).isShown(), "Settings Back missed Home");
+            });
+            closeCurrent();
+            current = startActivitySync(new Intent(getTargetContext(), ModelsActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            java.lang.reflect.Field importField = ModelsActivity.class.getDeclaredField("IMPORT_LIFECYCLE");
+            importField.setAccessible(true);
+            ModelImportLifecycle imports = (ModelImportLifecycle) importField.get(null);
+            java.util.concurrent.atomic.AtomicReference<ModelImportTask.Listener> importListener =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            runSafelyOnMainSync(() -> imports.start("synthetic-import.gguf", 100L, importListener::set));
+            waitForIdleSync();
+            java.lang.reflect.Method refresh = ModelsActivity.class.getDeclaredMethod("refreshList");
+            java.lang.reflect.Method recommend = ModelsActivity.class.getDeclaredMethod("updateRecommendation");
+            refresh.setAccessible(true); recommend.setAccessible(true);
+            runSafelyOnMainSync(() -> {
+                try { refresh.invoke(current); recommend.invoke(current); }
+                catch (Exception error) { throw new AssertionError(error); }
+                check(current.findViewById(R.id.card_transfer).isShown(), "refresh hid import progress");
+                check(!current.findViewById(R.id.btn_models_import).isEnabled(), "import shortcut re-enabled");
+                check(!current.findViewById(R.id.btn_download_recommended).isEnabled(), "recommended action re-enabled during import");
+            });
+            runSafelyOnMainSync(() -> importListener.get().onFailure(ModelImportTask.Failure.IMPORT_FAILED));
+            waitForIdleSync();
+            closeCurrent();
+            check(!corrections.exists(), "unexpected preexisting dictionary fixture");
+            byte[] invalid = new byte[]{(byte)0xff, (byte)0xfe};
+            Files.write(corrections.toPath(), invalid);
+            ownsCorrections = true;
+            current = startActivitySync(new Intent(getTargetContext(), CustomTermsActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            runSafelyOnMainSync(() -> {
+                current.findViewById(R.id.dictionary_tab_corrections).performClick();
+                check(!current.findViewById(R.id.personal_corrections_add).isEnabled(),
+                        "invalid saved corrections permit replacement without confirmation");
+                ((CompoundButton) current.findViewById(R.id.personal_corrections_enabled)).setChecked(true);
+            });
+            check(java.util.Arrays.equals(invalid, Files.readAllBytes(corrections.toPath())),
+                    "enable overwrote unreadable corrections");
+            closeCurrent();
+            Files.delete(corrections.toPath());
+            current = startActivitySync(new Intent(getTargetContext(), CustomTermsActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            runSafelyOnMainSync(() -> {
+                current.findViewById(R.id.dictionary_tab_corrections).performClick();
+                current.findViewById(R.id.personal_corrections_add).performClick();
+            });
+            java.lang.reflect.Field dialogField = CustomTermsActivity.class.getDeclaredField("correctionDialog");
+            dialogField.setAccessible(true);
+            androidx.appcompat.app.AlertDialog draft = (androidx.appcompat.app.AlertDialog) dialogField.get(current);
+            runSafelyOnMainSync(() -> {
+                ((android.widget.EditText) draft.findViewById(R.id.personal_correction_original)).setText("synthetic heard");
+                ((android.widget.EditText) draft.findViewById(R.id.personal_correction_replacement)).setText("Synthetic Written");
+            });
+            ActivityMonitor monitor = addMonitor(CustomTermsActivity.class.getName(), null, false);
+            runSafelyOnMainSync(() -> current.recreate());
+            Activity restored = waitForMonitorWithTimeout(monitor, 8000);
+            removeMonitor(monitor);
+            check(restored != null && restored != current, "dictionary recreation not observed");
+            current = restored;
+            waitForIdleSync();
+            androidx.appcompat.app.AlertDialog restoredDraft =
+                    (androidx.appcompat.app.AlertDialog) dialogField.get(current);
+            runSafelyOnMainSync(() -> {
+                check(restoredDraft != null && restoredDraft.isShowing(), "rotation lost correction dialog");
+                check(((android.widget.EditText) restoredDraft.findViewById(R.id.personal_correction_original))
+                        .getText().toString().equals("synthetic heard"), "rotation lost heard draft");
+                restoredDraft.findViewById(android.R.id.button2).performClick();
+                check(restoredDraft.isShowing(), "rotation lost unsaved draft discard guard");
+            });
+            closeCurrent();
+            result.putBoolean("redesign_ui", true);
+            result.putString("checks", "setup hierarchy; secondary recording/subtitles; nested Back; invalid dictionary bytes preserved on enable");
+        } catch (Throwable error) {
+            code = Activity.RESULT_CANCELED;
+            result.putString("failure", error.toString());
+            java.io.StringWriter trace = new java.io.StringWriter();
+            error.printStackTrace(new java.io.PrintWriter(trace));
+            result.putString("failure_stack", trace.toString());
+        } finally {
+            closeCurrent();
+            try { if (ownsCorrections) Files.deleteIfExists(corrections.toPath()); }
+            catch (Exception error) { code = Activity.RESULT_CANCELED; result.putString("cleanup_failure", error.toString()); }
+        }
+        finish(code, result);
     }
 
     private void launchMain() {

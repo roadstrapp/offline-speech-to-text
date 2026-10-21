@@ -29,6 +29,9 @@ import android.widget.Spinner;
 import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.activity.OnBackPressedCallback;
+import com.google.android.material.appbar.MaterialToolbar;
+import com.google.android.material.bottomnavigation.BottomNavigationView;
 import androidx.appcompat.app.AppCompatDelegate;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
@@ -61,6 +64,10 @@ public class MainActivity extends AppCompatActivity {
         NativeLibraries.load();
     }
 
+    private String homeDestination = "home";
+    private String nativeLoadStatus = "Waiting";
+    private OnBackPressedCallback navigationBack;
+    private boolean updatingNavigation;
     private TextView statusText;
     private TextView voiceStatusText;
     private ImageView voiceStatusIcon;
@@ -121,16 +128,6 @@ public class MainActivity extends AppCompatActivity {
 
         findViewById(R.id.btn_models).setOnClickListener(v ->
                 startActivity(new Intent(this, ModelsActivity.class)));
-
-        Button moreSettingsButton = findViewById(R.id.btn_more_settings);
-        View advancedSections = findViewById(R.id.advanced_home_sections);
-        moreSettingsButton.setOnClickListener(v -> {
-            boolean expand = advancedSections.getVisibility() != View.VISIBLE;
-            advancedSections.setVisibility(expand ? View.VISIBLE : View.GONE);
-            moreSettingsButton.setText(expand
-                    ? R.string.home_less_settings : R.string.home_more_settings);
-            if (expand) advancedSections.requestFocus();
-        });
 
         benchButton = findViewById(R.id.btn_benchmark);
         benchResultText = findViewById(R.id.text_bench_result);
@@ -232,13 +229,115 @@ public class MainActivity extends AppCompatActivity {
         updateImeRecoveryStatus();
 
         configureAccessibility();
+        setupNavigation(savedInstanceState);
 
         // Compact builds intentionally ship without a model. Do not start the
         // native loader until either an imported or retained built-in model is
         // actually present; the model manager reloads native state after a
         // verified download or import completes.
         maybeStartNativeModelLoad();
-        showInitialModelSetupIfNeeded();
+        // The home setup steps replace the old unsolicited model-choice dialog.
+        updateHomeModelSummary();
+    }
+
+    private void setupNavigation(Bundle saved) {
+        BottomNavigationView navigation = findViewById(R.id.main_navigation);
+        navigationBack = new OnBackPressedCallback(false) {
+            @Override public void handleOnBackPressed() {
+                showHomeDestination(HomeNavigation.parent(homeDestination));
+            }
+        };
+        getOnBackPressedDispatcher().addCallback(this, navigationBack);
+        navigation.setItemActiveIndicatorEnabled(false);
+        navigation.setOnItemReselectedListener(item -> {
+            if (updatingNavigation) return;
+            if (item.getItemId() == R.id.navigation_settings) showHomeDestination("settings");
+            else if (item.getItemId() == R.id.navigation_home) showHomeDestination("home");
+        });
+        navigation.setOnItemSelectedListener(item -> {
+            if (updatingNavigation) return true;
+            if (item.getItemId() == R.id.navigation_dictionary) {
+                startActivity(new Intent(this, CustomTermsActivity.class));
+                return false;
+            }
+            showHomeDestination(item.getItemId() == R.id.navigation_home ? "home" : "settings");
+            return true;
+        });
+        ((MaterialToolbar) findViewById(R.id.toolbar)).setNavigationOnClickListener(
+                view -> showHomeDestination(HomeNavigation.parent(homeDestination)));
+        int[] buttons = {R.id.nav_keyboard, R.id.nav_keyboard_settings, R.id.nav_recording,
+                R.id.nav_subtitles, R.id.nav_appearance, R.id.nav_privacy,
+                R.id.nav_advanced, R.id.nav_about};
+        String[] pages = {"keyboard", "keyboard", "recording", "subtitles", "appearance",
+                "privacy", "advanced", "about"};
+        for (int index = 0; index < buttons.length; index++) {
+            final String page = pages[index];
+            findViewById(buttons[index]).setOnClickListener(view -> showHomeDestination(page));
+        }
+        findViewById(R.id.nav_models).setOnClickListener(
+                view -> startActivity(new Intent(this, ModelsActivity.class)));
+        findViewById(R.id.btn_privacy_info).setOnClickListener(view ->
+                new MaterialAlertDialogBuilder(this).setTitle(R.string.home_diagnostics_info)
+                        .setMessage(R.string.setting_diagnostic_logging_desc)
+                        .setPositiveButton(android.R.string.ok, null).show());
+        findViewById(R.id.btn_predecode_info).setOnClickListener(view ->
+                new MaterialAlertDialogBuilder(this).setTitle(R.string.home_predecode_info)
+                        .setMessage(R.string.background_predecode_description)
+                        .setPositiveButton(android.R.string.ok, null).show());
+        showHomeDestination(saved == null ? "home" : saved.getString("home_destination"));
+    }
+
+    private void showHomeDestination(String requested) {
+        homeDestination = HomeNavigation.restore(requested);
+        int[] ids = {R.id.page_home, R.id.page_settings, R.id.page_keyboard,
+                R.id.page_recording, R.id.page_subtitles, R.id.page_appearance,
+                R.id.page_privacy, R.id.page_advanced, R.id.page_about};
+        int[] titles = {R.string.app_name, R.string.home_settings_title, R.string.section_ime,
+                R.string.home_recording_title, R.string.section_subs,
+                R.string.section_appearance, R.string.home_privacy_title,
+                R.string.home_advanced_title, R.string.home_about_title};
+        MaterialToolbar toolbar = findViewById(R.id.toolbar);
+        for (int index = 0; index < ids.length; index++) {
+            View page = findViewById(ids[index]);
+            boolean selected = HomeNavigation.PAGES[index].equals(homeDestination);
+            page.setVisibility(selected ? View.VISIBLE : View.GONE);
+            if (selected) toolbar.setTitle(titles[index]);
+        }
+        boolean nested = !"home".equals(homeDestination) && !"settings".equals(homeDestination);
+        if (nested) toolbar.setNavigationIcon(R.drawable.ic_arrow_back);
+        else toolbar.setNavigationIcon((android.graphics.drawable.Drawable) null);
+        androidx.core.view.ViewCompat.setAccessibilityHeading(toolbar, true);
+        toolbar.setNavigationContentDescription(R.string.home_back);
+        navigationBack.setEnabled(!"home".equals(homeDestination));
+        BottomNavigationView navigation = findViewById(R.id.main_navigation);
+        updatingNavigation = true;
+        navigation.setSelectedItemId("home".equals(homeDestination)
+                ? R.id.navigation_home : R.id.navigation_settings);
+        updatingNavigation = false;
+        ((android.widget.ScrollView) findViewById(R.id.main_scroll)).scrollTo(0, 0);
+    }
+
+    private void updateHomeModelSummary() {
+        String label = getString(R.string.home_choose_model);
+        if (hasUsableSpeechModel()) {
+            String selected = "";
+            File marker = new File(getFilesDir(), "active_model");
+            try {
+                if (marker.isFile() && marker.length() <= 512) {
+                    selected = new String(java.nio.file.Files.readAllBytes(marker.toPath()),
+                            java.nio.charset.StandardCharsets.UTF_8).trim();
+                }
+            } catch (IOException ignored) { }
+            label = getString(R.string.home_on_device_model, ModelPresentation.nameForFile(selected));
+        }
+        ((TextView) findViewById(R.id.text_home_model)).setText(label);
+        ((Button) findViewById(R.id.btn_models)).setText(hasUsableSpeechModel()
+                ? R.string.home_model_change : R.string.home_model_get);
+    }
+
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        state.putString("home_destination", homeDestination);
     }
 
     private void setupAutoStopDelay() {
@@ -294,7 +393,9 @@ public class MainActivity extends AppCompatActivity {
                 R.id.heading_appearance,
                 R.id.heading_settings,
                 R.id.heading_benchmark,
-                R.id.heading_privacy
+                R.id.heading_privacy,
+                R.id.heading_page_settings,
+                R.id.heading_page_keyboard
         };
         for (int headingId : headingIds) {
             ViewCompat.setAccessibilityHeading(findViewById(headingId), true);
@@ -328,6 +429,9 @@ public class MainActivity extends AppCompatActivity {
         updateVoiceInputStatus();
         updateImeStatus();
         updateImeRecoveryStatus();
+        updateHomeModelSummary();
+        if (nativeLoadStatus != null && nativeLoadStatus.startsWith("Error"))
+            nativeInitRequested = false;
         // Returning from model management may make the first usable model
         // available without recreating this Activity.
         maybeStartNativeModelLoad();
@@ -346,7 +450,7 @@ public class MainActivity extends AppCompatActivity {
             benchButton.setEnabled(false);
             return;
         }
-        benchButton.setEnabled(true);
+        benchButton.setEnabled(nativeLoadStatus.startsWith("Ready"));
         if (!nativeInitRequested) {
             nativeInitRequested = true;
             initNative(this);
@@ -375,6 +479,22 @@ public class MainActivity extends AppCompatActivity {
                 shouldShowRequestPermissionRationale(android.Manifest.permission.RECORD_AUDIO));
 
         voiceTryButton.setEnabled(state == SetupState.Microphone.GRANTED);
+        if (state == SetupState.Microphone.GRANTED && !hasUsableSpeechModel()) {
+            setVoiceStatus(true, getString(R.string.home_microphone_allowed));
+            voiceTryButton.setEnabled(false);
+            voiceGrantButton.setVisibility(View.GONE);
+            return;
+        }
+        if (state == SetupState.Microphone.GRANTED
+                && (nativeLoadStatus.startsWith("Error")
+                    || nativeLoadStatus.startsWith("Loading")
+                    || nativeLoadStatus.startsWith("Waiting"))) {
+            setVoiceStatus(false, getString(nativeLoadStatus.startsWith("Error")
+                    ? R.string.home_model_attention : R.string.home_model_loading));
+            voiceTryButton.setEnabled(false);
+            voiceGrantButton.setVisibility(View.GONE);
+            return;
+        }
         switch (state) {
             case NOT_REQUESTED:
                 setVoiceStatus(false, getString(R.string.voice_status_not_requested));
@@ -824,9 +944,12 @@ public class MainActivity extends AppCompatActivity {
     // Called from Rust
     public void onStatusUpdate(String status) {
         runOnUiThread(() -> {
-            statusText.setText(status);
+            nativeLoadStatus = status == null ? "" : status;
+            statusText.setText(nativeLoadStatus);
+            updateHomeModelSummary();
+            updateVoiceInputStatus();
             // "Ready" may carry a suffix, e.g. "Ready (this model can't translate)".
-            if (status.startsWith("Ready")) {
+            if (nativeLoadStatus.startsWith("Ready")) {
                 startSubsButton.setEnabled(true);
                 benchButton.setEnabled(true);
             }

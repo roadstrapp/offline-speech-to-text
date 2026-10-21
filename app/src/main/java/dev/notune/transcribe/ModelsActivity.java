@@ -27,6 +27,7 @@ import android.widget.ProgressBar;
 import android.widget.RadioButton;
 import android.widget.Spinner;
 import android.widget.TextView;
+import android.widget.ScrollView;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
@@ -137,6 +138,15 @@ public class ModelsActivity extends AppCompatActivity {
     private com.google.android.material.materialswitch.MaterialSwitch translateSwitch;
 
     private boolean recommendationUsesBundledModel;
+    private static final int PAGE_HOME = 0;
+    private static final int PAGE_INSTALLED = 1;
+    private static final int PAGE_BROWSE = 2;
+    private static final int PAGE_PREFERENCES = 3;
+    private static final String STATE_PAGE = "models_page";
+    private int page = PAGE_HOME;
+    private View transferCard;
+    private TextView transferText;
+    private ProgressBar transferBar;
     private final ModelDownloadLifecycle.Observer downloadObserver = this::renderDownloadState;
     private final ModelImportLifecycle.Observer importObserver = this::renderImportState;
     private final AtomicBoolean manualReloadInFlight = new AtomicBoolean(false);
@@ -144,6 +154,9 @@ public class ModelsActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
+            @Override public void handleOnBackPressed() { handleBackNavigation(); }
+        });
         setContentView(R.layout.activity_models);
 
         modelList = findViewById(R.id.model_list);
@@ -165,6 +178,38 @@ public class ModelsActivity extends AppCompatActivity {
         languageSpinner = findViewById(R.id.spinner_language);
 
         translateSwitch = findViewById(R.id.switch_translate);
+        transferCard = findViewById(R.id.card_transfer);
+        transferText = findViewById(R.id.text_transfer);
+        transferBar = findViewById(R.id.bar_transfer);
+        findViewById(R.id.btn_cancel_transfer)
+                .setOnClickListener(v -> DOWNLOAD_LIFECYCLE.cancel());
+        findViewById(R.id.btn_models_language)
+                .setOnClickListener(v -> showPage(PAGE_PREFERENCES));
+        findViewById(R.id.btn_models_installed)
+                .setOnClickListener(v -> showPage(PAGE_INSTALLED));
+        findViewById(R.id.btn_models_browse)
+                .setOnClickListener(v -> showPage(PAGE_BROWSE));
+        findViewById(R.id.btn_models_import)
+                .setOnClickListener(v -> {
+                    if (!DOWNLOAD_LIFECYCLE.isRunning() && !IMPORT_LIFECYCLE.isRunning())
+                        importButton.performClick();
+                });
+        findViewById(R.id.btn_models_preferences)
+                .setOnClickListener(v -> showPage(PAGE_PREFERENCES));
+        LinearLayout pageContent = (LinearLayout) findViewById(R.id.card_recommendation).getParent();
+        View recommendation = findViewById(R.id.card_recommendation);
+        View[] navigation = new View[] {findViewById(R.id.btn_models_installed),
+                findViewById(R.id.btn_models_browse), findViewById(R.id.btn_models_import),
+                findViewById(R.id.btn_models_preferences)};
+        for (View item : navigation) pageContent.removeView(item);
+        int afterRecommendation = pageContent.indexOfChild(recommendation) + 1;
+        for (View item : navigation) pageContent.addView(item, afterRecommendation++);
+        ((com.google.android.material.appbar.MaterialToolbar) findViewById(R.id.toolbar))
+                .setNavigationIcon(R.drawable.ic_arrow_back);
+        ((com.google.android.material.appbar.MaterialToolbar) findViewById(R.id.toolbar))
+                .setNavigationContentDescription(R.string.models_back);
+        ((com.google.android.material.appbar.MaterialToolbar) findViewById(R.id.toolbar))
+                .setNavigationOnClickListener(v -> handleBackNavigation());
 
         importButton.setOnClickListener(v -> {
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -188,6 +233,9 @@ public class ModelsActivity extends AppCompatActivity {
             } else {
                 beginDownload(recommendedModel, DOWNLOAD_ORIGIN_RECOMMENDED);
             }
+        });
+        findViewById(R.id.btn_recommended_details).setOnClickListener(v -> {
+            if (recommendedModel != null) showModelDetails(recommendedModel);
         });
         findViewById(R.id.btn_cancel_recommended_download)
                 .setOnClickListener(v -> DOWNLOAD_LIFECYCLE.cancel());
@@ -214,6 +262,70 @@ public class ModelsActivity extends AppCompatActivity {
         });
         refreshList();
         updateRecommendation();
+        showPage(savedInstanceState == null ? PAGE_HOME
+                : savedInstanceState.getInt(STATE_PAGE, PAGE_HOME));
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        outState.putInt(STATE_PAGE, page);
+        super.onSaveInstanceState(outState);
+    }
+
+    private void showPage(int next) {
+        if (next < PAGE_HOME || next > PAGE_PREFERENCES) next = PAGE_HOME;
+        page = next;
+        findViewById(R.id.btn_models_language).setVisibility(next == PAGE_HOME ? View.VISIBLE : View.GONE);
+        findViewById(R.id.btn_models_installed).setVisibility(next == PAGE_HOME ? View.VISIBLE : View.GONE);
+        findViewById(R.id.btn_models_browse).setVisibility(next == PAGE_HOME ? View.VISIBLE : View.GONE);
+        findViewById(R.id.btn_models_import).setVisibility(next == PAGE_HOME ? View.VISIBLE : View.GONE);
+        findViewById(R.id.btn_models_preferences).setVisibility(next == PAGE_HOME ? View.VISIBLE : View.GONE);
+        findViewById(R.id.card_recommendation).setVisibility(
+                next == PAGE_HOME || next == PAGE_PREFERENCES ? View.VISIBLE : View.GONE);
+        recommendationText.setVisibility(next == PAGE_HOME ? View.VISIBLE : View.GONE);
+        downloadButton.setVisibility(next == PAGE_HOME ? View.VISIBLE : View.GONE);
+        findViewById(R.id.btn_recommended_details).setVisibility(
+                next == PAGE_HOME && recommendedModel != null ? View.VISIBLE : View.GONE);
+        findViewById(R.id.spinner_model_goal).setVisibility(
+                next == PAGE_PREFERENCES ? View.VISIBLE : View.GONE);
+        findViewById(R.id.card_installed_models).setVisibility(next == PAGE_INSTALLED ? View.VISIBLE : View.GONE);
+        findViewById(R.id.card_download_catalog).setVisibility(next == PAGE_BROWSE ? View.VISIBLE : View.GONE);
+        findViewById(R.id.card_manual_models).setVisibility(
+                next == PAGE_INSTALLED || next == PAGE_BROWSE ? View.VISIBLE : View.GONE);
+        findViewById(R.id.card_model_language).setVisibility(
+                next == PAGE_PREFERENCES ? View.VISIBLE : View.GONE);
+        findViewById(R.id.card_model_threads).setVisibility(
+                next == PAGE_PREFERENCES ? View.VISIBLE : View.GONE);
+        ((com.google.android.material.appbar.MaterialToolbar) findViewById(R.id.toolbar)).setTitle(
+                next == PAGE_HOME ? R.string.models_title : next == PAGE_INSTALLED
+                        ? R.string.models_active_section : next == PAGE_BROWSE
+                        ? R.string.models_catalog_section : R.string.models_preferences);
+        ((ScrollView) findViewById(R.id.models_scroll)).smoothScrollTo(0, 0);
+    }
+
+    private void handleBackNavigation() {
+        if (page != PAGE_HOME) {
+            showPage(PAGE_HOME);
+            return;
+        }
+        if (DOWNLOAD_LIFECYCLE.isRunning()) {
+            new MaterialAlertDialogBuilder(this)
+                    .setTitle(R.string.models_cancel_leave_title)
+                    .setMessage(R.string.models_cancel_leave_body)
+                    .setNegativeButton(R.string.models_stay, null)
+                    .setPositiveButton(R.string.models_cancel_and_leave, (dialog, which) -> {
+                        DOWNLOAD_LIFECYCLE.cancel();
+                        finish();
+                    }).show();
+            return;
+        }
+        if (IMPORT_LIFECYCLE.isRunning()) {
+            new MaterialAlertDialogBuilder(this)
+                    .setMessage(R.string.models_import_leave_body)
+                    .setPositiveButton(R.string.models_stay, null).show();
+            return;
+        }
+        finish();
     }
 
     @Override
@@ -307,37 +419,22 @@ public class ModelsActivity extends AppCompatActivity {
         }
         visibleModels.sort(Comparator.comparing((ModelDescriptor model) -> model.architecture)
                 .thenComparingLong(model -> model.byteSize));
-        Map<String, ModelDescriptor> familyFits = new LinkedHashMap<>();
-        for (ModelDescriptor model : visibleModels) {
-            if (!familyFits.containsKey(model.architecture)) {
-                familyFits.put(model.architecture, ModelGuidance.largestComfortableInFamily(
-                        ModelCatalog.verifiedDownloads(), model.architecture, device));
-            }
-        }
         String renderedFamily = null;
         for (ModelDescriptor model : visibleModels) {
             if (!model.architecture.equals(renderedFamily)) {
                 renderedFamily = model.architecture;
                 addFamilyHeader(renderedFamily);
             }
-            ModelDescriptor familyFit = familyFits.get(model.architecture);
-            boolean recommendedInFamily = familyFit != null && familyFit.id.equals(model.id);
             View row = getLayoutInflater().inflate(
                     R.layout.item_model_download, downloadCatalog, false);
             ((TextView) row.findViewById(R.id.txt_download_model_name))
-                    .setText(model.displayName);
+                    .setText(ModelPresentation.shortName(model));
             ((TextView) row.findViewById(R.id.txt_download_model_meta)).setText(
-                    getString(R.string.models_catalog_meta, model.architecture,
-                            Formatter.formatShortFileSize(this, model.byteSize)));
+                    Formatter.formatShortFileSize(this, model.byteSize));
             ((TextView) row.findViewById(R.id.txt_download_model_guidance)).setText(
-                    getString(R.string.models_catalog_guidance,
-                            sizeTierLabel(model.sizeTier()),
-                            Formatter.formatShortFileSize(this, model.minimumRamBytes),
-                            deviceFitLabel(ModelGuidance.fit(model, device))));
-            if (recommendedInFamily) {
-                row.findViewById(R.id.txt_download_model_fit_badge).setVisibility(View.VISIBLE);
-                row.setBackgroundResource(R.drawable.bg_model_family_recommended);
-            }
+                    deviceFitLabel(ModelGuidance.fit(model, device)));
+            row.findViewById(R.id.btn_download_details)
+                    .setOnClickListener(v -> showModelDetails(model));
             Button action = row.findViewById(R.id.btn_download_model);
             File installed = new File(modelsDir(), model.fileName);
             boolean builtIn = builtInAvailable
@@ -382,6 +479,16 @@ public class ModelsActivity extends AppCompatActivity {
             downloadCatalog.addView(row);
         }
         renderProgress(DOWNLOAD_LIFECYCLE.snapshot());
+    }
+
+    private void showModelDetails(ModelDescriptor model) {
+        new MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.models_details_title)
+                .setMessage(getString(R.string.models_details_body,
+                        model.displayName, model.fileName,
+                        Formatter.formatShortFileSize(this, model.byteSize),
+                        model.languages.size(), model.backend, model.licenseId, model.sourceUrl))
+                .setPositiveButton(android.R.string.ok, null).show();
     }
 
     private void addFamilyHeader(String family) {
@@ -618,6 +725,7 @@ public class ModelsActivity extends AppCompatActivity {
             }
         }
         names.sort(String.CASE_INSENSITIVE_ORDER);
+        if (!active.isEmpty() && names.remove(active)) names.add(0, active);
 
         // If the active model's file has disappeared, clear the selection.
         if (!active.isEmpty() && !names.contains(active)) {
@@ -637,9 +745,17 @@ public class ModelsActivity extends AppCompatActivity {
                     null, active.isEmpty());
         }
         for (String name : names) {
-            String size = Formatter.formatShortFileSize(
-                    this, new File(modelsDir(), name).length());
-            addModelRow(name, size, name, name.equals(active));
+            ModelDescriptor descriptor = ModelCatalog.findByFileName(name);
+            boolean verified = descriptor != null && VerifiedModelProvenance.isVerified(
+                    getFilesDir(), new File(modelsDir(), name), descriptor);
+            String subtitle = name.equals(active) ? getString(R.string.models_in_use)
+                    : getString(verified ? R.string.models_provenance_verified
+                    : R.string.models_imported_short);
+            if (!verified) subtitle = getString(R.string.models_imported_short)
+                    + (name.equals(active) ? " · " + getString(R.string.models_in_use) : "")
+                    + "\n" + name;
+            addModelRow(verified ? ModelPresentation.nameForFile(name)
+                    : ModelPresentation.importedName(name), subtitle, name, name.equals(active));
         }
         updateActiveSummary(active, names);
         updateCapabilityControls(active);
@@ -686,6 +802,13 @@ public class ModelsActivity extends AppCompatActivity {
         String languageTag = "";
         int position = languageSpinner.getSelectedItemPosition();
         if (position >= 0 && position < languageTags.size()) languageTag = languageTags.get(position);
+        String languageLabel = languageSpinner.getSelectedItem() == null
+                ? getString(R.string.models_language_auto)
+                : languageSpinner.getSelectedItem().toString();
+        String shortLanguage = languageTag.isEmpty() ? getString(R.string.models_language_auto)
+                : Locale.forLanguageTag(languageTag).getDisplayName(Locale.getDefault());
+        ((Button) findViewById(R.id.btn_models_language)).setText(
+                getString(R.string.models_language_choice, shortLanguage));
         boolean wantsTranslation = selectedGoal() == ModelRecommendation.Goal.TRANSLATE
                 || (translateSwitch != null && translateSwitch.isChecked());
         ModelRecommendation.Result result = ModelRecommendation.recommend(
@@ -693,25 +816,25 @@ public class ModelsActivity extends AppCompatActivity {
                         languageTag, wantsTranslation, selectedGoal()));
         if (result.status == ModelRecommendation.Status.RECOMMENDED) {
             recommendedModel = result.model;
+            String fit = ModelGuidance.fit(result.model, currentDeviceProfile())
+                    == ModelGuidance.DeviceFit.GOOD
+                    ? getString(R.string.models_fit_short_good)
+                    : getString(R.string.models_fit_short_demanding);
+            recommendationText.setText(getString(R.string.models_recommendation_short,
+                    ModelPresentation.shortName(result.model), fit,
+                    Formatter.formatShortFileSize(this, result.model.byteSize)));
+            findViewById(R.id.btn_recommended_details).setVisibility(
+                    page == PAGE_HOME ? View.VISIBLE : View.GONE);
             boolean isDefault = DefaultModelContract.FILE_NAME.equals(result.model.fileName);
             if (hasBuiltInModelAvailable() && isDefault) {
                 recommendationUsesBundledModel = true;
                 boolean bundledActive = readConfig("active_model").isEmpty();
-                if (BuildConfig.HAS_BUNDLED_MODEL) {
-                    recommendationText.setText(bundledActive
-                            ? R.string.models_recommendation_included
-                            : R.string.models_recommendation_included_available);
-                } else {
-                    recommendationText.setText(bundledActive
-                            ? R.string.models_recommendation_retained
-                            : R.string.models_recommendation_retained_available);
-                }
                 downloadButton.setText(bundledActive
                         ? (BuildConfig.HAS_BUNDLED_MODEL
                                 ? R.string.models_included : R.string.models_installed)
                         : (BuildConfig.HAS_BUNDLED_MODEL
                                 ? R.string.models_use_included : R.string.models_use_installed));
-                downloadButton.setEnabled(!bundledActive && !DOWNLOAD_LIFECYCLE.isRunning());
+                downloadButton.setEnabled(!bundledActive && !transferBusy());
                 return;
             }
             File installed = new File(modelsDir(), result.model.fileName);
@@ -720,17 +843,11 @@ public class ModelsActivity extends AppCompatActivity {
             boolean active = result.model.fileName.equals(readConfig("active_model"));
             if (verified && active) {
                 recommendationUsesInstalledModel = true;
-                recommendationText.setText(getString(
-                        R.string.models_recommendation_installed, result.model.displayName));
                 downloadButton.setText(R.string.models_installed);
                 downloadButton.setEnabled(false);
                 return;
             }
-            recommendationText.setText(getString(R.string.models_recommendation_ready_details,
-                    result.model.displayName, Formatter.formatShortFileSize(this, result.model.byteSize),
-                    sizeTierLabel(result.model.sizeTier()),
-                    Formatter.formatShortFileSize(this, result.model.minimumRamBytes)));
-            downloadButton.setEnabled(!DOWNLOAD_LIFECYCLE.isRunning());
+            downloadButton.setEnabled(!transferBusy());
             if (verified) {
                 recommendationUsesInstalledModel = true;
                 downloadButton.setText(R.string.models_use_installed);
@@ -742,6 +859,7 @@ public class ModelsActivity extends AppCompatActivity {
                 downloadButton.setText(R.string.models_download_and_use);
             }
         } else {
+            findViewById(R.id.btn_recommended_details).setVisibility(View.GONE);
             recommendationText.setText(getString(R.string.models_recommendation_none,
                     recommendationReason(result)));
             downloadButton.setText(R.string.models_download_and_use);
@@ -790,7 +908,7 @@ public class ModelsActivity extends AppCompatActivity {
     }
 
     private void startDownload(ModelDescriptor model, String origin) {
-        if (DOWNLOAD_LIFECYCLE.isRunning() || IMPORT_LIFECYCLE.isRunning()) return;
+        if (transferBusy()) { snackbar(getString(R.string.models_busy)); return; }
         setTransferBusy(true);
         DOWNLOAD_LIFECYCLE.start(model.id, origin, listener ->
                 ModelDownloadTask.start(getFilesDir(), model, listener));
@@ -804,9 +922,13 @@ public class ModelsActivity extends AppCompatActivity {
                 renderProgress(snapshot);
                 return;
             }
-            if (snapshot.state == ModelDownloadLifecycle.State.IDLE) return;
+            if (snapshot.state == ModelDownloadLifecycle.State.IDLE) {
+                setTransferBusy(transferBusy());
+                renderProgress(snapshot);
+                return;
+            }
 
-            setTransferBusy(false);
+            setTransferBusy(transferBusy());
             renderProgress(DOWNLOAD_LIFECYCLE.snapshot());
             if (snapshot.state == ModelDownloadLifecycle.State.COMPLETE) {
                 DOWNLOAD_LIFECYCLE.clearTerminal();
@@ -838,33 +960,57 @@ public class ModelsActivity extends AppCompatActivity {
     private void renderProgress(ModelDownloadLifecycle.Snapshot snapshot) {
         recommendedProgressArea.setVisibility(View.GONE);
         for (CatalogRow row : catalogRows.values()) row.progressArea.setVisibility(View.GONE);
-        if (snapshot.state != ModelDownloadLifecycle.State.RUNNING) return;
-        ProgressBar bar;
-        TextView text;
-        View area;
-        if (DOWNLOAD_ORIGIN_RECOMMENDED.equals(snapshot.origin)
-                && recommendedModel != null
-                && snapshot.modelId.equals(recommendedModel.id)) {
-            area = recommendedProgressArea;
-            bar = recommendedProgress;
-            text = recommendedProgressText;
-        } else {
-            CatalogRow row = catalogRows.get(snapshot.modelId);
-            if (row == null) return;
-            area = row.progressArea;
-            bar = row.progress;
-            text = row.progressText;
+        ModelImportLifecycle.Snapshot importing = IMPORT_LIFECYCLE.snapshot();
+        importArea.setVisibility(View.GONE);
+        View cancelAction = findViewById(R.id.btn_cancel_transfer);
+        if (importing.state == ModelImportLifecycle.State.RUNNING) {
+            transferCard.setVisibility(View.VISIBLE);
+            transferBar.setVisibility(View.VISIBLE);
+            cancelAction.setVisibility(View.GONE);
+            transferText.setText(getString(R.string.models_importing,
+                    ModelPresentation.importedName(importing.requestedName)));
+            transferBar.setIndeterminate(importing.total <= 0L);
+            if (importing.total > 0L) transferBar.setProgress((int) Math.min(
+                    100L, importing.copied * 100L / importing.total));
+            return;
         }
-        area.setVisibility(View.VISIBLE);
-        bar.setIndeterminate(snapshot.total <= 0L);
+        cancelAction.setVisibility(View.VISIBLE);
+        if (snapshot.state == ModelDownloadLifecycle.State.FAILED) {
+            transferCard.setVisibility(View.VISIBLE);
+            transferBar.setVisibility(View.GONE);
+            transferText.setText(getString(R.string.models_download_failed,
+                    snapshot.failure == null ? getString(R.string.models_download_failed_unknown)
+                            : snapshot.failure));
+            Button action = findViewById(R.id.btn_cancel_transfer);
+            action.setText(R.string.models_retry_download);
+            ModelDescriptor failed = ModelCatalog.findById(snapshot.modelId);
+            action.setEnabled(failed != null);
+            action.setOnClickListener(v -> {
+                if (failed != null) beginDownload(failed, snapshot.origin);
+            });
+            return;
+        }
+        if (snapshot.state != ModelDownloadLifecycle.State.RUNNING) {
+            transferCard.setVisibility(View.GONE);
+            return;
+        }
+        transferCard.setVisibility(View.VISIBLE);
+        transferBar.setVisibility(View.VISIBLE);
+        Button cancel = findViewById(R.id.btn_cancel_transfer);
+        cancel.setText(R.string.models_cancel_download);
+        cancel.setEnabled(true);
+        cancel.setOnClickListener(v -> DOWNLOAD_LIFECYCLE.cancel());
+        transferBar.setIndeterminate(snapshot.total <= 0L);
         if (snapshot.total > 0L) {
             int percent = (int) Math.min(100L, snapshot.downloaded * 100L / snapshot.total);
-            bar.setProgress(percent);
-            text.setText(getString(R.string.models_downloading_progress, percent,
+            transferBar.setProgress(percent);
+            transferText.setText(percent >= 100
+                    ? getString(R.string.models_checking_installing)
+                    : getString(R.string.models_downloading_progress, percent,
                     Formatter.formatShortFileSize(this, snapshot.downloaded),
                     Formatter.formatShortFileSize(this, snapshot.total)));
         } else {
-            text.setText(R.string.models_downloading);
+            transferText.setText(R.string.models_downloading);
         }
     }
 
@@ -876,6 +1022,7 @@ public class ModelsActivity extends AppCompatActivity {
 
     private void setTransferBusy(boolean busy) {
         importButton.setEnabled(!busy);
+        findViewById(R.id.btn_models_import).setEnabled(!busy);
         catalogFamilySpinner.setEnabled(!busy);
         setModelChoiceControlsEnabled(!busy);
         if (busy) {
@@ -960,7 +1107,7 @@ public class ModelsActivity extends AppCompatActivity {
             ModelDescriptor catalogModel = ModelCatalog.findByFileName(active);
             boolean verified = catalogModel != null
                     && VerifiedModelProvenance.isVerified(getFilesDir(), file, catalogModel);
-            title = active;
+            title = ModelPresentation.nameForFile(active);
             size = Formatter.formatShortFileSize(this, file.length());
             provenance = getString(verified
                     ? R.string.models_provenance_verified
@@ -996,6 +1143,21 @@ public class ModelsActivity extends AppCompatActivity {
         });
 
         ImageButton delete = row.findViewById(R.id.btn_model_delete);
+        row.findViewById(R.id.btn_model_details).setOnClickListener(v -> {
+            ModelDescriptor descriptor = ModelCatalog.findByFileName(fileName);
+            if (descriptor != null) {
+                showModelDetails(descriptor);
+            } else if (fileName != null) {
+                new MaterialAlertDialogBuilder(this)
+                        .setTitle(R.string.models_details_title)
+                        .setMessage(fileName + "\n"
+                                + Formatter.formatShortFileSize(this,
+                                new File(modelsDir(), fileName).length()) + "\n"
+                                + getString(R.string.models_imported_short))
+                        .setPositiveButton(android.R.string.ok, null).show();
+            }
+        });
+        if (fileName == null) row.findViewById(R.id.btn_model_details).setVisibility(View.GONE);
         if (fileName != null) {
             delete.setContentDescription(getString(R.string.models_delete_named, title));
             delete.setOnClickListener(v -> confirmDelete(fileName));
@@ -1006,7 +1168,12 @@ public class ModelsActivity extends AppCompatActivity {
         modelList.addView(row);
     }
 
+    private boolean transferBusy() {
+        return DOWNLOAD_LIFECYCLE.isRunning() || IMPORT_LIFECYCLE.isRunning();
+    }
+
     private void selectModel(String fileNameOrNull) {
+        if (transferBusy()) { snackbar(getString(R.string.models_busy)); return; }
         try {
             if (fileNameOrNull == null) {
                 ImportedModelSelection.deactivate(getFilesDir());
@@ -1024,11 +1191,23 @@ public class ModelsActivity extends AppCompatActivity {
     }
 
     private void confirmDelete(String fileName) {
+        if (DOWNLOAD_LIFECYCLE.isRunning() || IMPORT_LIFECYCLE.isRunning()) {
+            snackbar(getString(R.string.models_busy));
+            return;
+        }
         new MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.models_delete)
-                .setMessage(getString(R.string.models_delete_confirm, fileName))
+                .setMessage(getString(R.string.models_delete_confirm,
+                        ModelPresentation.nameForFile(fileName) + "\n" + fileName))
                 .setPositiveButton(android.R.string.ok, (d, w) -> {
-                    new File(modelsDir(), fileName).delete();
+                    if (DOWNLOAD_LIFECYCLE.isRunning() || IMPORT_LIFECYCLE.isRunning()) {
+                        snackbar(getString(R.string.models_busy));
+                        return;
+                    }
+                    if (!new File(modelsDir(), fileName).delete()) {
+                        snackbar(getString(R.string.models_delete_failed));
+                        return;
+                    }
                     try {
                         VerifiedModelProvenance.forget(getFilesDir(), fileName);
                     } catch (IOException ignored) {
@@ -1116,7 +1295,7 @@ public class ModelsActivity extends AppCompatActivity {
     }
 
     private void importModel(Uri uri, String name, long size) {
-        if (DOWNLOAD_LIFECYCLE.isRunning() || IMPORT_LIFECYCLE.isRunning()) return;
+        if (transferBusy()) { snackbar(getString(R.string.models_busy)); return; }
         File filesDir = getFilesDir();
         ContentResolver resolver = getApplicationContext().getContentResolver();
         IMPORT_LIFECYCLE.start(name, size, listener -> ModelImportTask.start(
@@ -1128,28 +1307,24 @@ public class ModelsActivity extends AppCompatActivity {
             if (isFinishing() || (Build.VERSION.SDK_INT >= 17 && isDestroyed())) return;
             if (snapshot.state == ModelImportLifecycle.State.IDLE) {
                 importArea.setVisibility(View.GONE);
+                setTransferBusy(transferBusy());
+                renderProgress(DOWNLOAD_LIFECYCLE.snapshot());
                 return;
             }
             if (snapshot.state == ModelImportLifecycle.State.RUNNING) {
                 setTransferBusy(true);
-                importArea.setVisibility(View.VISIBLE);
-                importBar.setIndeterminate(snapshot.total <= 0L);
-                importBar.setMax(100);
-                if (snapshot.total > 0L) {
-                    int percent = (int) Math.min(
-                            100L, snapshot.copied * 100L / snapshot.total);
-                    importBar.setProgress(percent);
-                }
-                String label = getString(R.string.models_importing, snapshot.requestedName);
-                if (!label.contentEquals(importText.getText())) importText.setText(label);
+                renderProgress(DOWNLOAD_LIFECYCLE.snapshot());
                 return;
             }
 
             IMPORT_LIFECYCLE.clearTerminal();
             importArea.setVisibility(View.GONE);
-            setTransferBusy(false);
+            findViewById(R.id.btn_cancel_transfer).setVisibility(View.VISIBLE);
+            renderProgress(DOWNLOAD_LIFECYCLE.snapshot());
+            setTransferBusy(transferBusy());
             if (snapshot.state == ModelImportLifecycle.State.COMPLETE) {
-                snackbar(getString(R.string.models_import_done, snapshot.installedName));
+                snackbar(getString(R.string.models_import_done,
+                        ModelPresentation.nameForFile(snapshot.installedName)));
                 refreshList();
                 updateRecommendation();
                 showModelStatus(getString(R.string.models_loading));
