@@ -648,7 +648,14 @@ class ReleaseConfigurationTest(unittest.TestCase):
             ROOT / "app/src/main/res/values-night/colors.xml",
         ]
         combined = "\n".join(path.read_text() for path in color_files)
-        self.assertIn('<color name="colorPrimary">#66D5DB</color>', combined)
+        self.assertIn('<color name="colorPrimary">#FFC166</color>', combined)
+        for path in color_files:
+            for color in ET.parse(path).getroot():
+                value = (color.text or "").lstrip("#")
+                if len(value) == 6:
+                    red, green, blue = (int(value[index:index + 2], 16) for index in (0, 2, 4))
+                    self.assertGreaterEqual(red, green, color.attrib["name"])
+                    self.assertGreaterEqual(green, blue, color.attrib["name"])
         self.assertNotIn("#2196F3", combined.upper())
         self.assertNotIn("#1976D2", combined.upper())
 
@@ -828,18 +835,19 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("tryLock()", downloader)
         self.assertIn("setRequestProperty(\"Range\"", downloader)
         self.assertIn("setRequestProperty(\"If-Range\"", downloader)
-        self.assertEqual(3, catalog.count("ModelDescriptor.Provenance.EXACT_PINNED"))
+        self.assertEqual(4, catalog.count("ModelDescriptor.Provenance.EXACT_PINNED"))
         self.assertIn("SenseVoice", catalog)
         self.assertIn("Whisper", catalog)
         self.assertIn("parakeet-tdt-1.1b", catalog)
         self.assertIn("parakeet-primeline-Q4_K_M.gguf", catalog)
         self.assertIn("transcribe.cpp 0.4.0", catalog)
         self.assertNotIn("transcribe.cpp 0.1.3", catalog)
-        self.assertIn("ModelCatalog.verifiedDownloads()", activity)
+        self.assertIn("ModelCatalog.curatedDownloads()", activity)
         self.assertIn("startDownload(model, origin)", activity)
         self.assertIn("hasUsableNetworkAccess()", activity)
         self.assertIn("showNetworkAccessDialog(model, origin, null)", activity)
-        self.assertIn("showRemoveNetworkAccessDialog()", activity)
+        self.assertNotIn("showRemoveNetworkAccessDialog()", activity)
+        self.assertIn("R.id.models_network_settings", activity)
         self.assertIn("device.totalRamBytes >= model.minimumRamBytes", activity)
         self.assertIn("device.freeStorageBytes >= model.minimumFreeBytes", activity)
         models_layout = (ROOT / "app/src/main/res/layout/activity_models.xml").read_text()
@@ -896,7 +904,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         goal_listener = activity[activity.index("goalSpinner.setOnItemSelectedListener"):
                                  activity.index("private ModelRecommendation.Goal selectedGoal")]
         self.assertNotIn("translateSwitch.setChecked", goal_listener)
-        self.assertIn("runtime prompt", values["models_network_body"].lower())
+        self.assertIn("android settings", values["models_network_body"].lower())
+        self.assertIn("then retry", values["models_network_body"].lower())
         self.assertIn("cannot revoke", values["models_remove_network_body"].lower())
         self.assertNotIn("parakeet", values["models_recommendation_installed"].lower())
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: false', gradle)
@@ -1009,7 +1018,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("private void showModelStatus", source)
         self.assertIn('retryButton.setVisibility(failed ? View.VISIBLE : View.GONE)', source)
         self.assertIn("models_provenance_imported", source)
-        self.assertIn("DefaultModelContract.BYTE_SIZE", source)
+        self.assertIn("VerifiedModelProvenance.isVerified(", source)
         self.assertIn("reloadModelNative(this)", source)
 
     def test_custom_terms_are_bounded_private_with_model_gated_hints(self):

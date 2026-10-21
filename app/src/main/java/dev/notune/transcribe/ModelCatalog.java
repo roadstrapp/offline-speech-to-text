@@ -65,6 +65,21 @@ public final class ModelCatalog {
             2L * 1024L * MIB, DefaultModelContract.BYTE_SIZE + 64L * MIB,
             ModelDescriptor.Provenance.EXACT_PINNED);
 
+    private static final ModelDescriptor PARAKEET_Q8 = new ModelDescriptor(
+            "parakeet-tdt-0.6b-v3-q8", "Parakeet v3 Q8", "Parakeet",
+            RUNTIME, "parakeet-tdt-0.6b-v3-Q8_0.gguf",
+            739508576L, "5859f77944efcd8eafa23a6350731960b2b55b2203df51f319665c807d802cc7",
+            "https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/"
+                    + "d8d8c32cb2017c57e5307767343e97870f8a7f53/parakeet-tdt-0.6b-v3-Q8_0.gguf?download=true",
+            "https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf",
+            "CC-BY-4.0", "https://creativecommons.org/licenses/by/4.0/",
+            Collections.singleton("arm64-v8a"), false, false,
+            PARAKEET_V3_LANGUAGES,
+            ModelDescriptor.Capability.SUPPORTED, ModelDescriptor.Capability.UNSUPPORTED,
+            ModelDescriptor.Capability.UNKNOWN, ModelDescriptor.Capability.UNSUPPORTED,
+            2L * 1024L * MIB, 739508576L + 64L * MIB,
+            ModelDescriptor.Provenance.EXACT_PINNED);
+
     private static final ModelDescriptor PARAKEET_PRIMELINE = new ModelDescriptor(
             "parakeet-primeline-q4km", "Parakeet primeLine · Q4", "Parakeet",
             RUNTIME, "parakeet-primeline-Q4_K_M.gguf", 485425568L,
@@ -86,6 +101,7 @@ public final class ModelCatalog {
     static {
         List<ModelDescriptor> models = new ArrayList<>();
         models.add(PARAKEET);
+        models.add(PARAKEET_Q8);
         models.add(PARAKEET_PRIMELINE);
         // One mobile-oriented quantization for every model variant in the
         // pinned runtime's model documentation. Larger variants remain visible
@@ -161,6 +177,22 @@ public final class ModelCatalog {
     }
 
     public static List<ModelDescriptor> verifiedDownloads() { return DOWNLOADS; }
+
+    /** Curated picker; keep full metadata lookup for existing and manual imports. */
+    public static List<ModelDescriptor> curatedDownloads() {
+        java.util.Set<String> choices = new LinkedHashSet<>(Arrays.asList(
+                DefaultModelContract.FILE_NAME, "parakeet-tdt-0.6b-v3-Q8_0.gguf",
+                "parakeet-primeline-Q4_K_M.gguf", "whisper-tiny.en-Q4_K_M.gguf",
+                "whisper-tiny-Q4_K_M.gguf", "whisper-base-Q4_K_M.gguf",
+                "whisper-small-Q4_K_M.gguf", "whisper-medium-Q4_K_M.gguf",
+                "whisper-large-v3-turbo-Q4_K_M.gguf", "whisper-large-v3-Q4_K_M.gguf"));
+        List<ModelDescriptor> result = new ArrayList<>();
+        for (ModelDescriptor model : DOWNLOADS) {
+            if (choices.contains(model.fileName)) result.add(model);
+        }
+        return Collections.unmodifiableList(result);
+    }
+
 
     public static ModelDescriptor findByFileName(String fileName) {
         if (fileName == null) return null;

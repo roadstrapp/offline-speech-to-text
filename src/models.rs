@@ -28,3 +28,15 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_ModelsActivity_reloadMo
         let _ = engine::ensure_loaded_from_thread(&vm, &activity_ref);
     });
 }
+
+/// Read-only identity check; does not load, reset, or log model paths.
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_notune_transcribe_ModelsActivity_loadedModelPathNative(
+    env: JNIEnv,
+    _this: JObject,
+) -> jni::sys::jstring {
+    engine::loaded_model_path()
+        .and_then(|path| env.new_string(path.to_string_lossy().as_ref()).ok())
+        .map(|value| value.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}

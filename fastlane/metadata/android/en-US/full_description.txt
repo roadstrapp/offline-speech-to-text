@@ -6,7 +6,7 @@ Share an audio file with the app to transcribe a recording. Files decode in bloc
 
 Use separate dictionary views for preferred words and explicit heard-to-written corrections. Choose the pause before automatic stopping. Transcript recovery helps preserve text when an editor changes or closes. Password fields are protected from automatic insertion.
 
-The app download does not bundle a speech model. Home guides microphone access and one recommended model based on your language, storage and phone. Tap Download and install to fetch it. Installed models, the full catalogue and advanced controls have their own screens. Downloaded models remain in private app storage through ordinary updates. Compatible transcribe.cpp GGUF models can also be imported from local storage.
+The app download does not bundle a speech model. Home guides microphone access and one recommended model based on your language, storage and phone. Tap Download and install to fetch it. Installed models appear first. Other models, local import and model preferences are available from the menu. The download picker offers ten tested choices, including Parakeet v3 Q8. Downloaded models remain in private app storage through ordinary updates. Compatible transcribe.cpp GGUF models can also be imported from local storage.
 
 The app is free and open source under the MIT License, with a native Android interface, a Rust core and the transcribe.cpp speech engine.
 

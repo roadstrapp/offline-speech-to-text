@@ -173,7 +173,7 @@
     <string name="models_threads_desc">“Automatic” balances speed and battery use. Choose more threads only when lower latency matters more than power.</string>
     <string name="models_threads_auto">Automatic</string>
     <string name="models_recommended_section">Recommended for this device</string>
-    <string name="models_catalog_section">All compatible models</string>
+    <string name="models_catalog_section">Other models</string>
     <string name="models_catalog_desc">Exact GGUF downloads supported by this app version. Filter by family; larger models need more memory and storage.</string>
     <string name="models_catalog_all">All families</string>
     <string name="models_catalog_meta">%1$s · %2$s · SHA-256 verified</string>
@@ -212,11 +212,11 @@
     <string name="models_recommendation_retained">Parakeet TDT 0.6B v3 Q4 · already installed and active · works offline</string>
     <string name="models_recommendation_retained_available">Parakeet TDT 0.6B v3 Q4 · already installed · no download needed</string>
     <string name="models_recommendation_installed">%1$s · installed and active</string>
-    <string name="models_recommendation_none">No verified automatic match: %1$s. Manual import and model links remain available.</string>
-    <string name="models_reason_language">the selected language is not supported</string>
-    <string name="models_reason_storage">more free storage is required</string>
-    <string name="models_reason_memory">more memory is required</string>
-    <string name="models_reason_device">this CPU is not supported by the current build</string>
+    <string name="models_recommendation_none">%1$s.</string>
+    <string name="models_reason_language">This language is not supported</string>
+    <string name="models_reason_storage">More free storage is required</string>
+    <string name="models_reason_memory">More memory is required</string>
+    <string name="models_reason_device">This device is not supported</string>
     <string name="models_download_and_use">Download and install</string>
     <string name="models_download">Download</string>
     <string name="models_device_unsupported">Unsupported</string>
@@ -233,7 +233,7 @@
     <string name="models_download_failed">Download not installed: %1$s</string>
     <string name="models_download_failed_unknown">Unknown download error.</string>
     <string name="models_network_title">Network access unavailable</string>
-    <string name="models_network_body">Connect this device to the internet. If you disabled this app’s Network permission, allow it in Android App settings, then retry. Android does not provide apps with a runtime prompt for the install-time INTERNET permission.</string>
+    <string name="models_network_body">Connect to the internet. If this app’s network access is blocked, allow it in Android settings, then retry.</string>
     <string name="models_open_app_settings">Open app settings</string>
     <string name="models_retry_download">Retry</string>
     <string name="models_remove_network_title">Model ready offline</string>

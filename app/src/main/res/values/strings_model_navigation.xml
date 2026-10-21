@@ -20,4 +20,8 @@
     <string name="models_import_leave_body">An import is in progress. Stay here until it finishes.</string>
     <string name="models_checking_installing">Checking and installing…</string>
     <string name="models_delete_failed">Could not delete model</string>
+    <string name="models_choose_installed">Choose an installed model to begin.</string>
+    <string name="models_other_models">Other models</string>
+    <string name="models_goal_heading">Priority</string>
+    <string name="models_named_transfer">%1$s\n%2$s</string>
 </resources>

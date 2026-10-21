@@ -136,7 +136,22 @@ public final class BehaviorTest {
         assertEquals(true, model.abis.contains("arm64-v8a")
                         && !model.requiresDotProduct && !model.requiresFp16,
                 "the baseline backend keeps every arm64 model installable");
-        assertEquals(53, ModelCatalog.verifiedDownloads().size(),
+        assertEquals(10, ModelCatalog.curatedDownloads().size(), "picker only offers qualified choices");
+        Set<String> curated = new HashSet<>();
+        for (ModelDescriptor choice : ModelCatalog.curatedDownloads()) curated.add(choice.fileName);
+        assertEquals(true, curated.contains("parakeet-tdt-0.6b-v3-Q8_0.gguf"), "owner reference has a verified download");
+        for (String tag : new String[]{"", "auto", "en", "de", "fr", "ja", "yue"}) {
+            for (ModelRecommendation.Goal goal : ModelRecommendation.Goal.values()) {
+                for (boolean translate : new boolean[]{false, true}) {
+                    ModelRecommendation.Result result = ModelRecommendation.recommend(
+                            new ModelRecommendation.DeviceProfile(true, true, true, 12L << 30, 16L << 30, null),
+                            new ModelRecommendation.Request(tag, translate, goal));
+                    if (result.status == ModelRecommendation.Status.RECOMMENDED)
+                        assertEquals(true, curated.contains(result.model.fileName), "recommendation must remain within curated downloads");
+                }
+            }
+        }
+        assertEquals(54, ModelCatalog.verifiedDownloads().size(),
                 "every model variant supported by the pinned runtime is downloadable");
         assertEquals(true, ModelCatalog.verifiedDownloads().stream().allMatch(
                         ModelDescriptor::isVerifiedDownload),
@@ -451,9 +466,13 @@ public final class BehaviorTest {
         assertEquals(ModelGuidance.DeviceFit.NOT_ENOUGH_RAM,
                 ModelGuidance.fit(huge, ordinaryPhone),
                 "large models are rejected before download when estimated RAM is insufficient");
+        assertEquals(ModelCatalog.verifiedDefault().fileName,
+                ModelRecommendation.recommend(ordinaryPhone,
+                        new ModelRecommendation.Request("auto", false)).model.fileName,
+                "legacy automatic language selects the same supported default as an empty hint");
         ModelDescriptor ordinaryParakeet = ModelGuidance.largestComfortableInFamily(
                 ModelCatalog.verifiedDownloads(), "Parakeet", ordinaryPhone);
-        assertEquals(DefaultModelContract.FILE_NAME, ordinaryParakeet.fileName,
+        assertEquals("parakeet-tdt-0.6b-v3-Q8_0.gguf", ordinaryParakeet.fileName,
                 "a 4 GiB phone highlights the largest conservative Parakeet fit");
         ModelRecommendation.DeviceProfile highMemoryPhone =
                 new ModelRecommendation.DeviceProfile(

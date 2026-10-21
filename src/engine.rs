@@ -61,6 +61,7 @@ impl TranscriptionJob {
 
 /// A loaded transcribe.cpp session plus the options applied to every run.
 pub struct Engine {
+    model_path: PathBuf,
     diagnostic_family: i32,
     session: transcribe_cpp::Session,
     language: Option<String>,
@@ -185,6 +186,7 @@ impl Engine {
         };
         ACTIVE_THREADS.store(threads, Ordering::Relaxed);
         Ok(Engine {
+            model_path: model_path.to_path_buf(),
             diagnostic_family: match model.arch().as_str() {
                 "whisper" => 1,
                 "parakeet" => 2,
@@ -507,6 +509,14 @@ pub fn transcribe_shared(engine: &Arc<Mutex<Engine>>, samples: Vec<f32>) -> Resu
         started.elapsed().as_secs_f64()
     );
     result
+}
+
+/// Exact source of the loaded engine, for bounded local qualification.
+/// Never waits behind inference and is never included in public diagnostics.
+pub fn loaded_model_path() -> Option<PathBuf> {
+    let engine = get_engine()?;
+    let guard = engine.try_lock().ok()?;
+    Some(guard.model_path.clone())
 }
 
 pub fn is_engine_loaded() -> bool {

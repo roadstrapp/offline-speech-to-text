@@ -21,6 +21,8 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
     private boolean modelFixture;
     private boolean fileTranscription;
     private boolean preparedWindows;
+    private String qualificationModel;
+    private boolean installedModelsUi;
     private boolean redesignUi;
     private boolean seedUiUpgrade;
     private static final class InjectedFixtureFailure extends Exception {}
@@ -36,11 +38,15 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         preparedWindows = arguments != null && "true".equals(arguments.getString("prepared_windows"));
         redesignUi = arguments != null && "true".equals(arguments.getString("redesign_ui"));
         seedUiUpgrade = arguments != null && "true".equals(arguments.getString("seed_ui_upgrade"));
+        installedModelsUi = arguments != null && "true".equals(arguments.getString("installed_models_ui"));
+        qualificationModel = arguments == null ? null : arguments.getString("qualify_model");
         start();
     }
 
     @Override
     public void onStart() {
+        if (qualificationModel != null) { ModelQualificationDeviceTest.run(this, qualificationModel); return; }
+        if (installedModelsUi) { testInstalledModelsUi(); return; }
         if (seedUiUpgrade) { seedUiUpgrade(); return; }
         if (redesignUi) { testRedesignUi(); return; }
         Bundle result = new Bundle();
@@ -483,6 +489,112 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         } catch (Throwable error) {
             code = Activity.RESULT_CANCELED;
             result.putString("failure", error.toString());
+        }
+        finish(code, result);
+    }
+
+    private void testInstalledModelsUi() {
+        Bundle result = new Bundle();
+        int code = Activity.RESULT_OK;
+        File models = new File(getTargetContext().getFilesDir(), "models");
+        File first = new File(models, "Synthetic One.gguf");
+        File second = new File(models, "Synthetic Two.gguf");
+        boolean ownsInventoryFixtures = false;
+        java.util.concurrent.atomic.AtomicReference<ModelDownloadTask.Listener> fakeDownload = new java.util.concurrent.atomic.AtomicReference<>();
+        ModelDownloadLifecycle[] downloadOwner = new ModelDownloadLifecycle[1];
+        try {
+            check(getTargetContext().getPackageName().equals("app.offlinespeechtotext.validation"),
+                    "inventory fixtures require isolated package");
+            check(!first.exists() && !second.exists(), "inventory fixture already exists");
+            ownsInventoryFixtures = true;
+            models.mkdirs();
+            current = startActivitySync(new Intent(getTargetContext(), ModelsActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            java.lang.reflect.Method refresh = ModelsActivity.class.getDeclaredMethod("refreshList");
+            refresh.setAccessible(true);
+            runSafelyOnMainSync(() -> {
+                check(current.findViewById(R.id.card_recommendation).isShown(), "empty inventory needs recommendation");
+                check(!current.findViewById(R.id.card_installed_models).isShown(), "empty inventory shown as installed");
+            });
+            // Inventory-only placeholders: explicitly unverified, never selected or loaded.
+            Files.write(first.toPath(), new byte[]{'G', 'G', 'U', 'F'});
+            runSafelyOnMainSync(() -> {
+                try { refresh.invoke(current); } catch (Exception error) { throw new AssertionError(error); }
+                check(!current.findViewById(R.id.card_recommendation).isShown(), "installed inventory still recommends download");
+                check(current.findViewById(R.id.card_installed_models).isShown(), "installed inventory missing from default page");
+                check(!current.findViewById(R.id.btn_models_installed).isShown(), "redundant installed shortcut remains");
+            });
+            waitForIdleSync();
+            android.graphics.Bitmap inventoryScreen = getUiAutomation().takeScreenshot();
+            check(inventoryScreen != null, "inventory screenshot unavailable");
+            try (java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream()) {
+                check(inventoryScreen.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output),
+                        "inventory screenshot failed");
+                result.putString("inventory_png", android.util.Base64.encodeToString(
+                        output.toByteArray(), android.util.Base64.NO_WRAP));
+            } finally { inventoryScreen.recycle(); }
+            Files.write(second.toPath(), new byte[]{'G', 'G', 'U', 'F'});
+            Files.delete(first.toPath());
+            runSafelyOnMainSync(() -> {
+                try { refresh.invoke(current); } catch (Exception error) { throw new AssertionError(error); }
+                check(!current.findViewById(R.id.card_recommendation).isShown(), "remaining model lost default inventory view");
+            });
+            Files.delete(second.toPath());
+            runSafelyOnMainSync(() -> {
+                try { refresh.invoke(current); } catch (Exception error) { throw new AssertionError(error); }
+                check(current.findViewById(R.id.card_recommendation).isShown(), "last removal did not restore recommendation");
+                check(!current.findViewById(R.id.card_installed_models).isShown(), "last removal left stale inventory");
+            });
+            runSafelyOnMainSync(() -> {
+                com.google.android.material.appbar.MaterialToolbar toolbar = current.findViewById(R.id.toolbar);
+                check(toolbar.getMenu().findItem(R.id.btn_models_preferences).isVisible(), "preferences menu hidden");
+                check(toolbar.getMenu().performIdentifierAction(R.id.btn_models_preferences, 0), "preferences menu did not handle action");
+                check(current.findViewById(R.id.card_model_language).isShown(), "preferences route lost language controls");
+                ((androidx.activity.ComponentActivity) current).getOnBackPressedDispatcher().onBackPressed();
+                check(toolbar.getMenu().findItem(R.id.btn_models_browse).isVisible(), "other-models menu hidden");
+                check(toolbar.getMenu().performIdentifierAction(R.id.btn_models_browse, 0), "catalog menu did not handle action");
+                check(current.findViewById(R.id.card_download_catalog).isShown(), "other models route hidden");
+                android.view.ViewGroup catalog = current.findViewById(R.id.download_catalog);
+                int modelRows = 0;
+                for (int i = 0; i < catalog.getChildCount(); i++) {
+                    if (catalog.getChildAt(i).findViewById(R.id.btn_download_model) != null) modelRows++;
+                }
+                check(modelRows == 10, "curated catalogue must expose ten tested models");
+                ((androidx.activity.ComponentActivity) current).getOnBackPressedDispatcher().onBackPressed();
+            });
+            java.lang.reflect.Field lifecycle = ModelsActivity.class.getDeclaredField("DOWNLOAD_LIFECYCLE");
+            lifecycle.setAccessible(true);
+            downloadOwner[0] = (ModelDownloadLifecycle) lifecycle.get(null);
+            runSafelyOnMainSync(() -> {
+                downloadOwner[0].start("parakeet-tdt-0.6b-v3-q8", "catalog", listener -> {
+                    fakeDownload.set(listener); listener.onProgress(12, 100); return null;
+                });
+                check(current.findViewById(R.id.card_transfer).isShown(), "transfer feedback hidden");
+                check(!current.findViewById(R.id.card_recommendation).isShown(), "download repeats recommendation action");
+                check(((android.widget.TextView) current.findViewById(R.id.text_transfer)).getText()
+                        .toString().contains("Parakeet v3 Q8"), "download lost human-readable model identity");
+            });
+            waitForIdleSync();
+            android.graphics.Bitmap transferScreen = getUiAutomation().takeScreenshot();
+            check(transferScreen != null, "transfer screenshot unavailable");
+            try (java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream()) {
+                check(transferScreen.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output), "transfer screenshot failed");
+                result.putString("transfer_png", android.util.Base64.encodeToString(output.toByteArray(), android.util.Base64.NO_WRAP));
+            } finally { transferScreen.recycle(); }
+            result.putBoolean("installed_models_ui", true);
+        } catch (Throwable error) {
+            code = Activity.RESULT_CANCELED;
+            result.putString("failure", error.toString());
+        } finally {
+            if (fakeDownload.get() != null) runSafelyOnMainSync(() -> {
+                fakeDownload.get().onFailure("Synthetic visual fixture ended");
+                downloadOwner[0].clearTerminal();
+            });
+            closeCurrent();
+            try { if (ownsInventoryFixtures) {
+                Files.deleteIfExists(first.toPath()); Files.deleteIfExists(second.toPath());
+            } }
+            catch (Exception error) { code = Activity.RESULT_CANCELED; result.putString("cleanup_failure", error.toString()); }
         }
         finish(code, result);
     }

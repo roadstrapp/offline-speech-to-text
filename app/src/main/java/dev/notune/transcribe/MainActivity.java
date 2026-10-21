@@ -330,7 +330,9 @@ public class MainActivity extends AppCompatActivity {
             } catch (IOException ignored) { }
             label = getString(R.string.home_on_device_model, ModelPresentation.nameForFile(selected));
         }
-        ((TextView) findViewById(R.id.text_home_model)).setText(label);
+        TextView modelSummary = findViewById(R.id.text_home_model);
+        modelSummary.setText(label);
+        modelSummary.setVisibility(hasUsableSpeechModel() ? View.VISIBLE : View.GONE);
         ((Button) findViewById(R.id.btn_models)).setText(hasUsableSpeechModel()
                 ? R.string.home_model_change : R.string.home_model_get);
     }
@@ -479,6 +481,9 @@ public class MainActivity extends AppCompatActivity {
                 shouldShowRequestPermissionRationale(android.Manifest.permission.RECORD_AUDIO));
 
         voiceTryButton.setEnabled(state == SetupState.Microphone.GRANTED);
+        voiceTryButton.setVisibility(state == SetupState.Microphone.GRANTED
+                && hasUsableSpeechModel() && nativeLoadStatus.startsWith("Ready")
+                ? View.VISIBLE : View.GONE);
         if (state == SetupState.Microphone.GRANTED && !hasUsableSpeechModel()) {
             setVoiceStatus(true, getString(R.string.home_microphone_allowed));
             voiceTryButton.setEnabled(false);

@@ -196,6 +196,18 @@ public class ModelsActivity extends AppCompatActivity {
                 });
         findViewById(R.id.btn_models_preferences)
                 .setOnClickListener(v -> showPage(PAGE_PREFERENCES));
+        com.google.android.material.appbar.MaterialToolbar modelToolbar = findViewById(R.id.toolbar);
+        modelToolbar.getMenu().add(0, R.id.btn_models_browse, 0, R.string.models_other_models);
+        modelToolbar.getMenu().add(0, R.id.btn_models_import, 1, R.string.models_import_short);
+        modelToolbar.getMenu().add(0, R.id.btn_models_preferences, 2, R.string.models_preferences);
+        modelToolbar.getMenu().add(0, R.id.models_network_settings, 3, R.string.models_remove_network_action);
+        modelToolbar.setOnMenuItemClickListener(item -> {
+            if (item.getItemId() == R.id.models_network_settings) { openAppSettings(); return true; }
+            View action = findViewById(item.getItemId());
+            if (action == null || !action.isEnabled()) return false;
+            action.performClick();
+            return true;
+        });
         LinearLayout pageContent = (LinearLayout) findViewById(R.id.card_recommendation).getParent();
         View recommendation = findViewById(R.id.card_recommendation);
         View[] navigation = new View[] {findViewById(R.id.btn_models_installed),
@@ -272,23 +284,36 @@ public class ModelsActivity extends AppCompatActivity {
         super.onSaveInstanceState(outState);
     }
 
+    private boolean hasInstalledModels;
+
     private void showPage(int next) {
         if (next < PAGE_HOME || next > PAGE_PREFERENCES) next = PAGE_HOME;
         page = next;
+        android.view.Menu options = ((com.google.android.material.appbar.MaterialToolbar)
+                findViewById(R.id.toolbar)).getMenu();
+        for (int index = 0; index < options.size(); index++) {
+            android.view.MenuItem option = options.getItem(index);
+            option.setVisible(option.getItemId() == R.id.models_network_settings
+                    ? next == PAGE_PREFERENCES : next == PAGE_HOME);
+        }
+
         findViewById(R.id.btn_models_language).setVisibility(next == PAGE_HOME ? View.VISIBLE : View.GONE);
-        findViewById(R.id.btn_models_installed).setVisibility(next == PAGE_HOME ? View.VISIBLE : View.GONE);
-        findViewById(R.id.btn_models_browse).setVisibility(next == PAGE_HOME ? View.VISIBLE : View.GONE);
-        findViewById(R.id.btn_models_import).setVisibility(next == PAGE_HOME ? View.VISIBLE : View.GONE);
-        findViewById(R.id.btn_models_preferences).setVisibility(next == PAGE_HOME ? View.VISIBLE : View.GONE);
+        findViewById(R.id.btn_models_installed).setVisibility(View.GONE);
+        findViewById(R.id.btn_models_browse).setVisibility(View.GONE);
+        findViewById(R.id.btn_models_import).setVisibility(View.GONE);
+        findViewById(R.id.btn_models_preferences).setVisibility(View.GONE);
         findViewById(R.id.card_recommendation).setVisibility(
-                next == PAGE_HOME || next == PAGE_PREFERENCES ? View.VISIBLE : View.GONE);
+                (next == PAGE_HOME && !hasInstalledModels && !transferBusy()) || next == PAGE_PREFERENCES ? View.VISIBLE : View.GONE);
+        ((TextView) findViewById(R.id.text_models_recommendation_heading)).setText(
+                next == PAGE_PREFERENCES ? R.string.models_goal_heading : R.string.models_recommended_section);
         recommendationText.setVisibility(next == PAGE_HOME ? View.VISIBLE : View.GONE);
-        downloadButton.setVisibility(next == PAGE_HOME ? View.VISIBLE : View.GONE);
+        downloadButton.setVisibility(next == PAGE_HOME && recommendedModel != null
+                ? View.VISIBLE : View.GONE);
         findViewById(R.id.btn_recommended_details).setVisibility(
                 next == PAGE_HOME && recommendedModel != null ? View.VISIBLE : View.GONE);
         findViewById(R.id.spinner_model_goal).setVisibility(
                 next == PAGE_PREFERENCES ? View.VISIBLE : View.GONE);
-        findViewById(R.id.card_installed_models).setVisibility(next == PAGE_INSTALLED ? View.VISIBLE : View.GONE);
+        findViewById(R.id.card_installed_models).setVisibility(next == PAGE_INSTALLED || (next == PAGE_HOME && hasInstalledModels) ? View.VISIBLE : View.GONE);
         findViewById(R.id.card_download_catalog).setVisibility(next == PAGE_BROWSE ? View.VISIBLE : View.GONE);
         findViewById(R.id.card_manual_models).setVisibility(
                 next == PAGE_INSTALLED || next == PAGE_BROWSE ? View.VISIBLE : View.GONE);
@@ -347,7 +372,7 @@ public class ModelsActivity extends AppCompatActivity {
         catalogFamilies.clear();
         catalogFamilies.add(getString(R.string.models_catalog_all));
         LinkedHashSet<String> families = new LinkedHashSet<>();
-        for (ModelDescriptor model : ModelCatalog.verifiedDownloads()) {
+        for (ModelDescriptor model : ModelCatalog.curatedDownloads()) {
             families.add(model.architecture);
         }
         catalogFamilies.addAll(families);
@@ -411,7 +436,7 @@ public class ModelsActivity extends AppCompatActivity {
         boolean builtInAvailable = hasBuiltInModelAvailable();
         ModelDownloadLifecycle.Snapshot download = DOWNLOAD_LIFECYCLE.snapshot();
         List<ModelDescriptor> visibleModels = new ArrayList<>();
-        for (ModelDescriptor model : ModelCatalog.verifiedDownloads()) {
+        for (ModelDescriptor model : ModelCatalog.curatedDownloads()) {
             boolean isRunningModel = download.state == ModelDownloadLifecycle.State.RUNNING
                     && model.id.equals(download.modelId);
             if (selected != null && !selected.equals(model.architecture) && !isRunningModel) continue;
@@ -558,6 +583,8 @@ public class ModelsActivity extends AppCompatActivity {
 
     private void setupLanguageSpinner() {
         String stored = readConfig("model_language");
+        boolean explicitlyAutomatic = stored.equalsIgnoreCase("auto");
+        if (explicitlyAutomatic) stored = "";
 
         List<String> tags = new ArrayList<>(Arrays.asList(LANGUAGE_TAGS));
         // A value from an older version (free-text field) stays selectable.
@@ -569,7 +596,7 @@ public class ModelsActivity extends AppCompatActivity {
         // A fresh install has no model from which to infer a useful default.
         // Seed the visible choice from the phone locale so recommendation can
         // choose a compatible family before the first download.
-        if (stored.isEmpty() && !hasAnyUsableModel()) {
+        if (stored.isEmpty() && !hasAnyUsableModel() && !explicitlyAutomatic) {
             stored = bestSupportedDeviceLanguage(tags);
             if (!stored.isEmpty()) writeConfig("model_language", stored);
         }
@@ -757,6 +784,11 @@ public class ModelsActivity extends AppCompatActivity {
             addModelRow(verified ? ModelPresentation.nameForFile(name)
                     : ModelPresentation.importedName(name), subtitle, name, name.equals(active));
         }
+        boolean installedNow = !names.isEmpty() || hasBuiltInModelAvailable();
+        if (hasInstalledModels != installedNow) {
+            hasInstalledModels = installedNow;
+            showPage(page);
+        }
         updateActiveSummary(active, names);
         updateCapabilityControls(active);
         renderDownloadCatalog();
@@ -816,6 +848,7 @@ public class ModelsActivity extends AppCompatActivity {
                         languageTag, wantsTranslation, selectedGoal()));
         if (result.status == ModelRecommendation.Status.RECOMMENDED) {
             recommendedModel = result.model;
+            downloadButton.setVisibility(page == PAGE_HOME ? View.VISIBLE : View.GONE);
             String fit = ModelGuidance.fit(result.model, currentDeviceProfile())
                     == ModelGuidance.DeviceFit.GOOD
                     ? getString(R.string.models_fit_short_good)
@@ -860,6 +893,7 @@ public class ModelsActivity extends AppCompatActivity {
             }
         } else {
             findViewById(R.id.btn_recommended_details).setVisibility(View.GONE);
+            downloadButton.setVisibility(View.GONE);
             recommendationText.setText(getString(R.string.models_recommendation_none,
                     recommendationReason(result)));
             downloadButton.setText(R.string.models_download_and_use);
@@ -937,7 +971,7 @@ public class ModelsActivity extends AppCompatActivity {
                 updateRecommendation();
                 showModelStatus(getString(R.string.models_loading));
                 reloadModelNative(ModelsActivity.this);
-                showRemoveNetworkAccessDialog();
+                // Network controls remain on demand in Model preferences.
             } else {
                 String failure = snapshot.failure == null || snapshot.failure.trim().isEmpty()
                         ? getString(R.string.models_download_failed_unknown)
@@ -1012,6 +1046,9 @@ public class ModelsActivity extends AppCompatActivity {
         } else {
             transferText.setText(R.string.models_downloading);
         }
+        ModelDescriptor transferring = ModelCatalog.findById(snapshot.modelId);
+        if (transferring != null) transferText.setText(getString(R.string.models_named_transfer,
+                ModelPresentation.shortName(transferring), transferText.getText()));
     }
 
     private void setModelChoiceControlsEnabled(boolean enabled) {
@@ -1021,8 +1058,14 @@ public class ModelsActivity extends AppCompatActivity {
     }
 
     private void setTransferBusy(boolean busy) {
+        findViewById(R.id.card_recommendation).setVisibility(
+                page == PAGE_PREFERENCES || (page == PAGE_HOME && !hasInstalledModels && !busy)
+                        ? View.VISIBLE : View.GONE);
         importButton.setEnabled(!busy);
         findViewById(R.id.btn_models_import).setEnabled(!busy);
+        android.view.MenuItem importOption = ((com.google.android.material.appbar.MaterialToolbar)
+                findViewById(R.id.toolbar)).getMenu().findItem(R.id.btn_models_import);
+        if (importOption != null) importOption.setEnabled(!busy);
         catalogFamilySpinner.setEnabled(!busy);
         setModelChoiceControlsEnabled(!busy);
         if (busy) {
@@ -1063,16 +1106,6 @@ public class ModelsActivity extends AppCompatActivity {
                 .show();
     }
 
-    private void showRemoveNetworkAccessDialog() {
-        new MaterialAlertDialogBuilder(this)
-                .setTitle(R.string.models_remove_network_title)
-                .setMessage(R.string.models_remove_network_body)
-                .setPositiveButton(R.string.models_remove_network_action,
-                        (dialog, which) -> openAppSettings())
-                .setNegativeButton(android.R.string.cancel, null)
-                .show();
-    }
-
     private void openAppSettings() {
         Intent settings = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                 Uri.parse("package:" + getPackageName()));
@@ -1089,42 +1122,11 @@ public class ModelsActivity extends AppCompatActivity {
     }
 
     private void updateActiveSummary(String active, List<String> names) {
-        final String title;
-        final String size;
-        final String provenance;
-        final String language;
-        final String integrity;
-        if (active.isEmpty() && hasBuiltInModelAvailable()) {
-            title = getString(R.string.models_builtin);
-            size = Formatter.formatShortFileSize(this, DefaultModelContract.BYTE_SIZE);
-            provenance = getString(BuildConfig.HAS_BUNDLED_MODEL
-                    ? R.string.models_provenance_bundled
-                    : R.string.models_provenance_retained);
-            language = getString(R.string.models_language_parakeet);
-            integrity = getString(R.string.models_integrity_loaded);
-        } else if (!active.isEmpty() && names.contains(active)) {
-            File file = new File(modelsDir(), active);
-            ModelDescriptor catalogModel = ModelCatalog.findByFileName(active);
-            boolean verified = catalogModel != null
-                    && VerifiedModelProvenance.isVerified(getFilesDir(), file, catalogModel);
-            title = ModelPresentation.nameForFile(active);
-            size = Formatter.formatShortFileSize(this, file.length());
-            provenance = getString(verified
-                    ? R.string.models_provenance_verified
-                    : R.string.models_provenance_imported);
-            language = isVerifiedDefault(file)
-                    ? getString(R.string.models_language_parakeet)
-                    : getString(R.string.models_language_unknown);
-            // Provenance records that installation was hash-verified. The
-            // active summary does not imply that every screen refresh rehashes
-            // a multi-gigabyte model; readiness is reported separately below.
-            integrity = getString(R.string.models_integrity_loaded);
-        } else {
-            activeSummaryText.setText(R.string.models_active_none);
-            return;
-        }
-        activeSummaryText.setText(getString(R.string.models_active_summary,
-                title, size, provenance, language, integrity));
+        boolean selected = (active.isEmpty() && hasBuiltInModelAvailable())
+                || (!active.isEmpty() && names.contains(active));
+        activeSummaryText.setVisibility(selected ? View.GONE : View.VISIBLE);
+        if (!selected) activeSummaryText.setText(names.isEmpty()
+                ? R.string.models_active_none : R.string.models_choose_installed);
     }
 
     /** Adds one selectable row; {@code fileName} is null for the built-in model. */
@@ -1145,7 +1147,8 @@ public class ModelsActivity extends AppCompatActivity {
         ImageButton delete = row.findViewById(R.id.btn_model_delete);
         row.findViewById(R.id.btn_model_details).setOnClickListener(v -> {
             ModelDescriptor descriptor = ModelCatalog.findByFileName(fileName);
-            if (descriptor != null) {
+            if (descriptor != null && VerifiedModelProvenance.isVerified(
+                    getFilesDir(), new File(modelsDir(), fileName), descriptor)) {
                 showModelDetails(descriptor);
             } else if (fileName != null) {
                 new MaterialAlertDialogBuilder(this)
@@ -1153,7 +1156,7 @@ public class ModelsActivity extends AppCompatActivity {
                         .setMessage(fileName + "\n"
                                 + Formatter.formatShortFileSize(this,
                                 new File(modelsDir(), fileName).length()) + "\n"
-                                + getString(R.string.models_imported_short))
+                                + getString(R.string.models_provenance_imported))
                         .setPositiveButton(android.R.string.ok, null).show();
             }
         });
@@ -1233,7 +1236,7 @@ public class ModelsActivity extends AppCompatActivity {
 
     private void showLinksDialog() {
         List<ModelLink> links = new ArrayList<>();
-        for (ModelDescriptor model : ModelCatalog.verifiedDownloads()) {
+        for (ModelDescriptor model : ModelCatalog.curatedDownloads()) {
             links.add(new ModelLink(model.displayName, R.string.model_desc_source,
                     Formatter.formatShortFileSize(this, model.byteSize), model.sourceUrl));
         }
@@ -1385,6 +1388,8 @@ public class ModelsActivity extends AppCompatActivity {
         statusText.setVisibility(ready ? View.GONE : View.VISIBLE);
         retryButton.setVisibility(failed ? View.VISIBLE : View.GONE);
     }
+
+    private native String loadedModelPathNative();
 
     private native void reloadModelNative(ModelsActivity activity);
 }
