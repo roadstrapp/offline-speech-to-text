@@ -129,6 +129,8 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.btn_models).setOnClickListener(v ->
                 startActivity(new Intent(this, ModelsActivity.class)));
 
+        findViewById(R.id.btn_donate).setOnClickListener(v -> openDonationWallet());
+
         benchButton = findViewById(R.id.btn_benchmark);
         benchResultText = findViewById(R.id.text_bench_result);
         benchButton.setOnClickListener(v -> runBenchmark());
@@ -820,6 +822,26 @@ public class MainActivity extends AppCompatActivity {
 
     private void snackbar(String message) {
         Snackbar.make(findViewById(android.R.id.content), message, Snackbar.LENGTH_LONG).show();
+    }
+
+    private void openDonationWallet() {
+        String address = getString(R.string.donation_lightning_address);
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("lightning:" + address)));
+        } catch (ActivityNotFoundException exception) {
+            new com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                    .setTitle(R.string.donate)
+                    .setMessage(R.string.donation_no_wallet)
+                    .setPositiveButton(R.string.donation_copy_address, (dialog, which) -> {
+                        android.content.ClipboardManager clipboard =
+                                (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                        clipboard.setPrimaryClip(ClipData.newPlainText(
+                                getString(R.string.donation_address_label), address));
+                        snackbar(getString(R.string.donation_address_copied));
+                    })
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show();
+        }
     }
 
     private void openLink(String url) {
