@@ -469,6 +469,22 @@
                         android:layout_height="wrap_content"
                         android:minHeight="48dp"/>
 
+                    <Button
+                        android:id="@+id/btn_spoken_languages"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="@string/spoken_languages_button"/>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/spoken_languages_desc"
+                        android:textAppearance="?attr/textAppearanceBodySmall"
+                        android:textColor="?attr/colorOnSurfaceVariant"
+                        android:layout_marginTop="4dp"/>
+
                     <LinearLayout
                         android:id="@+id/translate_row"
                         android:layout_width="match_parent"

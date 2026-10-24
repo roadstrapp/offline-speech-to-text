@@ -835,7 +835,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("tryLock()", downloader)
         self.assertIn("setRequestProperty(\"Range\"", downloader)
         self.assertIn("setRequestProperty(\"If-Range\"", downloader)
-        self.assertEqual(4, catalog.count("ModelDescriptor.Provenance.EXACT_PINNED"))
+        # Three Parakeet entries, the generic pinned() builder, and the auxiliary language detector.
+        self.assertEqual(5, catalog.count("ModelDescriptor.Provenance.EXACT_PINNED"))
         self.assertIn("SenseVoice", catalog)
         self.assertIn("Whisper", catalog)
         self.assertIn("parakeet-tdt-1.1b", catalog)

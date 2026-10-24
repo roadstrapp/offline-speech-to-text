@@ -261,6 +261,7 @@ public class ModelsActivity extends AppCompatActivity {
         });
 
         setupLanguageSpinner();
+        setupSpokenLanguages();
         setupThreadsSpinner();
         setupGoalSpinner();
         setupDownloadCatalog();
@@ -566,7 +567,7 @@ public class ModelsActivity extends AppCompatActivity {
      * so they follow the device language without needing translations. Tags a
      * model doesn't support are never presented as an automatic recommendation.
      */
-    private static final String[] LANGUAGE_TAGS = {
+    static final String[] LANGUAGE_TAGS = {
             "", "bg-BG", "hr-HR", "cs-CZ", "da-DK", "nl-NL", "en-US", "en-GB",
             "et-EE", "fi-FI", "fr-FR", "de-DE", "el-GR", "hu-HU", "it-IT",
             "lv-LV", "lt-LT", "mt-MT", "pl-PL", "pt-PT", "pt-BR", "ro-RO",
@@ -633,6 +634,36 @@ public class ModelsActivity extends AppCompatActivity {
             public void onNothingSelected(AdapterView<?> parent) {
             }
         });
+    }
+
+    /**
+     * "Languages I speak": with two or more the single-language spinner is superseded, because
+     * each recording picks its language from that list.
+     */
+    private void setupSpokenLanguages() {
+        findViewById(R.id.btn_spoken_languages).setOnClickListener(v -> {
+            if (transferBusy()) { snackbar(getString(R.string.models_busy)); return; }
+            List<String> codes = new ArrayList<>();
+            for (String tag : LANGUAGE_TAGS) {
+                if (!tag.isEmpty()) codes.add(Locale.forLanguageTag(tag).getLanguage());
+            }
+            SpokenLanguagesDialog.show(this, getFilesDir(), codes, () -> {
+                setupLanguageSpinner();
+                updateSpokenLanguagesUi();
+                showModelStatus(getString(R.string.models_loading));
+                reloadModelNative(ModelsActivity.this);
+            });
+        });
+        updateSpokenLanguagesUi();
+    }
+
+    private void updateSpokenLanguagesUi() {
+        String summary = SpokenLanguagesDialog.summary(getFilesDir());
+        ((Button) findViewById(R.id.btn_spoken_languages)).setText(summary == null
+                ? getString(R.string.spoken_languages_button)
+                : getString(R.string.spoken_languages_button_set, summary));
+        languageSpinner.setEnabled(summary == null);
+        languageSpinner.setAlpha(summary == null ? 1f : 0.5f);
     }
 
     private static String bestSupportedDeviceLanguage(List<String> tags) {

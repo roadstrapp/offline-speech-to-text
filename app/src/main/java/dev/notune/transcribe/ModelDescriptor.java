@@ -33,6 +33,11 @@ public final class ModelDescriptor {
     public final long minimumRamBytes;
     public final long minimumFreeBytes;
     public final Provenance provenance;
+    /**
+     * Supporting model (such as the language detector) that is installed beside the speech
+     * models, never listed with them and never made the active model.
+     */
+    public final boolean auxiliary;
 
     ModelDescriptor(String id, String displayName, String architecture, String backend,
                     String fileName, long byteSize, String sha256, String downloadUrl,
@@ -41,6 +46,21 @@ public final class ModelDescriptor {
                     Set<String> languages, Capability languageDetection,
                     Capability translation, Capability streaming, Capability prompt,
                     long minimumRamBytes, long minimumFreeBytes, Provenance provenance) {
+        this(id, displayName, architecture, backend, fileName, byteSize, sha256, downloadUrl,
+                sourceUrl, licenseId, licenseUrl, abis, requiresDotProduct, requiresFp16,
+                languages, languageDetection, translation, streaming, prompt,
+                minimumRamBytes, minimumFreeBytes, provenance, false);
+    }
+
+    ModelDescriptor(String id, String displayName, String architecture, String backend,
+                    String fileName, long byteSize, String sha256, String downloadUrl,
+                    String sourceUrl, String licenseId, String licenseUrl,
+                    Set<String> abis, boolean requiresDotProduct, boolean requiresFp16,
+                    Set<String> languages, Capability languageDetection,
+                    Capability translation, Capability streaming, Capability prompt,
+                    long minimumRamBytes, long minimumFreeBytes, Provenance provenance,
+                    boolean auxiliary) {
+        this.auxiliary = auxiliary;
         this.id = id;
         this.displayName = displayName;
         this.architecture = architecture;

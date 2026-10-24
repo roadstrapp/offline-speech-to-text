@@ -54,6 +54,8 @@ javac -d "$OUT" \
   "$ROOT/tests/ModelImportTaskTest.java" \
   "$ROOT/tests/CustomTermsStoreTest.java" \
   "$ROOT/tests/PersonalCorrectionsStoreTest.java" \
+  "$ROOT/app/src/main/java/dev/notune/transcribe/SpokenLanguages.java" \
+  "$ROOT/tests/SpokenLanguagesTest.java" \
   "$ROOT/tests/PendingTranscriptRecordTest.java"
 java -ea -cp "$OUT" dev.notune.transcribe.HomeNavigationTest
 java -ea -cp "$OUT" dev.notune.transcribe.ModelPresentationTest
@@ -66,6 +68,7 @@ java -ea -cp "$OUT" dev.notune.transcribe.ModelImportTaskTest
 java -ea -cp "$OUT" dev.notune.transcribe.CustomTermsStoreTest
 java -ea -cp "$OUT" dev.notune.transcribe.PersonalCorrectionsStoreTest
 java -ea -cp "$OUT" dev.notune.transcribe.PendingTranscriptRecordTest
+java -ea -cp "$OUT" dev.notune.transcribe.SpokenLanguagesTest
 
 javac -d "$OUT" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/ForegroundRecordingCoordinator.java" \
@@ -100,6 +103,10 @@ rustc --edition 2021 --test "$ROOT/src/audio_finalization.rs" \
 rustc --edition 2021 --test "$ROOT/tests/EnglishFillersTest.rs" \
   -o "$OUT/english_fillers_test"
 "$OUT/english_fillers_test"
+
+rustc --edition 2021 --test "$ROOT/src/language_selection.rs" \
+  -o "$OUT/language_selection_test"
+"$OUT/language_selection_test"
 
 rustc --edition 2021 --test "$ROOT/src/bounded_preroll.rs" \
   -o "$OUT/bounded_preroll_test"
