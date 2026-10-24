@@ -658,12 +658,31 @@ public class ModelsActivity extends AppCompatActivity {
     }
 
     private void updateSpokenLanguagesUi() {
+        Button button = findViewById(R.id.btn_spoken_languages);
+        TextView unavailable = findViewById(R.id.text_spoken_languages_unavailable);
+        Button canaryAction = findViewById(R.id.btn_spoken_languages_canary);
+        ModelDescriptor active = activeKnownModel();
+        boolean ignoresChoice = active != null
+                && active.languageChoice == ModelDescriptor.Capability.UNSUPPORTED;
         String summary = SpokenLanguagesDialog.summary(getFilesDir());
-        ((Button) findViewById(R.id.btn_spoken_languages)).setText(summary == null
+        button.setText(summary == null
                 ? getString(R.string.spoken_languages_button)
                 : getString(R.string.spoken_languages_button_set, summary));
-        languageSpinner.setEnabled(summary == null);
-        languageSpinner.setAlpha(summary == null ? 1f : 0.5f);
+        button.setEnabled(!ignoresChoice);
+        languageSpinner.setEnabled(summary == null || ignoresChoice);
+        languageSpinner.setAlpha(summary == null || ignoresChoice ? 1f : 0.5f);
+        unavailable.setVisibility(ignoresChoice ? View.VISIBLE : View.GONE);
+        canaryAction.setVisibility(ignoresChoice ? View.VISIBLE : View.GONE);
+        if (!ignoresChoice) return;
+        unavailable.setText(getString(R.string.spoken_languages_unavailable,
+                ModelPresentation.nameForFile(active.fileName)));
+        ModelDescriptor canary = ModelCatalog.findByFileName("canary-1b-v2-Q4_K_M.gguf");
+        boolean installed = canary != null && new File(modelsDir(), canary.fileName).isFile();
+        canaryAction.setText(installed
+                ? R.string.spoken_languages_use_canary : R.string.spoken_languages_get_canary);
+        canaryAction.setOnClickListener(v -> {
+            if (installed) selectModel(canary.fileName); else showPage(PAGE_BROWSE);
+        });
     }
 
     private static String bestSupportedDeviceLanguage(List<String> tags) {
@@ -771,6 +790,7 @@ public class ModelsActivity extends AppCompatActivity {
     }
 
     private void refreshList() {
+        updateSpokenLanguagesUi();
         modelList.removeAllViews();
         String active = readConfig("active_model");
 

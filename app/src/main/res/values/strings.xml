@@ -169,7 +169,10 @@
     <string name="spoken_languages_title">Languages I speak</string>
     <string name="spoken_languages_button">Languages I speak</string>
     <string name="spoken_languages_button_set">Languages I speak: %1$s</string>
-    <string name="spoken_languages_desc">Choose two or more and each recording is matched to one of them only, so a language outside your list is never guessed. This needs a model that follows a language choice, such as Whisper; Parakeet v3 picks its own language.</string>
+    <string name="spoken_languages_desc">Choose two or more and each recording is matched to one of them only, so a language outside your list is never guessed.</string>
+    <string name="spoken_languages_unavailable">%1$s chooses its language itself and ignores this setting. Canary 1B v2 follows your list.</string>
+    <string name="spoken_languages_use_canary">Use Canary 1B v2</string>
+    <string name="spoken_languages_get_canary">Get Canary 1B v2</string>
     <string name="spoken_languages_clear">Clear</string>
     <string name="spoken_languages_save_failed">Could not save the language choice.</string>
     <string name="spoken_languages_detector_title">Language detector</string>

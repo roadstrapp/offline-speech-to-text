@@ -30,6 +30,20 @@ public final class SpokenLanguagesTest {
         assert !SpokenLanguages.needsDetector(Collections.singletonList("en"));
         assert SpokenLanguages.needsDetector(Arrays.asList("en", "de"));
 
+        // Which models act on a language choice (checked against each GGUF's own metadata).
+        for (String parakeet : new String[] {"parakeet-tdt-0.6b-v3-Q4_K_M.gguf",
+                "parakeet-tdt-0.6b-v3-Q8_0.gguf", "parakeet-primeline-Q4_K_M.gguf"}) {
+            assert ModelCatalog.findByFileName(parakeet).languageChoice
+                    == ModelDescriptor.Capability.UNSUPPORTED : parakeet;
+        }
+        for (String follows : new String[] {"whisper-small-Q4_K_M.gguf",
+                "canary-1b-v2-Q4_K_M.gguf", "nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf"}) {
+            assert ModelCatalog.findByFileName(follows).languageChoice
+                    == ModelDescriptor.Capability.SUPPORTED : follows;
+        }
+        assert ModelCatalog.findByFileName("whisper-small.en-Q4_K_M.gguf").languageChoice
+                == ModelDescriptor.Capability.UNKNOWN;
+
         ModelDescriptor detector = ModelCatalog.languageId();
         assert detector.auxiliary && detector.isVerifiedDownload();
         assert !ModelCatalog.verifiedDefault().auxiliary;

@@ -38,6 +38,12 @@ public final class ModelDescriptor {
      * models, never listed with them and never made the active model.
      */
     public final boolean auxiliary;
+    /**
+     * Whether the model acts on a chosen recognition language. UNSUPPORTED models (Parakeet v3,
+     * whose weights have no language prompt) pick the language themselves and ignore a hint;
+     * UNKNOWN is the honest default for anything not inspected.
+     */
+    public final Capability languageChoice;
 
     ModelDescriptor(String id, String displayName, String architecture, String backend,
                     String fileName, long byteSize, String sha256, String downloadUrl,
@@ -60,6 +66,21 @@ public final class ModelDescriptor {
                     Capability translation, Capability streaming, Capability prompt,
                     long minimumRamBytes, long minimumFreeBytes, Provenance provenance,
                     boolean auxiliary) {
+        this(id, displayName, architecture, backend, fileName, byteSize, sha256, downloadUrl,
+                sourceUrl, licenseId, licenseUrl, abis, requiresDotProduct, requiresFp16,
+                languages, languageDetection, translation, streaming, prompt,
+                minimumRamBytes, minimumFreeBytes, provenance, auxiliary, Capability.UNKNOWN);
+    }
+
+    ModelDescriptor(String id, String displayName, String architecture, String backend,
+                    String fileName, long byteSize, String sha256, String downloadUrl,
+                    String sourceUrl, String licenseId, String licenseUrl,
+                    Set<String> abis, boolean requiresDotProduct, boolean requiresFp16,
+                    Set<String> languages, Capability languageDetection,
+                    Capability translation, Capability streaming, Capability prompt,
+                    long minimumRamBytes, long minimumFreeBytes, Provenance provenance,
+                    boolean auxiliary, Capability languageChoice) {
+        this.languageChoice = languageChoice;
         this.auxiliary = auxiliary;
         this.id = id;
         this.displayName = displayName;
