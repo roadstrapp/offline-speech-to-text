@@ -136,10 +136,16 @@ public final class BehaviorTest {
         assertEquals(true, model.abis.contains("arm64-v8a")
                         && !model.requiresDotProduct && !model.requiresFp16,
                 "the baseline backend keeps every arm64 model installable");
-        assertEquals(10, ModelCatalog.curatedDownloads().size(), "picker only offers qualified choices");
+        assertEquals(11, ModelCatalog.curatedDownloads().size(), "picker only offers qualified choices");
         Set<String> curated = new HashSet<>();
         for (ModelDescriptor choice : ModelCatalog.curatedDownloads()) curated.add(choice.fileName);
         assertEquals(true, curated.contains("parakeet-tdt-0.6b-v3-Q8_0.gguf"), "owner reference has a verified download");
+        assertEquals(true, curated.contains("canary-1b-v2-Q4_K_M.gguf"), "Canary v2 is a default choice");
+        ModelDescriptor canary = ModelCatalog.findByFileName("canary-1b-v2-Q4_K_M.gguf");
+        assertEquals(true, canary.supportsLanguage("de-DE") && canary.supportsLanguage("en"),
+                "Canary v2 lists its 25 European languages");
+        assertEquals(false, canary.supportsLanguage(""),
+                "Canary v2 cannot choose a language itself");
         for (String tag : new String[]{"", "auto", "en", "de", "fr", "ja", "yue"}) {
             for (ModelRecommendation.Goal goal : ModelRecommendation.Goal.values()) {
                 for (boolean translate : new boolean[]{false, true}) {
