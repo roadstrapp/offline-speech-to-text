@@ -55,3 +55,17 @@ fn corrections_match_raw_text_without_filler_induced_rule_chaining() {
         "alpha beta"
     );
 }
+
+#[test]
+fn clearly_english_text_is_cleaned_when_the_model_reports_no_language() {
+    let text = "And he also has some kind of training for flow state for the masses. Uh look it up and tell me what it is.";
+    assert_eq!(
+        transcript_cleanup::finish(text.to_string(), false, None, None),
+        "And he also has some kind of training for flow state for the masses. Look it up and tell me what it is."
+    );
+    // Not enough evidence of English: leave `uh`/`um` alone.
+    assert_eq!(
+        transcript_cleanup::finish("Das ist um zehn Uhr".to_string(), false, None, None),
+        "Das ist um zehn Uhr"
+    );
+}

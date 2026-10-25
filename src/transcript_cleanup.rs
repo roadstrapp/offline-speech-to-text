@@ -16,7 +16,9 @@ pub(crate) fn finish(
     } else {
         (text, protected)
     };
-    if english_output {
+    // Models without language reporting leave `english_output` false, so clearly English text
+    // qualifies on its own evidence.
+    if english_output || crate::english_fillers::looks_english(&text) {
         crate::english_fillers::remove_with_protected_owned(text, &protected)
     } else {
         text
