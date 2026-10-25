@@ -41,9 +41,25 @@ pub(crate) fn recognition_code(label: &str) -> &str {
     }
 }
 
+/// Compare model capability tags with persisted primary language codes.
+pub(crate) fn supports_all(supported: &[String], allowed: &[String]) -> bool {
+    let normalized: Vec<String> = supported.iter().flat_map(|tag| parse_allowed(tag))
+        .map(|code| recognition_code(&code).to_string()).collect();
+    allowed.iter().all(|code| normalized.iter().any(|supported| supported == recognition_code(code)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capability_tags_accept_regions_case_and_legacy_hebrew() {
+        let supported = vec!["en-US".into(), "SK".into(), "pt_BR".into(), "iw".into()];
+        assert!(supports_all(&supported, &parse_allowed("en,sk,pt,he")));
+        assert!(supports_all(&vec!["he".into()], &parse_allowed("iw")));
+        assert!(!supports_all(&supported, &parse_allowed("en,pl")));
+        assert!(!supports_all(&[], &parse_allowed("en,sk")));
+    }
 
     #[test]
     fn parses_tags_into_distinct_primary_subtags() {

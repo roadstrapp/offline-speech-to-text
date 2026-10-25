@@ -58,7 +58,7 @@ final class SpokenLanguages {
         ModelDescriptor detector = ModelCatalog.languageId();
         File file = new File(new File(filesDir, ModelInstaller.AUXILIARY_DIRECTORY),
                 detector.fileName);
-        return file.isFile() && file.length() == detector.byteSize;
+        return VerifiedModelProvenance.isVerified(filesDir, file, detector);
     }
 
     private static String primary(String tag) {

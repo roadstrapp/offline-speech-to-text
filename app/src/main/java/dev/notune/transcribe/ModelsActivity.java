@@ -643,6 +643,16 @@ public class ModelsActivity extends AppCompatActivity {
     private void setupSpokenLanguages() {
         findViewById(R.id.btn_spoken_languages).setOnClickListener(v -> {
             if (transferBusy()) { snackbar(getString(R.string.models_busy)); return; }
+            ModelDescriptor active = activeKnownModel();
+            if (active != null && active.languageChoice == ModelDescriptor.Capability.UNSUPPORTED) {
+                try {
+                    SpokenLanguages.write(getFilesDir(), java.util.Collections.emptyList());
+                    setupLanguageSpinner();
+                    updateSpokenLanguagesUi();
+                    reloadModelNative(ModelsActivity.this);
+                } catch (IOException error) { snackbar(getString(R.string.spoken_languages_save_failed)); }
+                return;
+            }
             List<String> codes = new ArrayList<>();
             for (String tag : LANGUAGE_TAGS) {
                 if (!tag.isEmpty()) codes.add(Locale.forLanguageTag(tag).getLanguage());
@@ -668,7 +678,8 @@ public class ModelsActivity extends AppCompatActivity {
         button.setText(summary == null
                 ? getString(R.string.spoken_languages_button)
                 : getString(R.string.spoken_languages_button_set, summary));
-        button.setEnabled(!ignoresChoice);
+        if (ignoresChoice && summary != null) button.setText(R.string.spoken_languages_clear_list);
+        button.setEnabled(!ignoresChoice || summary != null);
         languageSpinner.setEnabled(summary == null || ignoresChoice);
         languageSpinner.setAlpha(summary == null || ignoresChoice ? 1f : 0.5f);
         unavailable.setVisibility(ignoresChoice ? View.VISIBLE : View.GONE);

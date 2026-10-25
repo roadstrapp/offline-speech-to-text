@@ -28,17 +28,17 @@ pub(crate) fn known_english_output(
             .unwrap_or(english_only_model)
 }
 
-/// Words that are English and nothing else in the other languages the supported models
-/// transcribe. Deliberately omits look-alikes (`was`, `is`, `also`, `will`, `had`, `to`, ...).
+/// English-leaning evidence for output whose language is unknown, not a language proof.
+/// Deliberately omits common look-alikes (`was`, `is`, `also`, `will`, `had`, `to`, ...).
 const ENGLISH_MARKERS: &[&str] = &[
-    "the", "and", "of", "it", "up", "that", "this", "with", "have", "has", "for", "not", "but",
+    "the", "and", "up", "that", "this", "with", "has", "not", "but",
     "you", "your", "what", "which", "there", "their", "they", "would", "could", "should", "about",
-    "from", "some", "then", "when", "been", "because", "look", "tell", "know", "think", "like",
-    "here", "are", "were", "going", "really", "right",
+    "from", "some", "then", "when", "been", "because", "look", "know", "think",
+    "were", "going", "really", "right",
 ];
 
-/// Whether the transcript itself is clearly English: at least two English-only function words
-/// making up a quarter of its words. Short or mixed-language text deliberately does not qualify.
+/// Whether the transcript itself is clearly English: at least two English-leaning marker words
+/// making up a quarter of its words. This is a fallback for unknown language, never an override of known non-English output.
 pub(crate) fn looks_english(text: &str) -> bool {
     let (mut words, mut markers) = (0usize, 0usize);
     for word in text
@@ -113,7 +113,7 @@ fn remove_with_protected(text: &str, protected: &[Range<usize>]) -> String {
                     .trim_end_matches(is_inline_space)
                     .chars()
                     .next_back()
-                    .is_none_or(|previous| is_tight_punctuation(previous) || is_line_break(previous));
+                    .is_none_or(|previous| matches!(previous, '.' | '!' | '?' | '…') || is_line_break(previous));
             let mut end = start + 2;
             if paired_brackets {
                 end += 1;
@@ -147,6 +147,11 @@ fn remove_with_protected(text: &str, protected: &[Range<usize>]) -> String {
                     end += text[end..].chars().next().unwrap().len_utf8();
                 }
             }
+            // A preceding filler may have deferred capitalization onto this filler.
+            // Move that source pointer past the entire removed chain before checking protection.
+            for (_, source) in &mut recapitalize {
+                if *source >= start && *source < end { *source = end; }
+            }
             if starts_sentence {
                 recapitalize.push((output.len(), end));
             }
@@ -154,7 +159,7 @@ fn remove_with_protected(text: &str, protected: &[Range<usize>]) -> String {
         }
     }
     output.push_str(&text[copy_from..]);
-    for (offset, source) in recapitalize {
+    for (offset, source) in recapitalize.into_iter().rev() {
         // The recognizer capitalizes a filler at the beginning of a sentence. Preserve that
         // sentence case when the filler itself disappears.
         let Some((relative, first)) = output

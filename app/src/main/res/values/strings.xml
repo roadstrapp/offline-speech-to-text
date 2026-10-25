@@ -170,13 +170,14 @@
     <string name="spoken_languages_button">Languages I speak</string>
     <string name="spoken_languages_button_set">Languages I speak: %1$s</string>
     <string name="spoken_languages_desc">Choose two or more and each recording is matched to one of them only, so a language outside your list is never guessed.</string>
-    <string name="spoken_languages_unavailable">%1$s chooses its language itself and ignores this setting. Canary 1B v2 follows your list.</string>
+    <string name="spoken_languages_unavailable">%1$s does not support this setting. Use Canary 1B v2 for a language list.</string>
     <string name="spoken_languages_use_canary">Use Canary 1B v2</string>
     <string name="spoken_languages_get_canary">Get Canary 1B v2</string>
+    <string name="spoken_languages_clear_list">Clear language list</string>
     <string name="spoken_languages_clear">Clear</string>
     <string name="spoken_languages_save_failed">Could not save the language choice.</string>
     <string name="spoken_languages_detector_title">Language detector</string>
-    <string name="spoken_languages_detector_body">Telling your languages apart needs a small detector model (%1$s, downloaded once, Apache-2.0). Until it is installed, recognition falls back to automatic language choice.</string>
+    <string name="spoken_languages_detector_body">Telling your languages apart needs a small detector model (%1$s, downloaded once, Apache-2.0). Your current language setting stays unchanged until the download completes.</string>
     <string name="spoken_languages_download">Download</string>
     <string name="spoken_languages_later">Not now</string>
     <string name="spoken_languages_retry">Retry</string>
@@ -198,7 +199,7 @@
     <string name="models_family_recommended">Largest comfortable fit in this family for this phone</string>
     <string name="models_family_parakeet">Fast CPU transcription. The recommended v3 model covers 25 European languages; primeLine is tuned for German at the same size and speed. Most other variants are English-only. No speech translation.</string>
     <string name="models_family_whisper">Broad multilingual coverage, language detection, optional English translation, and personal-dictionary hints. Larger models trade speed and memory for accuracy.</string>
-    <string name="models_family_canary">Multilingual transcription and speech translation. Canary 1B v2 covers 25 European languages and follows the language you choose (English when none is set). About twice as slow as Parakeet at default threads.</string>
+    <string name="models_family_canary">Multilingual transcription and speech translation. Canary 1B v2 covers 25 European languages and follows the language you choose (English when none is set). Use the benchmark to compare speed on your device.</string>
     <string name="models_family_moonshine">Compact English models, including streaming variants. OSTT keeps each dictation continuous and inserts one final result after you stop.</string>
     <string name="models_family_gigaam">Russian-focused transcription with compact CTC and RNN-T variants.</string>
     <string name="models_family_medasr">Compact English medical-speech specialist. Prefer a general family for ordinary dictation.</string>

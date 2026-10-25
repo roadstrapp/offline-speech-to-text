@@ -300,7 +300,9 @@ public final class ModelCatalog {
                 WHISPER_MULTILINGUAL_FILES.contains(fileName)
                         || ("Canary".equals(family) && !fileName.contains("qwen"))
                         || fileName.startsWith("nemotron-3.5")
-                ? ModelDescriptor.Capability.SUPPORTED : ModelDescriptor.Capability.UNKNOWN;
+                ? ModelDescriptor.Capability.SUPPORTED
+                : languages.size() == 1 ? ModelDescriptor.Capability.UNSUPPORTED
+                : ModelDescriptor.Capability.UNKNOWN;
         return new ModelDescriptor(
                 id, display, family, RUNTIME, fileName, bytes, sha256,
                 source + "/resolve/" + revision + "/" + fileName + "?download=true", source,

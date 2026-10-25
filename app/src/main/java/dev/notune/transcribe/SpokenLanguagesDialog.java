@@ -1,6 +1,6 @@
 package dev.notune.transcribe;
 
-import android.app.Activity;
+import androidx.appcompat.app.AppCompatActivity;
 import android.widget.ProgressBar;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import java.io.File;
@@ -28,7 +28,7 @@ final class SpokenLanguagesDialog {
      * @param onChanged runs on the UI thread once the selection, and any detector it needs, is in
      *                  place, so the engine can reload
      */
-    static void show(Activity activity, File filesDir, List<String> candidates,
+    static void show(AppCompatActivity activity, File filesDir, List<String> candidates,
                      Runnable onChanged) {
         List<String> codes = new ArrayList<>();
         for (String code : candidates) if (!codes.contains(code)) codes.add(code);
@@ -65,24 +65,26 @@ final class SpokenLanguagesDialog {
                 .show();
     }
 
-    private static void save(Activity activity, File filesDir, List<String> chosen,
+    private static void save(AppCompatActivity activity, File filesDir, List<String> chosen,
                              Runnable onChanged) {
-        try {
-            SpokenLanguages.write(filesDir, chosen);
-        } catch (IOException e) {
-            new MaterialAlertDialogBuilder(activity)
-                    .setMessage(R.string.spoken_languages_save_failed)
-                    .setPositiveButton(android.R.string.ok, null).show();
-            return;
-        }
+        Runnable persist = () -> {
+            try {
+                SpokenLanguages.write(filesDir, chosen);
+                onChanged.run();
+            } catch (IOException e) {
+                new MaterialAlertDialogBuilder(activity)
+                        .setMessage(R.string.spoken_languages_save_failed)
+                        .setPositiveButton(android.R.string.ok, null).show();
+            }
+        };
         if (SpokenLanguages.needsDetector(chosen) && !SpokenLanguages.detectorInstalled(filesDir)) {
-            offerDetector(activity, filesDir, onChanged);
+            offerDetector(activity, filesDir, persist);
         } else {
-            onChanged.run();
+            persist.run();
         }
     }
 
-    private static void offerDetector(Activity activity, File filesDir, Runnable onChanged) {
+    private static void offerDetector(AppCompatActivity activity, File filesDir, Runnable onChanged) {
         ModelDescriptor detector = ModelCatalog.languageId();
         new MaterialAlertDialogBuilder(activity)
                 .setTitle(R.string.spoken_languages_detector_title)
@@ -91,13 +93,12 @@ final class SpokenLanguagesDialog {
                                 activity, detector.byteSize)))
                 .setPositiveButton(R.string.spoken_languages_download, (dialog, which) ->
                         download(activity, filesDir, detector, onChanged))
-                .setNegativeButton(R.string.spoken_languages_later, (dialog, which) ->
-                        onChanged.run())
+                .setNegativeButton(R.string.spoken_languages_later, (dialog, which) -> { })
                 .setCancelable(false)
                 .show();
     }
 
-    private static void download(Activity activity, File filesDir, ModelDescriptor detector,
+    private static void download(AppCompatActivity activity, File filesDir, ModelDescriptor detector,
                                  Runnable onChanged) {
         ProgressBar bar = new ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal);
         bar.setIndeterminate(false);
@@ -105,10 +106,20 @@ final class SpokenLanguagesDialog {
         int pad = (int) (24 * activity.getResources().getDisplayMetrics().density);
         bar.setPadding(pad, pad, pad, 0);
         ModelDownloadTask.Handle[] handle = new ModelDownloadTask.Handle[1];
+        java.util.concurrent.atomic.AtomicBoolean cancelled = new java.util.concurrent.atomic.AtomicBoolean();
+        androidx.lifecycle.LifecycleOwner owner = (androidx.lifecycle.LifecycleOwner) activity;
+        androidx.lifecycle.DefaultLifecycleObserver observer = new androidx.lifecycle.DefaultLifecycleObserver() {
+            @Override public void onDestroy(androidx.lifecycle.LifecycleOwner ignored) {
+                cancelled.set(true);
+                if (handle[0] != null) handle[0].cancel();
+            }
+        };
+        owner.getLifecycle().addObserver(observer);
         androidx.appcompat.app.AlertDialog progress = new MaterialAlertDialogBuilder(activity)
                 .setTitle(R.string.spoken_languages_downloading)
                 .setView(bar)
                 .setNegativeButton(android.R.string.cancel, (dialog, which) -> {
+                    cancelled.set(true);
                     if (handle[0] != null) handle[0].cancel();
                 })
                 .setCancelable(false)
@@ -116,15 +127,21 @@ final class SpokenLanguagesDialog {
         ModelDownloadTask.start(filesDir, detector, new ModelDownloadTask.Listener() {
             @Override public void onStarted(ModelDownloadTask.Handle started) {
                 handle[0] = started;
+                if (cancelled.get()) started.cancel();
             }
 
             @Override public void onProgress(long downloaded, long total) {
-                activity.runOnUiThread(() ->
-                        bar.setProgress((int) (downloaded * 1000 / Math.max(1, total))));
+                activity.runOnUiThread(() -> {
+                    if (!activity.isDestroyed() && !activity.isFinishing() && !cancelled.get()) {
+                        bar.setProgress((int) (downloaded * 1000 / Math.max(1, total)));
+                    }
+                });
             }
 
             @Override public void onComplete(String installedName) {
                 activity.runOnUiThread(() -> {
+                    owner.getLifecycle().removeObserver(observer);
+                    if (activity.isDestroyed() || activity.isFinishing() || cancelled.get()) return;
                     progress.dismiss();
                     onChanged.run();
                 });
@@ -132,6 +149,8 @@ final class SpokenLanguagesDialog {
 
             @Override public void onFailure(String reason) {
                 activity.runOnUiThread(() -> {
+                    owner.getLifecycle().removeObserver(observer);
+                    if (activity.isDestroyed() || activity.isFinishing() || cancelled.get()) return;
                     progress.dismiss();
                     new MaterialAlertDialogBuilder(activity)
                             .setTitle(R.string.spoken_languages_detector_title)
@@ -139,8 +158,7 @@ final class SpokenLanguagesDialog {
                                     R.string.spoken_languages_download_failed, reason))
                             .setPositiveButton(R.string.spoken_languages_retry, (dialog, which) ->
                                     download(activity, filesDir, detector, onChanged))
-                            .setNegativeButton(R.string.spoken_languages_later, (dialog, which) ->
-                                    onChanged.run())
+                            .setNegativeButton(R.string.spoken_languages_later, (dialog, which) -> { })
                             .show();
                 });
             }

@@ -42,7 +42,7 @@ public final class SpokenLanguagesTest {
                     == ModelDescriptor.Capability.SUPPORTED : follows;
         }
         assert ModelCatalog.findByFileName("whisper-small.en-Q4_K_M.gguf").languageChoice
-                == ModelDescriptor.Capability.UNKNOWN;
+                == ModelDescriptor.Capability.UNSUPPORTED;
 
         ModelDescriptor detector = ModelCatalog.languageId();
         assert detector.auxiliary && detector.isVerifiedDownload();
@@ -56,7 +56,38 @@ public final class SpokenLanguagesTest {
         File aux = new File(new File(dir, ModelInstaller.AUXILIARY_DIRECTORY), detector.fileName);
         aux.getParentFile().mkdirs();
         Files.move(staged.toPath(), aux.toPath());
-        assert SpokenLanguages.detectorInstalled(dir);
+        assert !SpokenLanguages.detectorInstalled(dir) : "size-only file must not be trusted";
         assert !new File(dir, "active_model").exists();
+        byte[] payload = "synthetic auxiliary model".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        StringBuilder hash = new StringBuilder();
+        for (byte value : java.security.MessageDigest.getInstance("SHA-256").digest(payload))
+            hash.append(String.format("%02x", value & 255));
+        ModelDescriptor fixture = new ModelDescriptor("aux-test", "Auxiliary test", "Language ID",
+                detector.backend, "aux-test.gguf", payload.length, hash.toString(),
+                "https://example.invalid/aux-test.gguf", "https://example.invalid", "test", "https://example.invalid",
+                detector.abis, false, false, detector.languages, detector.languageDetection,
+                detector.translation, detector.streaming, detector.prompt, 0, 0,
+                ModelDescriptor.Provenance.EXACT_PINNED, true);
+        File pointer = new File(dir, "active_model");
+        Files.write(pointer.toPath(), "existing.gguf".getBytes());
+        File valid = new File(dir, "valid.part"); Files.write(valid.toPath(), payload);
+        assert ModelInstaller.installVerified(dir, valid, fixture).equals(fixture.fileName);
+        File destination = new File(new File(dir, ModelInstaller.AUXILIARY_DIRECTORY), fixture.fileName);
+        assert VerifiedModelProvenance.isVerified(dir, destination, fixture);
+        assert "existing.gguf".equals(new String(Files.readAllBytes(pointer.toPath())));
+        File duplicate = new File(dir, "duplicate.part"); Files.write(duplicate.toPath(), payload);
+        ModelInstaller.installVerified(dir, duplicate, fixture);
+        assert !duplicate.exists();
+        Files.write(destination.toPath(), new byte[payload.length]);
+        File replacement = new File(dir, "replacement.part"); Files.write(replacement.toPath(), payload);
+        ModelInstaller.installVerified(dir, replacement, fixture);
+        assert java.util.Arrays.equals(payload, Files.readAllBytes(destination.toPath()));
+        File bad = new File(dir, "bad.part"); Files.write(bad.toPath(), new byte[payload.length]);
+        boolean rejected = false;
+        try { ModelInstaller.installVerified(dir, bad, fixture); }
+        catch (java.io.IOException expected) { rejected = true; }
+        assert rejected : "same-size corrupt auxiliary model must be rejected";
+        assert "existing.gguf".equals(new String(Files.readAllBytes(pointer.toPath())));
+
     }
 }

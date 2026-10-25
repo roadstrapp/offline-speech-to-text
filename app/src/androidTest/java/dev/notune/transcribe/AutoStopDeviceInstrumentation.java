@@ -569,7 +569,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
                 for (int i = 0; i < catalog.getChildCount(); i++) {
                     if (catalog.getChildAt(i).findViewById(R.id.btn_download_model) != null) modelRows++;
                 }
-                check(modelRows == 10, "curated catalogue must expose ten tested models; actual=" + modelRows);
+                check(modelRows == 11, "curated catalogue must expose eleven models; actual=" + modelRows);
                 ((androidx.activity.ComponentActivity) current).getOnBackPressedDispatcher().onBackPressed();
             });
             java.lang.reflect.Field lifecycle = ModelsActivity.class.getDeclaredField("DOWNLOAD_LIFECYCLE");

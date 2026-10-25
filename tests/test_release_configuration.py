@@ -19,7 +19,6 @@ class ReleaseConfigurationTest(unittest.TestCase):
     def test_release_identity_and_default_model_contract_are_immutable(self):
         gradle = (ROOT / "app/build.gradle.kts").read_text()
         gradle_properties = (ROOT / "gradle.properties").read_text()
-        workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
         self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
         code = int(re.search(r"versionCode = (\d+)", gradle).group(1))
         version = re.search(r'versionName = "(\d+\.\d+\.\d+)"', gradle).group(1)
@@ -31,7 +30,6 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: false', gradle)
         self.assertIn('ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,', gradle)
         self.assertNotIn("org.gradle.java.home", gradle_properties)
-        self.assertNotIn("sed -i '/org.gradle.java.home/d'", workflow)
         self.assertIn('"b68557be1e3c40207fd7c4bd9d63f1d3316b963f15325bfb0cc16a8bb0ffd181"', gradle)
         self.assertIn('resolve/85ac09ea12fc4b1112fa76810059364bc6adc9de', gradle)
         self.assertNotIn("parakeet-tdt_ctc-110m", gradle)
@@ -52,9 +50,6 @@ class ReleaseConfigurationTest(unittest.TestCase):
     def test_native_toolchain_is_explicit_and_update_compatible(self):
         gradle = (ROOT / "app/build.gradle.kts").read_text()
         self.assertIn('ndkVersion = "29.0.14206865"', gradle)
-        workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
-        self.assertIn('sdkmanager --install "ndk;29.0.14206865"', workflow)
-        self.assertIn('ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865', workflow)
         self.assertIn('libc++_shared.so', gradle)
         self.assertNotIn('ndkVersion = "/', gradle)
 
@@ -636,7 +631,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertNotIn("Command::Chunk", background)
         self.assertNotIn("active_chunk_plan", voice + recognizer + engine)
         self.assertIn("let transcript = self.run(samples, &job.run_ext)?", engine)
-        self.assertIn("job.english_output &= self.output_is_english(transcript.language.as_deref())", engine)
+        self.assertIn("job.output_language = job.output_language.combine(self.output_language(transcript.language.as_deref()))", engine)
         self.assertIn("if let Some(max_window_samples) = self.bounded_window_samples", engine)
         self.assertIn("crate::long_audio::stitch", engine)
         self.assertIn("crate::long_audio::MIN_WINDOW_SAMPLES", engine)

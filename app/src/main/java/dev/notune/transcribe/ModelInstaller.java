@@ -51,22 +51,23 @@ final class ModelInstaller {
                  FileLock ignored = lockChannel.lock()) {
             checkCancelled(cancelled);
             File destination = new File(modelsDir, descriptor.fileName);
-            if (destination.exists()) {
-                if (destination.length() != descriptor.byteSize
-                        || !descriptor.sha256.equalsIgnoreCase(sha256(destination, cancelled))) {
-                    throw new IOException(
-                            "A different model already uses this filename. Remove it and retry.");
-                }
+            boolean same = destination.isFile() && destination.length() == descriptor.byteSize
+                    && descriptor.sha256.equalsIgnoreCase(sha256(destination, cancelled));
+            if (same) {
                 Files.deleteIfExists(staged.toPath());
             } else {
+                if (destination.exists() && !descriptor.auxiliary) {
+                    throw new IOException("A different model already uses this filename. Remove it and retry.");
+                }
                 try {
-                    Files.move(staged.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE);
+                    Files.move(staged.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE,
+                            StandardCopyOption.REPLACE_EXISTING);
                 } catch (AtomicMoveNotSupportedException unsupported) {
-                    Files.move(staged.toPath(), destination.toPath());
+                    Files.move(staged.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING);
                 }
             }
+            VerifiedModelProvenance.markVerified(filesDir, destination, descriptor);
             if (!descriptor.auxiliary) {
-                VerifiedModelProvenance.markVerified(filesDir, destination, descriptor);
                 ImportedModelSelection.activateWhileLocked(filesDir, destination.getName());
             }
             return destination.getName();
