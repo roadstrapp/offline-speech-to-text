@@ -14,6 +14,7 @@ pub mod foreground_recording;
 pub mod ime;
 mod inference_gate;
 mod interactive_endpointing;
+mod language_selection;
 mod long_audio;
 pub mod main_activity;
 pub mod models;

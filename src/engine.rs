@@ -23,6 +23,13 @@ const ACTIVE_MODEL_FILE: &str = "active_model";
 /// File in filesDir with an optional language hint — a locale like `en-US`
 /// or `auto`. Absent or empty = let the model autodetect.
 const MODEL_LANGUAGE_FILE: &str = "model_language";
+/// File in filesDir listing the languages the user speaks (`en,de`). With two or more and the
+/// language-ID model installed, each recognition run detects among exactly those languages and
+/// uses the winner as its hint. Otherwise only `model_language` applies.
+const MODEL_LANGUAGES_FILE: &str = "model_languages";
+/// Where the downloaded language-ID model lives, relative to filesDir. Kept out of `models/`
+/// so it can never be selected as the speech model.
+pub(crate) const LANGUAGE_ID_MODEL_PATH: &str = "aux-models/lang-id-voxlingua107-ecapa-Q8_0.gguf";
 /// Marker file in filesDir: when present, models that support translation
 /// (e.g. Whisper) translate speech to English instead of transcribing it.
 /// Ignored by models without translation support.
@@ -59,12 +66,66 @@ impl TranscriptionJob {
     }
 }
 
+/// Picks the spoken language among the user's own languages, which plain automatic detection
+/// cannot be told (closely related languages are easily mistaken for each other).
+struct LanguageDetector {
+    session: transcribe_cpp::LangIdSession,
+    /// Detector labels for the user's languages.
+    allowed: Vec<String>,
+    /// Recognition code of the last confident detection; stands in for clips too short to score.
+    previous: String,
+    min_samples: usize,
+}
+
+impl LanguageDetector {
+    fn open(path: &Path, languages: &[String], threads: i32) -> Result<LanguageDetector, String> {
+        let model = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            transcribe_cpp::Model::load(path)
+        }))
+        .map_err(|_| "language model loader rejected this file".to_string())?
+        .map_err(|e| e.to_string())?;
+        let info = model.langid_info().map_err(|e| e.to_string())?;
+        let session = model
+            .langid_session_with(&transcribe_cpp::LangIdSessionOptions { n_threads: threads })
+            .map_err(|e| e.to_string())?;
+        Ok(LanguageDetector {
+            session,
+            allowed: languages
+                .iter()
+                .map(|code| crate::language_selection::detector_label(code).to_string())
+                .collect(),
+            previous: languages[0].clone(),
+            min_samples: (info.min_audio_ms.max(0) as usize).saturating_mul(16),
+        })
+    }
+
+    /// The most likely of the user's languages for this clip, as a recognition hint.
+    fn detect(&mut self, samples: &[f32]) -> String {
+        if samples.len() >= self.min_samples {
+            let options = transcribe_cpp::LangIdOptions {
+                allowed: Some(self.allowed.clone()),
+            };
+            match self.session.run(samples, &options) {
+                Ok(result) => {
+                    if let Some(code) = result.code() {
+                        self.previous = crate::language_selection::recognition_code(code).to_string();
+                    }
+                }
+                Err(e) => log::warn!("language detection failed ({e}); keeping {}", self.previous),
+            }
+        }
+        self.previous.clone()
+    }
+}
+
 /// A loaded transcribe.cpp session plus the options applied to every run.
 pub struct Engine {
     model_path: PathBuf,
     diagnostic_family: i32,
     session: transcribe_cpp::Session,
     language: Option<String>,
+    /// Present when the user speaks several languages and the language-ID model is installed.
+    detector: Option<LanguageDetector>,
     task: transcribe_cpp::Task,
     english_only_model: bool,
     translates_to_english: bool,
@@ -87,6 +148,7 @@ impl Engine {
     fn load(
         model_path: &Path,
         language: Option<String>,
+        allowed_languages: &[String],
         translate: bool,
         threads: i32,
         files_dir: PathBuf,
@@ -184,6 +246,7 @@ impl Engine {
             }
             Some(safe_limit - final_silence)
         };
+        let detector = open_detector(&files_dir, allowed_languages, threads);
         ACTIVE_THREADS.store(threads, Ordering::Relaxed);
         Ok(Engine {
             model_path: model_path.to_path_buf(),
@@ -197,6 +260,7 @@ impl Engine {
             },
             session,
             language,
+            detector,
             task,
             english_only_model,
             translates_to_english,
@@ -419,15 +483,25 @@ impl Engine {
         if samples.is_empty() {
             return Ok(transcribe_cpp::Transcript::default());
         }
+        // The detected language is per run: it never replaces the user's fixed hint, and a model
+        // that rejects it simply recognizes without one.
+        let mut detected = self.detector.as_mut().map(|detector| detector.detect(samples));
         loop {
             let opts = transcribe_cpp::RunOptions {
-                language: self.language.clone(),
+                language: detected.clone().or_else(|| self.language.clone()),
                 task: self.task,
                 family: run_ext.clone(),
                 ..Default::default()
             };
             match self.session.run(samples, &opts) {
-                Ok(transcript) => return Ok(transcript),
+                Ok(mut transcript) => {
+                    // Most models do not report a language when given one; the cleanup stage
+                    // needs to know which language this was.
+                    if transcript.language.is_none() {
+                        transcript.language = detected.take();
+                    }
+                    return Ok(transcript);
+                }
                 Err(transcribe_cpp::Error::OutputTruncated {
                     partial: Some(transcript),
                     ..
@@ -439,6 +513,10 @@ impl Engine {
                     // Preserve decoded text through the normal dictionary and
                     // overlap reconciliation path; do not expose model errors.
                     return Ok(*transcript);
+                }
+                Err(transcribe_cpp::Error::Unsupported(msg)) if detected.is_some() => {
+                    log::warn!("detected language {detected:?} rejected ({msg}); retrying without");
+                    detected = None;
                 }
                 Err(transcribe_cpp::Error::Unsupported(msg)) if self.language.is_some() => {
                     let lang = self.language.take().unwrap();
@@ -702,6 +780,22 @@ fn read_config(path: &Path) -> Option<String> {
     }
 }
 
+/// The language-ID model, when the user speaks several languages and has downloaded it. A
+/// missing or unusable model degrades to the plain language hint.
+fn open_detector(files_dir: &Path, languages: &[String], threads: i32) -> Option<LanguageDetector> {
+    if languages.len() < 2 {
+        return None;
+    }
+    let path = files_dir.join(LANGUAGE_ID_MODEL_PATH);
+    if !path.is_file() {
+        log::info!("several languages selected but the language model is not installed");
+        return None;
+    }
+    LanguageDetector::open(&path, languages, threads)
+        .map_err(|e| log::warn!("language model unusable: {e}"))
+        .ok()
+}
+
 /// Performs the model load: the selected imported GGUF if any (falling back
 /// to the bundled model on failure), otherwise the bundled model.
 fn do_load(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
@@ -714,6 +808,9 @@ fn do_load(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
     // the model doesn't know is degraded per run — see Engine::run.
     let language = read_config(&files_dir.join(MODEL_LANGUAGE_FILE))
         .filter(|l| !l.eq_ignore_ascii_case("auto"));
+    let allowed_languages = read_config(&files_dir.join(MODEL_LANGUAGES_FILE))
+        .map(|list| crate::language_selection::parse_allowed(&list))
+        .unwrap_or_default();
     let translate = files_dir.join(MODEL_TRANSLATE_FILE).exists();
     let threads = read_config(&files_dir.join(MODEL_THREADS_FILE))
         .and_then(|s| s.parse::<i32>().ok())
@@ -726,6 +823,7 @@ fn do_load(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
         match Engine::load(
             &path,
             language.clone(),
+            &allowed_languages,
             translate,
             threads,
             files_dir.clone(),
@@ -764,7 +862,7 @@ fn do_load(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
 
     notify_status(env, context, "Loading model...");
 
-    match Engine::load(&path, language, translate, threads, files_dir) {
+    match Engine::load(&path, language, &allowed_languages, translate, threads, files_dir) {
         Ok(engine) => {
             let status = engine.ready_status;
             install_engine(engine);

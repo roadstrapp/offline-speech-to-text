@@ -63,7 +63,8 @@ public final class ModelCatalog {
             ModelDescriptor.Capability.SUPPORTED, ModelDescriptor.Capability.UNSUPPORTED,
             ModelDescriptor.Capability.UNKNOWN, ModelDescriptor.Capability.UNSUPPORTED,
             2L * 1024L * MIB, DefaultModelContract.BYTE_SIZE + 64L * MIB,
-            ModelDescriptor.Provenance.EXACT_PINNED);
+            ModelDescriptor.Provenance.EXACT_PINNED,
+            false, ModelDescriptor.Capability.UNSUPPORTED);
 
     private static final ModelDescriptor PARAKEET_Q8 = new ModelDescriptor(
             "parakeet-tdt-0.6b-v3-q8", "Parakeet v3 Q8", "Parakeet",
@@ -78,7 +79,8 @@ public final class ModelCatalog {
             ModelDescriptor.Capability.SUPPORTED, ModelDescriptor.Capability.UNSUPPORTED,
             ModelDescriptor.Capability.UNKNOWN, ModelDescriptor.Capability.UNSUPPORTED,
             2L * 1024L * MIB, 739508576L + 64L * MIB,
-            ModelDescriptor.Provenance.EXACT_PINNED);
+            ModelDescriptor.Provenance.EXACT_PINNED,
+            false, ModelDescriptor.Capability.UNSUPPORTED);
 
     private static final ModelDescriptor PARAKEET_PRIMELINE = new ModelDescriptor(
             "parakeet-primeline-q4km", "Parakeet primeLine · Q4", "Parakeet",
@@ -94,7 +96,28 @@ public final class ModelCatalog {
             ModelDescriptor.Capability.SUPPORTED, ModelDescriptor.Capability.UNSUPPORTED,
             ModelDescriptor.Capability.UNKNOWN, ModelDescriptor.Capability.UNSUPPORTED,
             2L * 1024L * MIB, 485425568L + 64L * MIB,
-            ModelDescriptor.Provenance.EXACT_PINNED);
+            ModelDescriptor.Provenance.EXACT_PINNED,
+            false, ModelDescriptor.Capability.UNSUPPORTED);
+
+    /**
+     * Picks which of the user's languages is being spoken (VoxLingua107 ECAPA-TDNN, 107
+     * languages). Auxiliary: downloaded on request, kept out of the speech-model list.
+     */
+    private static final ModelDescriptor LANGUAGE_ID = new ModelDescriptor(
+            "lang-id-voxlingua107-ecapa-q8", "Language detector · Q8",
+            "ECAPA-TDNN", RUNTIME, "lang-id-voxlingua107-ecapa-Q8_0.gguf",
+            26693632L, "063e6cb0af3d53085fc7d68356dfde5ecee2ffa7bc79855f7e4ff930081bfe3a",
+            "https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf/resolve/"
+                    + "e59f0f3847e77723b7d58447ef9456fa0c7e9436/"
+                    + "lang-id-voxlingua107-ecapa-Q8_0.gguf?download=true",
+            "https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf",
+            "Apache-2.0", "https://www.apache.org/licenses/LICENSE-2.0",
+            Collections.singleton("arm64-v8a"), false, false,
+            Collections.<String>emptySet(),
+            ModelDescriptor.Capability.UNSUPPORTED, ModelDescriptor.Capability.UNSUPPORTED,
+            ModelDescriptor.Capability.UNSUPPORTED, ModelDescriptor.Capability.UNSUPPORTED,
+            512L * MIB, 26693632L + 64L * MIB,
+            ModelDescriptor.Provenance.EXACT_PINNED, true);
 
     private static final List<ModelDescriptor> DOWNLOADS;
 
@@ -163,6 +186,8 @@ public final class ModelCatalog {
     private ModelCatalog() {}
 
     public static ModelDescriptor verifiedDefault() { return PARAKEET; }
+
+    public static ModelDescriptor languageId() { return LANGUAGE_ID; }
 
     /** Returns a specialized balanced model only when one matches the locale. */
     static ModelDescriptor localePreferredBalanced(String languageTag) {
@@ -269,6 +294,13 @@ public final class ModelCatalog {
             languages.add("en");
             translation = ModelDescriptor.Capability.UNSUPPORTED;
         }
+        // Models whose weights act on a chosen language. Parakeet v3 (no prompt table in its
+        // GGUF) is marked UNSUPPORTED where it is declared; everything else stays UNKNOWN.
+        ModelDescriptor.Capability languageChoice =
+                WHISPER_MULTILINGUAL_FILES.contains(fileName)
+                        || ("Canary".equals(family) && !fileName.contains("qwen"))
+                        || fileName.startsWith("nemotron-3.5")
+                ? ModelDescriptor.Capability.SUPPORTED : ModelDescriptor.Capability.UNKNOWN;
         return new ModelDescriptor(
                 id, display, family, RUNTIME, fileName, bytes, sha256,
                 source + "/resolve/" + revision + "/" + fileName + "?download=true", source,
@@ -276,6 +308,6 @@ public final class ModelCatalog {
                 languages, detection, translation, streaming,
                 prompt,
                 Math.max(1024L * MIB, bytes * 2L + 512L * MIB), bytes + 64L * MIB,
-                ModelDescriptor.Provenance.EXACT_PINNED);
+                ModelDescriptor.Provenance.EXACT_PINNED, false, languageChoice);
     }
 }

@@ -16,6 +16,9 @@ import java.util.function.BooleanSupplier;
 
 /** Serializes immutable model installation and atomic active-pointer changes across processes. */
 final class ModelInstaller {
+    /** Where {@linkplain ModelDescriptor#auxiliary auxiliary} models live, under filesDir. */
+    static final String AUXILIARY_DIRECTORY = "aux-models";
+
     private ModelInstaller() {}
 
     static String installVerified(File filesDir, File staged, ModelDescriptor descriptor)
@@ -36,7 +39,7 @@ final class ModelInstaller {
             throw new IOException("staged model failed integrity verification");
         }
         checkCancelled(cancelled);
-        File modelsDir = new File(filesDir, "models");
+        File modelsDir = new File(filesDir, descriptor.auxiliary ? AUXILIARY_DIRECTORY : "models");
         if (!modelsDir.isDirectory() && !modelsDir.mkdirs()) {
             throw new IOException("model directory is unavailable");
         }
@@ -62,8 +65,10 @@ final class ModelInstaller {
                     Files.move(staged.toPath(), destination.toPath());
                 }
             }
-            VerifiedModelProvenance.markVerified(filesDir, destination, descriptor);
-            ImportedModelSelection.activateWhileLocked(filesDir, destination.getName());
+            if (!descriptor.auxiliary) {
+                VerifiedModelProvenance.markVerified(filesDir, destination, descriptor);
+                ImportedModelSelection.activateWhileLocked(filesDir, destination.getName());
+            }
             return destination.getName();
             }
         } finally {
