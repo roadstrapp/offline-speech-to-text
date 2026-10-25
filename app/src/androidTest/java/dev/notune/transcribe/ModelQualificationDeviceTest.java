@@ -179,8 +179,7 @@ final class ModelQualificationDeviceTest {
         android.net.Network active = manager == null ? null : manager.getActiveNetwork();
         android.net.NetworkCapabilities capabilities = active == null ? null : manager.getNetworkCapabilities(active);
         JSONObject network = new JSONObject();
-        network.put("internet_permission", androidx.core.content.ContextCompat.checkSelfPermission(test.getTargetContext(),
-                android.Manifest.permission.INTERNET) == android.content.pm.PackageManager.PERMISSION_GRANTED);
+        network.put("internet_permission", test.getTargetContext().checkSelfPermission(android.Manifest.permission.INTERNET) == android.content.pm.PackageManager.PERMISSION_GRANTED);
         network.put("active_network", active != null);
         network.put("internet_capability", capabilities != null
                 && capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET));
