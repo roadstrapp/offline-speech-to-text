@@ -20,6 +20,7 @@ final class ModelQualificationDeviceTest {
     private Activity models;
     private Activity fileActivity;
     private String selectedName;
+    private int expectedThreads;
     private final java.util.Set<Activity> fileInstances = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
     private final JSONObject report = new JSONObject();
     private final File directory;
@@ -31,7 +32,7 @@ final class ModelQualificationDeviceTest {
         this.directory = test.getTargetContext().getFilesDir();
     }
 
-    static void run(Instrumentation test, String name) {
+    static void run(Instrumentation test, String name, boolean bilingual) {
         ModelQualificationDeviceTest fixture = new ModelQualificationDeviceTest(test);
         Bundle result = new Bundle();
         int code = Activity.RESULT_OK;
@@ -45,12 +46,13 @@ final class ModelQualificationDeviceTest {
             Files.write(new File(fixture.directory, "model_language").toPath(), "auto".getBytes(StandardCharsets.UTF_8));
             Files.deleteIfExists(new File(fixture.directory, "model_translate").toPath());
             Files.deleteIfExists(new File(fixture.directory, "model_threads").toPath());
-            fixture.report.put("settings", "automatic language; translation off; production thread default");
+            fixture.report.put("settings", "Initial automatic language and default threads; each transcription records its effective loaded configuration");
             fixture.models = test.startActivitySync(new Intent(test.getTargetContext(), ModelsActivity.class)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             fixture.download(model);
             fixture.select(name);
             fixture.report.put("transcription", fixture.transcribe());
+            if (bilingual) fixture.bilingual(name);
             String referenceName = REFERENCE.equals(name) ? DefaultModelContract.FILE_NAME : REFERENCE;
             ModelDescriptor reference = ModelCatalog.findByFileName(referenceName);
             fixture.download(reference);
@@ -71,6 +73,81 @@ final class ModelQualificationDeviceTest {
         test.finish(code, result);
     }
 
+    private void bilingual(String name) throws Exception {
+        check("canary-1b-v2-Q4_K_M.gguf".equals(name), "bilingual fixture requires pinned Canary v2");
+        ModelDescriptor detector = ModelCatalog.languageId();
+        stage("download language detector");
+        java.util.concurrent.CountDownLatch terminal = new java.util.concurrent.CountDownLatch(1);
+        String[] failure = new String[1];
+        ModelDownloadTask.Handle handle = ModelDownloadTask.start(directory, detector, new ModelDownloadTask.Listener() {
+            public void onStarted(ModelDownloadTask.Handle handle) { }
+            public void onProgress(long downloaded, long total) { }
+            public void onComplete(String installed) { terminal.countDown(); }
+            public void onFailure(String reason) { failure[0] = reason; terminal.countDown(); }
+        });
+        if (!terminal.await(180, java.util.concurrent.TimeUnit.SECONDS)) {
+            handle.cancel();
+            check(terminal.await(40, java.util.concurrent.TimeUnit.SECONDS), "detector cancellation did not finish");
+            throw new AssertionError("detector download timed out");
+        }
+        check(failure[0] == null, "detector download failed: " + failure[0]);
+        check(SpokenLanguages.detectorInstalled(directory), "auxiliary download missing provenance");
+        check(new String(Files.readAllBytes(new File(directory, "active_model").toPath()), StandardCharsets.UTF_8).trim().equals(name), "auxiliary model changed selection");
+        File auxiliary = new File(new File(directory, ModelInstaller.AUXILIARY_DIRECTORY), detector.fileName);
+        check(hash(auxiliary).equals(detector.sha256), "detector bytes not pinned");
+        Files.write(new File(directory, "model_language").toPath(), "en".getBytes(StandardCharsets.UTF_8));
+        SpokenLanguages.write(directory, java.util.Arrays.asList("en", "sk"));
+        report.put("language_list", new org.json.JSONArray(SpokenLanguages.read(directory)));
+        for (int threads : new int[] {2, 4}) {
+            Files.write(new File(directory, "model_threads").toPath(), Integer.toString(threads).getBytes(StandardCharsets.UTF_8));
+            expectedThreads = threads;
+            select(name);
+            JSONObject english = transcribe();
+            check(english.getDouble("word_error_rate") <= 0.15, "Canary English fixture accuracy");
+            JSONObject slovak = transcribe("fleurs-sk.wav", "87bb277cd46efdae0747510be7c6c63cd2a0bc37fcd31645fc09113887d45a9b",
+                    "madagaskar je zďaleka tým najväčším a je sám o sebe kontinentom keď ide o divokú prírodu");
+            check(slovak.getDouble("word_error_rate") <= 0.35, "Canary Slovak fixture accuracy");
+            report.put("threads_" + threads + "_english", english);
+            report.put("threads_" + threads + "_slovak", slovak);
+        }
+        stage("missing detector fails closed");
+        File held = new File(auxiliary.getPath() + ".fixture-held");
+        check(!held.exists(), "stale detector fixture exists");
+        Files.move(auxiliary.toPath(), held.toPath());
+        try {
+            java.lang.reflect.Method select = ModelsActivity.class.getDeclaredMethod("selectModel", String.class);
+            select.setAccessible(true);
+            test.runOnMainSync(() -> { try { select.invoke(models, name); } catch (Exception e) { throw new AssertionError(e); } });
+            long deadline = SystemClock.elapsedRealtime() + 300000;
+            boolean rejected = false;
+            while (SystemClock.elapsedRealtime() < deadline) {
+                String[] status = new String[1];
+                test.runOnMainSync(() -> status[0] = ((TextView)models.findViewById(R.id.txt_model_status)).getText().toString());
+                if (status[0].startsWith("Error")) {
+                    check(status[0].contains("language detector"), "unexpected failure: " + status[0]);
+                    check(loadedPath() == null, "failed load kept a fallback engine");
+                    rejected = true; break;
+                }
+                SystemClock.sleep(100);
+            }
+            check(rejected, "missing detector silently accepted");
+            report.put("missing_detector_rejected", true);
+        } finally { Files.move(held.toPath(), auxiliary.toPath()); }
+        select(name);
+        report.put("detector_recovery", transcribe());
+        ModelDescriptor englishOnly = ModelCatalog.findByFileName("whisper-tiny.en-Q4_K_M.gguf");
+        download(englishOnly); select(englishOnly.fileName);
+        String[] status = new String[1];
+        test.runOnMainSync(() -> status[0] = ((TextView)models.findViewById(R.id.txt_model_status)).getText().toString());
+        check("Ready (this model supports English only)".equals(status[0]), "English-only status missing");
+        JSONObject english = transcribe();
+        check(english.getDouble("word_error_rate") <= 0.15, "English-only switch fixture accuracy");
+        check(SpokenLanguages.read(directory).equals(java.util.Arrays.asList("en", "sk")), "model switch erased saved list");
+        report.put("english_only_switch", english);
+        select(name);
+        report.put("canary_switch_back", transcribe());
+    }
+
     private void stage(String name) throws Exception {
         report.put("stage", name);
         Bundle status = new Bundle(); status.putString("qualification_progress", report.optString("file") + ": " + name);
@@ -85,6 +162,30 @@ final class ModelQualificationDeviceTest {
             report.put("download_reused_" + model.id, true);
             return;
         }
+        stage("network preflight " + model.fileName);
+        java.lang.reflect.Method usable = ModelsActivity.class.getDeclaredMethod("hasUsableNetworkAccess");
+        usable.setAccessible(true);
+        boolean[] ready = new boolean[1];
+        long networkDeadline = SystemClock.elapsedRealtime() + 30000;
+        do {
+            test.runOnMainSync(() -> {
+                try { ready[0] = (boolean)usable.invoke(models); }
+                catch (Exception error) { throw new AssertionError(error); }
+            });
+            if (!ready[0]) SystemClock.sleep(250);
+        } while (!ready[0] && SystemClock.elapsedRealtime() < networkDeadline);
+        android.net.ConnectivityManager manager = (android.net.ConnectivityManager)test.getTargetContext()
+                .getSystemService(android.content.Context.CONNECTIVITY_SERVICE);
+        android.net.Network active = manager == null ? null : manager.getActiveNetwork();
+        android.net.NetworkCapabilities capabilities = active == null ? null : manager.getNetworkCapabilities(active);
+        JSONObject network = new JSONObject();
+        network.put("internet_permission", androidx.core.content.ContextCompat.checkSelfPermission(test.getTargetContext(),
+                android.Manifest.permission.INTERNET) == android.content.pm.PackageManager.PERMISSION_GRANTED);
+        network.put("active_network", active != null);
+        network.put("internet_capability", capabilities != null
+                && capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET));
+        report.put("network_preflight_" + model.id, network);
+        check(ready[0], "network unavailable before download; not a model failure: " + network);
         stage("download " + model.fileName); long started = SystemClock.elapsedRealtime();
         java.lang.reflect.Method begin = ModelsActivity.class.getDeclaredMethod("beginDownload", ModelDescriptor.class, String.class);
         begin.setAccessible(true);
@@ -125,6 +226,7 @@ final class ModelQualificationDeviceTest {
 
     private void select(String name) throws Exception {
         stage("select " + name);
+        String previousConfiguration = loadedConfiguration();
         java.lang.reflect.Method select = ModelsActivity.class.getDeclaredMethod("selectModel", String.class);
         select.setAccessible(true);
         long deadline = SystemClock.elapsedRealtime() + 300000;
@@ -132,24 +234,33 @@ final class ModelQualificationDeviceTest {
             try { select.invoke(models, name); }
             catch (Exception error) { throw new AssertionError(error); }
         });
-        awaitLoaded(name, deadline);
+        awaitLoaded(name, deadline, previousConfiguration);
     }
 
     private void awaitLoaded(String name) throws Exception {
-        awaitLoaded(name, SystemClock.elapsedRealtime() + 300000);
+        awaitLoaded(name, SystemClock.elapsedRealtime() + 300000, null);
     }
 
-    private void awaitLoaded(String name, long deadline) throws Exception {
+    private void awaitLoaded(String name, long deadline, String previousConfiguration) throws Exception {
         while (SystemClock.elapsedRealtime() < deadline) {
             String[] status = new String[1];
             test.runOnMainSync(() -> status[0] = ((TextView) models.findViewById(R.id.txt_model_status)).getText().toString());
             if (status[0].startsWith("Error")) throw new AssertionError("load " + name + ": " + status[0]);
             String actualPath = loadedPath();
             String expectedPath = new File(new File(directory, "models"), name).getAbsolutePath();
-            if (status[0].startsWith("Ready") && expectedPath.equals(actualPath)) {
+            String configuration = loadedConfiguration();
+            ModelDescriptor descriptor = ModelCatalog.findByFileName(name);
+            String detector = SpokenLanguages.needsDetector(SpokenLanguages.read(directory))
+                    && descriptor.languageChoice == ModelDescriptor.Capability.SUPPORTED
+                    && descriptor.languages.size() > 1 ? String.join(",", SpokenLanguages.read(directory)) : "";
+            boolean matches = configuration != null && !configuration.equals(previousConfiguration)
+                    && (expectedThreads == 0 || configuration.contains(";threads=" + expectedThreads + ";"))
+                    && configuration.endsWith(";detector=" + detector);
+            if (status[0].startsWith("Ready") && expectedPath.equals(actualPath) && matches) {
                 check(new String(Files.readAllBytes(new File(directory, "active_model").toPath()), StandardCharsets.UTF_8).trim().equals(name), "selection marker mismatch");
                 selectedName = name;
                 report.put("loaded_path_" + name, actualPath);
+                report.put("loaded_configuration_" + name, configuration);
                 return;
             }
             SystemClock.sleep(100);
@@ -158,15 +269,21 @@ final class ModelQualificationDeviceTest {
     }
 
     private JSONObject transcribe() throws Exception {
-        stage("transcribe public JFK audio");
+        return transcribe("bench.wav", "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e", EXPECTED);
+    }
+
+    private JSONObject transcribe(String asset, String digest, String expected) throws Exception {
+        stage("transcribe public " + asset);
         File cache = new File(test.getTargetContext().getCacheDir(), "diagnostics"); cache.mkdirs();
         File audio = new File(cache, "public-model-qualification.wav");
-        try (java.io.InputStream input = test.getTargetContext().getAssets().open("bench.wav")) {
+        try (java.io.InputStream input = ("bench.wav".equals(asset) ? test.getTargetContext() : test.getContext()).getAssets().open(asset)) {
             Files.copy(input, audio.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         }
-        check(hash(audio).equals("59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e"), "public audio digest mismatch");
+        check(hash(audio).equals(digest), "public audio digest mismatch");
         String modelPath = new File(new File(directory, "models"), selectedName).getAbsolutePath();
         check(modelPath.equals(loadedPath()), "wrong engine before file decode");
+        String configuration = loadedConfiguration();
+        check(configuration != null, "loaded configuration unavailable before decode");
         Uri uri = new Uri.Builder().scheme("content").authority(test.getTargetContext().getPackageName()+".fileprovider")
                 .appendPath("diagnostic_exports").appendPath(audio.getName()).build();
         long start = SystemClock.elapsedRealtime();
@@ -190,11 +307,16 @@ final class ModelQualificationDeviceTest {
                 if (complete[0]) {
                     check(!text[0].trim().isEmpty(), "empty transcript");
                     check(modelPath.equals(loadedPath()), "engine changed during file decode");
+                    check(configuration.equals(loadedConfiguration()), "loaded engine configuration changed during decode");
                     JSONObject value = new JSONObject(); value.put("text", text[0]); value.put("wall_ms",SystemClock.elapsedRealtime()-start);
-                    value.put("word_error_rate", wordErrorRate(text[0]));
+                    value.put("word_error_rate", wordErrorRate(expected, text[0]));
                     value.put("model_file", selectedName);
+                    value.put("loaded_configuration", configuration);
+                    value.put("requested_thread_setting", new File(directory, "model_threads").exists()
+                            ? new String(Files.readAllBytes(new File(directory, "model_threads").toPath()), StandardCharsets.UTF_8) : "auto");
+                    value.put("languages", new org.json.JSONArray(SpokenLanguages.read(directory)));
                     value.put("fresh_final_callback", true);
-                    value.put("audio_sha256", "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e");
+                    value.put("audio_sha256", digest);
                     return value;
                 }
                 SystemClock.sleep(100);
@@ -209,6 +331,12 @@ final class ModelQualificationDeviceTest {
         return (String) method.invoke(models);
     }
 
+    private String loadedConfiguration() throws Exception {
+        java.lang.reflect.Method method = ModelsActivity.class.getDeclaredMethod("loadedModelConfigurationNative");
+        method.setAccessible(true);
+        return (String)method.invoke(models);
+    }
+
     private static String hash(File file) throws Exception {
         java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
         try (java.io.InputStream input = Files.newInputStream(file.toPath())) {
@@ -220,9 +348,9 @@ final class ModelQualificationDeviceTest {
         return value.toString();
     }
 
-    private static double wordErrorRate(String text) {
-        String[] expected = EXPECTED.split(" ");
-        String[] actual = text.toLowerCase(Locale.ROOT).replaceAll("[^a-z]+", " ").trim().split(" +");
+    private static double wordErrorRate(String reference, String text) {
+        String[] expected = reference.split(" ");
+        String[] actual = text.toLowerCase(Locale.ROOT).replaceAll("[^\\p{L}]+", " ").trim().split(" +");
         int[][] distance = new int[expected.length+1][actual.length+1];
         for(int i=0;i<=expected.length;i++) distance[i][0]=i;
         for(int j=0;j<=actual.length;j++) distance[0][j]=j;

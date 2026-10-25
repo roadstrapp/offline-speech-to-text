@@ -27,6 +27,15 @@ public final class SpokenLanguagesTest {
         Files.write(new File(dir, "model_languages").toPath(), " EN-us, de_DE ,en,x1 ".getBytes());
         assert Arrays.asList("en", "de").equals(SpokenLanguages.read(dir));
 
+        // Alphabetical display order must not replace an explicit Slovak primary choice.
+        SpokenLanguages.write(dir, Collections.singletonList("sk"));
+        SpokenLanguages.write(dir, Arrays.asList("en", "sk"));
+        assert Arrays.asList("sk", "en").equals(SpokenLanguages.read(dir));
+        SpokenLanguages.write(dir, Arrays.asList("en", "de", "sk"));
+        assert Arrays.asList("sk", "en", "de").equals(SpokenLanguages.read(dir));
+        SpokenLanguages.write(dir, Arrays.asList("en", "de"));
+        assert !SpokenLanguages.read(dir).contains("sk");
+
         assert !SpokenLanguages.needsDetector(Collections.singletonList("en"));
         assert SpokenLanguages.needsDetector(Arrays.asList("en", "de"));
 

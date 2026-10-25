@@ -40,3 +40,15 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_ModelsActivity_loadedMo
         .map(|value| value.into_raw())
         .unwrap_or(std::ptr::null_mut())
 }
+
+/// Qualification readback of the actual loaded generation, threads and language-ID policy.
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_notune_transcribe_ModelsActivity_loadedModelConfigurationNative(
+    env: JNIEnv,
+    _this: JObject,
+) -> jni::sys::jstring {
+    engine::loaded_model_configuration()
+        .and_then(|configuration| env.new_string(configuration).ok())
+        .map(|value| value.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}

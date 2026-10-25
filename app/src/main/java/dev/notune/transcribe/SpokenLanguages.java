@@ -34,13 +34,22 @@ final class SpokenLanguages {
     /**
      * Stores the selection. Zero keeps the existing language hint untouched; one becomes the
      * plain hint; two or more go to the list and return the hint to automatic, since detection
-     * supplies it per utterance.
+     * supplies it per utterance. Preserve the fixed hint, previous first language or device
+     * language as the first candidate for audio too short to identify.
      */
     static void write(File filesDir, List<String> codes) throws IOException {
         File list = new File(filesDir, LIST_FILE);
         File hint = new File(filesDir, HINT_FILE);
         if (codes.size() >= 2) {
-            Files.write(list.toPath(), String.join(",", codes).getBytes(StandardCharsets.UTF_8));
+            List<String> ordered = new ArrayList<>(codes);
+            String preferred = primary(readFile(hint));
+            if (!ordered.contains(preferred)) {
+                List<String> previous = read(filesDir);
+                preferred = previous.isEmpty() ? "" : previous.get(0);
+            }
+            if (!ordered.contains(preferred)) preferred = primary(Locale.getDefault().getLanguage());
+            if (ordered.remove(preferred)) ordered.add(0, preferred);
+            Files.write(list.toPath(), String.join(",", ordered).getBytes(StandardCharsets.UTF_8));
             Files.deleteIfExists(hint.toPath());
         } else {
             Files.deleteIfExists(list.toPath());

@@ -1452,6 +1452,7 @@ public class ModelsActivity extends AppCompatActivity {
     }
 
     private native String loadedModelPathNative();
+    private native String loadedModelConfigurationNative();
 
     private native void reloadModelNative(ModelsActivity activity);
 }

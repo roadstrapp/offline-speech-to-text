@@ -9,7 +9,7 @@
 
 use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use jni::objects::{GlobalRef, JObject};
@@ -39,6 +39,7 @@ const MODEL_TRANSLATE_FILE: &str = "model_translate";
 const MODEL_THREADS_FILE: &str = "model_threads";
 pub(crate) static INFERENCE_GATE: Lazy<crate::inference_gate::Gate> =
     Lazy::new(crate::inference_gate::Gate::default);
+static NEXT_ENGINE_GENERATION: AtomicU64 = AtomicU64::new(1);
 static ACTIVE_THREADS: AtomicI32 = AtomicI32::new(0);
 
 /// Settings captured once for a complete user transcription.
@@ -121,6 +122,8 @@ impl LanguageDetector {
 /// A loaded transcribe.cpp session plus the options applied to every run.
 pub struct Engine {
     model_path: PathBuf,
+    generation: u64,
+    threads: i32,
     diagnostic_family: i32,
     session: transcribe_cpp::Session,
     language: Option<String>,
@@ -178,27 +181,24 @@ impl Engine {
         // status. Whisper Turbo is special-cased: it advertises translation
         // but was distilled without translation data — verified on-device to
         // keep transcribing German as German with task=Translate.
-        let english_only_model = capabilities.as_ref().is_some_and(|c| {
-            c.languages.len() == 1 && crate::english_fillers::is_english_tag(&c.languages[0])
-        });
-        if allowed_languages.len() >= 2 && english_only_model
-            && !allowed_languages.iter().any(|code| code == "en") {
-            return Err("This model supports only English, which is outside your language list".to_string());
-        }
-        let language = if allowed_languages.len() >= 2 && english_only_model {
+        let english_only_model = capabilities.as_ref()
+            .is_some_and(|c| crate::language_selection::english_only(&c.languages));
+        use crate::language_selection::ModelLanguagePolicy;
+        let language_policy = crate::language_selection::model_policy(
+            &model.arch(), capabilities.as_ref().map(|c| c.languages.as_slice()), allowed_languages
+        )?;
+        let language = if language_policy == ModelLanguagePolicy::EnglishOnly {
             Some("en".to_string())
         } else { language };
-        let ready_status = if allowed_languages.len() >= 2 && model.arch() == "parakeet" {
+        let ready_status = if language_policy == ModelLanguagePolicy::IgnoresList {
             "Ready (this model ignores Languages I speak)"
-        } else if allowed_languages.len() >= 2 && english_only_model {
+        } else if language_policy == ModelLanguagePolicy::EnglishOnly {
             "Ready (this model supports English only)"
         } else if translate && task == transcribe_cpp::Task::Transcribe {
             "Ready (this model can't translate)"
         } else if translate && model.variant().contains("turbo") {
             "Ready (note: Whisper Turbo translates poorly; use another Whisper)"
-        } else {
-            "Ready"
-        };
+        } else { "Ready" };
         // Whisper's stock recipe re-decodes a chunk at up to five higher
         // temperatures when its quality gates fail, so one noisy chunk can
         // cost several full decodes. For an interactive app a single greedy
@@ -257,22 +257,14 @@ impl Engine {
             }
             Some(safe_limit - final_silence)
         };
-        // Parakeet weights ignore language hints; never mislabel its output using a detector.
-        let detector = if model.arch() == "parakeet" || english_only_model {
-            None
-        } else {
-            if allowed_languages.len() >= 2 {
-                let supported = capabilities.as_ref()
-                    .ok_or("This model cannot confirm support for the chosen languages")?;
-                if !crate::language_selection::supports_all(&supported.languages, allowed_languages) {
-                    return Err("Choose languages supported by this speech model".to_string());
-                }
-            }
+        let detector = if language_policy == ModelLanguagePolicy::Detect {
             open_detector(&files_dir, allowed_languages, threads)?
-        };
+        } else { None };
         ACTIVE_THREADS.store(threads, Ordering::Relaxed);
         Ok(Engine {
             model_path: model_path.to_path_buf(),
+            generation: NEXT_ENGINE_GENERATION.fetch_add(1, Ordering::Relaxed),
+            threads,
             diagnostic_family: match model.arch().as_str() {
                 "whisper" => 1,
                 "parakeet" => 2,
@@ -624,6 +616,16 @@ pub fn loaded_model_path() -> Option<PathBuf> {
     let engine = get_engine()?;
     let guard = engine.try_lock().ok()?;
     Some(guard.model_path.clone())
+}
+
+/// Content-free, read-only qualification identity; never blocks inference or logs settings.
+pub fn loaded_model_configuration() -> Option<String> {
+    let engine = get_engine()?;
+    let guard = engine.try_lock().ok()?;
+    let languages = guard.detector.as_ref().map(|detector| detector.allowed.iter()
+        .map(|code| crate::language_selection::recognition_code(code)).collect::<Vec<_>>().join(","))
+        .unwrap_or_default();
+    Some(format!("generation={};threads={};detector={}", guard.generation, guard.threads, languages))
 }
 
 pub fn is_engine_loaded() -> bool {

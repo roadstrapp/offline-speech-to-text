@@ -22,6 +22,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
     private boolean fileTranscription;
     private boolean preparedWindows;
     private String qualificationModel;
+    private boolean qualificationBilingual;
     private boolean installedModelsUi;
     private boolean redesignUi;
     private boolean seedUiUpgrade;
@@ -39,13 +40,14 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         redesignUi = arguments != null && "true".equals(arguments.getString("redesign_ui"));
         seedUiUpgrade = arguments != null && "true".equals(arguments.getString("seed_ui_upgrade"));
         installedModelsUi = arguments != null && "true".equals(arguments.getString("installed_models_ui"));
+        qualificationBilingual = arguments != null && "true".equals(arguments.getString("qualify_bilingual"));
         qualificationModel = arguments == null ? null : arguments.getString("qualify_model");
         start();
     }
 
     @Override
     public void onStart() {
-        if (qualificationModel != null) { ModelQualificationDeviceTest.run(this, qualificationModel); return; }
+        if (qualificationModel != null) { ModelQualificationDeviceTest.run(this, qualificationModel, qualificationBilingual); return; }
         if (installedModelsUi) { testInstalledModelsUi(); return; }
         if (seedUiUpgrade) { seedUiUpgrade(); return; }
         if (redesignUi) { testRedesignUi(); return; }
