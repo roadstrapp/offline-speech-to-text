@@ -182,7 +182,8 @@ public final class ModelCatalog {
     public static List<ModelDescriptor> curatedDownloads() {
         java.util.Set<String> choices = new LinkedHashSet<>(Arrays.asList(
                 DefaultModelContract.FILE_NAME, "parakeet-tdt-0.6b-v3-Q8_0.gguf",
-                "parakeet-primeline-Q4_K_M.gguf", "whisper-tiny.en-Q4_K_M.gguf",
+                "parakeet-primeline-Q4_K_M.gguf", "canary-1b-v2-Q4_K_M.gguf",
+                "whisper-tiny.en-Q4_K_M.gguf",
                 "whisper-tiny-Q4_K_M.gguf", "whisper-base-Q4_K_M.gguf",
                 "whisper-small-Q4_K_M.gguf", "whisper-medium-Q4_K_M.gguf",
                 "whisper-large-v3-turbo-Q4_K_M.gguf", "whisper-large-v3-Q4_K_M.gguf"));
@@ -248,6 +249,13 @@ public final class ModelCatalog {
             languages.add("en");
             streaming = ModelDescriptor.Capability.SUPPORTED;
             translation = ModelDescriptor.Capability.UNSUPPORTED;
+        } else if ("canary-1b-v2-Q4_K_M.gguf".equals(fileName)) {
+            // Same 25 European languages as Parakeet v3 (read from the GGUF's own language
+            // list). It has no language detection: the language must be chosen, and without a
+            // choice it transcribes English.
+            languages.addAll(PARAKEET_V3_LANGUAGES);
+            detection = ModelDescriptor.Capability.UNSUPPORTED;
+            streaming = ModelDescriptor.Capability.UNSUPPORTED;
         } else if ("Moonshine".equals(family)) {
             languages.add("en");
             streaming = fileName.contains("streaming")
