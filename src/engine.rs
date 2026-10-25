@@ -95,7 +95,7 @@ impl LanguageDetector {
                 .iter()
                 .map(|code| crate::language_selection::detector_label(code).to_string())
                 .collect(),
-            previous: languages[0].clone(),
+            previous: crate::language_selection::recognition_code(&languages[0]).to_string(),
             min_samples: (info.min_audio_ms.max(0) as usize).saturating_mul(16),
         })
     }
@@ -398,10 +398,14 @@ impl Engine {
     pub(crate) fn prepare_complete_window(
         &mut self,
         job: &mut TranscriptionJob,
-        audio: Vec<f32>,
+        mut audio: Vec<f32>,
     ) -> Result<(), String> {
+        // Preparation owns this window: pad it in place rather than copying the
+        // entire audio buffer again in decode_window. Stop-time borrowed windows
+        // still take the ordinary copy-and-pad path.
+        crate::audio_finalization::append_final_decode_silence(&mut audio);
         let mut assembled = job.prepared_text.clone();
-        let result = self.decode_window(job, &audio, true, &mut assembled);
+        let result = self.decode_window(job, &audio, false, &mut assembled);
         result?;
         job.prepared_text = assembled;
         job.prepared_windows += 1;

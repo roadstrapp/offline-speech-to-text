@@ -24,6 +24,8 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
     private String qualificationModel;
     private boolean qualificationBilingual;
     private boolean installedModelsUi;
+    private boolean qualifyPrepared;
+    private boolean donationUi;
     private boolean redesignUi;
     private boolean seedUiUpgrade;
     private static final class InjectedFixtureFailure extends Exception {}
@@ -37,6 +39,8 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         fileDecoder = arguments != null && "true".equals(arguments.getString("file_decoder"));
         callerAudio = arguments != null && "true".equals(arguments.getString("caller_audio"));
         preparedWindows = arguments != null && "true".equals(arguments.getString("prepared_windows"));
+        qualifyPrepared = arguments != null && "true".equals(arguments.getString("qualify_prepared"));
+        donationUi = arguments != null && "true".equals(arguments.getString("donation_ui"));
         redesignUi = arguments != null && "true".equals(arguments.getString("redesign_ui"));
         seedUiUpgrade = arguments != null && "true".equals(arguments.getString("seed_ui_upgrade"));
         installedModelsUi = arguments != null && "true".equals(arguments.getString("installed_models_ui"));
@@ -47,6 +51,8 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
 
     @Override
     public void onStart() {
+        if (qualifyPrepared) { ModelQualificationDeviceTest.runPrepared(this); return; }
+        if (donationUi) { testDonationUi(); return; }
         if (qualificationModel != null) { ModelQualificationDeviceTest.run(this, qualificationModel, qualificationBilingual); return; }
         if (installedModelsUi) { testInstalledModelsUi(); return; }
         if (seedUiUpgrade) { seedUiUpgrade(); return; }
@@ -476,6 +482,48 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             if (original == null) Files.deleteIfExists(lease.toPath());
             else Files.write(lease.toPath(), original);
         }
+    }
+
+    private void testDonationUi() {
+        Bundle result = new Bundle();
+        java.util.concurrent.atomic.AtomicReference<Intent> launched = new java.util.concurrent.atomic.AtomicReference<>();
+        ActivityMonitor monitor = new ActivityMonitor() {
+            @Override public ActivityResult onStartActivity(Intent intent) {
+                if (Intent.ACTION_VIEW.equals(intent.getAction())
+                        && intent.getData() != null && "lightning".equals(intent.getData().getScheme())) {
+                    launched.set(new Intent(intent));
+                    return new ActivityResult(Activity.RESULT_CANCELED, null);
+                }
+                return null;
+            }
+        };
+        int code = Activity.RESULT_OK;
+        try {
+            check(getTargetContext().getPackageName().equals("app.offlinespeechtotext.validation"),
+                    "donation test requires isolated fixture");
+            launchMain();
+            addMonitor(monitor);
+            runSafelyOnMainSync(() -> {
+                ((com.google.android.material.bottomnavigation.BottomNavigationView)
+                        current.findViewById(R.id.main_navigation)).setSelectedItemId(R.id.navigation_settings);
+                current.findViewById(R.id.nav_about).performClick();
+                check(current.findViewById(R.id.btn_donate).isShown(), "Donate hidden in About");
+                current.findViewById(R.id.btn_donate).performClick();
+            });
+            Intent intent = launched.get();
+            check(intent != null, "Donate did not dispatch Lightning wallet intent");
+            check(intent.getData().toString().equals("lightning:npub1jg2qmt3rxjksq65v3nk7dq6yaz2c4uf3qt9epdhxwms2xwd47j2s38a228@npub.cash"),
+                    "Donate used a different project address");
+            result.putBoolean("donation_ui", true);
+            result.putString("scope", "visible Donate button dispatches exact app Lightning address; wallet intent intercepted, no payment");
+        } catch (Throwable error) {
+            code = Activity.RESULT_CANCELED;
+            result.putString("failure", error.toString());
+        } finally {
+            removeMonitor(monitor);
+            closeCurrent();
+        }
+        finish(code, result);
     }
 
     private void seedUiUpgrade() {
