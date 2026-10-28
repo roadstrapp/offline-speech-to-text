@@ -481,16 +481,18 @@ fn begin_session(
     target: GlobalRef,
 ) -> Option<(Arc<Endpoint>, Arc<Mutex<Option<SendStream>>>)> {
     // A second wrapper start must never replace the process-global owner.
+    // Busy, not an audio fault: the keyboard, popup or long recording holds
+    // the microphone and model owner, and the caller may simply retry.
     if SESSION.lock().unwrap().is_some() {
         if let Ok(mut env) = jvm.attach_current_thread() {
-            call_error(&mut env, target.as_obj(), ERROR_AUDIO);
+            call_error(&mut env, target.as_obj(), ERROR_RECOGNIZER_BUSY);
         }
         return None;
     }
 
     if !claim_session_owner(OWNER_RECOGNITION_SERVICE) {
         if let Ok(mut env) = jvm.attach_current_thread() {
-            call_error(&mut env, target.as_obj(), ERROR_AUDIO);
+            call_error(&mut env, target.as_obj(), ERROR_RECOGNIZER_BUSY);
         }
         return None;
     }
@@ -666,7 +668,8 @@ fn caller_cap_monitor(job: Arc<CallerJob>) {
 /// admitted as background work, then the tail, and delivers the one result.
 fn decode_caller_audio(job: Arc<CallerJob>) {
     let result = run_caller_decode(&job);
-    if !claim_terminal(&job) {
+    // Whoever stopped the queue (cancel or input failure) owns the terminal callback.
+    if matches!(result, CallerDecode::Stopped) || !claim_terminal(&job) {
         clear_caller(&job);
         return;
     }

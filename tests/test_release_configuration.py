@@ -308,10 +308,15 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("model access stays", service_cancel)
         start = wrapper[wrapper.index("protected void onStartListening"):
                         wrapper.index("private void startListeningFromCallerAudio")]
-        self.assertLess(start.index("cancelNative();"), start.index("mCallback = callback;"))
-        self.assertIn("private volatile Callback mCallback;", wrapper)
-        self.assertIn("if (callback != mCallback) return;", wrapper)
-        self.assertIn("if (mCallback == cb) mCallback = null;", wrapper)
+        # The previous microphone request is retired and told before the new one claims the slot.
+        self.assertLess(start.index("retire(mic"), start.index("cancelNative();"))
+        self.assertLess(start.index("cancelNative();"), start.index("previous.error("))
+        self.assertLess(start.index("previous.error("), start.index("claim(mic"))
+        # Caller audio has its own slot and never cancels the microphone request (or vice versa).
+        caller_branch = start[start.index("Action.START_BACKGROUND)"):start.index("retire(mic")]
+        self.assertNotIn("cancelNative", caller_branch)
+        self.assertIn("if (callback != mic.callback) return;", wrapper)
+        self.assertIn("slot.callback == callback && slot.generation == generation", wrapper)
 
     def test_capture_and_live_subtitle_power_hot_paths_are_bounded(self):
         popup = (ROOT / "app/src/main/java/dev/notune/transcribe/RecognizeActivity.java").read_text()

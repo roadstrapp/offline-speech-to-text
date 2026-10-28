@@ -132,5 +132,13 @@ java -ea -cp "$OUT" docs.examples.CallerAudioLifecycleTest
 rustc --edition 2021 --test "$ROOT/src/caller_audio_input.rs" -o "$OUT/caller_audio_input_test"
 "$OUT/caller_audio_input_test"
 
+rustc --edition 2021 --test "$ROOT/tests/CallerAudioJobTest.rs" -o "$OUT/caller_audio_job_test"
+"$OUT/caller_audio_job_test"
+
+javac -d "$OUT" \
+  "$ROOT/app/src/main/java/dev/notune/transcribe/RecognitionSessionPolicy.java" \
+  "$ROOT/tests/RecognitionSessionPolicyTest.java"
+java -ea -cp "$OUT" dev.notune.transcribe.RecognitionSessionPolicyTest
+
 rustc --edition 2021 --test "$ROOT/tests/UpstreamEndpointTest.rs" -o "$OUT/upstream_endpoint_test"
 "$OUT/upstream_endpoint_test"

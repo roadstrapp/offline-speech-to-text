@@ -97,15 +97,19 @@ public class VoiceRecognitionService extends RecognitionService {
     @Override
     protected void onStartListening(Intent recognizerIntent, Callback callback) {
         ParcelFileDescriptor callerAudio = callerAudioSource(recognizerIntent);
-        if (callerAudio != null) {
-            if (caller.callback != null) {
-                // One caller-audio job at a time; never cancel the running one.
-                closeQuietly(callerAudio);
-                Log.i(TAG, "service caller_audio: busy, refusing a second request");
-                try { callback.error(SpeechRecognizer.ERROR_RECOGNIZER_BUSY); } catch (RemoteException ignored) {}
-                DiagnosticLog.recognizerError(getFilesDir(), SpeechRecognizer.ERROR_RECOGNIZER_BUSY);
-                return;
-            }
+        Callback previous = mic.callback;
+        RecognitionSessionPolicy.Action action = RecognitionSessionPolicy.admit(
+                callerAudio != null, caller.callback != null,
+                previous != null && previous != callback);
+        if (action == RecognitionSessionPolicy.Action.REFUSE_BUSY) {
+            // One caller-audio job at a time; never cancel the running one.
+            closeQuietly(callerAudio);
+            Log.i(TAG, "service caller_audio: busy, refusing a second request");
+            try { callback.error(SpeechRecognizer.ERROR_RECOGNIZER_BUSY); } catch (RemoteException ignored) {}
+            DiagnosticLog.recognizerError(getFilesDir(), SpeechRecognizer.ERROR_RECOGNIZER_BUSY);
+            return;
+        }
+        if (action == RecognitionSessionPolicy.Action.START_BACKGROUND) {
             NativeCallbacks target = claim(caller, callback);
             Log.i(TAG, "service caller_audio: start");
             startListeningFromCallerAudio(recognizerIntent, callback, callerAudio, target);
@@ -115,18 +119,20 @@ public class VoiceRecognitionService extends RecognitionService {
         // Android can deliver a replacement request before the dead caller's
         // cancellation reaches us (for example during a fast app/editor
         // switch). Retire the previous microphone request first so the new one
-        // never receives a false ERROR_AUDIO from the stale process-wide owner.
-        // A caller-audio job in the other slot is left alone.
-        Callback previous = mic.callback;
-        retire(mic, "cancel");
+        // never receives a false error from the stale process-wide owner, and
+        // tell the replaced caller (busy, as a refused request is told) so it
+        // never waits for a result that cannot come. A caller-audio job in the
+        // other slot is left alone.
+        retire(mic, "replaced");
         try {
             cancelNative();
         } catch (Throwable t) {
             Log.e(TAG, "stale-session cleanup failed", t);
         }
-        if (previous != null && previous != callback) {
-            // Tell a still-living previous client, and free its framework session.
-            try { previous.error(SpeechRecognizer.ERROR_CLIENT); } catch (RemoteException ignored) {}
+        if (action == RecognitionSessionPolicy.Action.REPLACE_MICROPHONE) {
+            Log.i(TAG, "service microphone: replacing the previous request (busy sent to it)");
+            DiagnosticLog.recognizerError(getFilesDir(), SpeechRecognizer.ERROR_RECOGNIZER_BUSY);
+            try { previous.error(SpeechRecognizer.ERROR_RECOGNIZER_BUSY); } catch (RemoteException ignored) {}
         }
         NativeCallbacks target = claim(mic, callback);
         Log.i(TAG, "service microphone: start" + (caller.callback != null
@@ -296,8 +302,16 @@ public class VoiceRecognitionService extends RecognitionService {
 
     @Override
     public void onDestroy() {
-        retire(mic, "destroy");
-        retire(caller, "destroy");
+        // A live request must not wait for a result that can no longer come.
+        int gone = RecognitionSessionPolicy.destroyedError(Build.VERSION.SDK_INT);
+        for (Slot slot : new Slot[] { mic, caller }) {
+            Callback cb = slot.callback;
+            retire(slot, "destroy");
+            if (cb != null) {
+                Log.i(TAG, "service " + slot.route + ": error " + gone + " (service destroyed)");
+                try { cb.error(gone); } catch (RemoteException ignored) {}
+            }
+        }
         try {
             destroyNative();
         } catch (Throwable t) {
