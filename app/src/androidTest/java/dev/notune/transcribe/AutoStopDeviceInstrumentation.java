@@ -28,6 +28,10 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
     private boolean donationUi;
     private boolean redesignUi;
     private boolean seedUiUpgrade;
+    private boolean fileApi;
+    private int fileApiMinutes;
+    private int callerAudioMinutes;
+    private int callerAudioPace;
     private static final class InjectedFixtureFailure extends Exception {}
 
     @Override
@@ -46,12 +50,27 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         installedModelsUi = arguments != null && "true".equals(arguments.getString("installed_models_ui"));
         qualificationBilingual = arguments != null && "true".equals(arguments.getString("qualify_bilingual"));
         qualificationModel = arguments == null ? null : arguments.getString("qualify_model");
+        fileApi = arguments != null && "true".equals(arguments.getString("file_api"));
+        fileApiMinutes = 25;
+        if (arguments != null && arguments.getString("file_api_minutes") != null) {
+            fileApiMinutes = Integer.parseInt(arguments.getString("file_api_minutes"));
+        }
+        if (arguments != null && arguments.getString("caller_audio_minutes") != null) {
+            callerAudioMinutes = Integer.parseInt(arguments.getString("caller_audio_minutes"));
+            String pace = arguments.getString("caller_audio_pace");
+            callerAudioPace = pace == null ? 0 : Integer.parseInt(pace);
+        }
         start();
     }
 
     @Override
     public void onStart() {
         if (qualifyPrepared) { ModelQualificationDeviceTest.runPrepared(this); return; }
+        if (fileApi) { FileApiDeviceTest.run(this, fileApiMinutes); return; }
+        if (callerAudioMinutes > 0) {
+            FileApiDeviceTest.runCallerAudio(this, callerAudioMinutes, callerAudioPace);
+            return;
+        }
         if (donationUi) { testDonationUi(); return; }
         if (qualificationModel != null) { ModelQualificationDeviceTest.run(this, qualificationModel, qualificationBilingual); return; }
         if (installedModelsUi) { testInstalledModelsUi(); return; }
