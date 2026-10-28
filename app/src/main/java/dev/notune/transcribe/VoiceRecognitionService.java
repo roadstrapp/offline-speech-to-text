@@ -283,6 +283,7 @@ public class VoiceRecognitionService extends RecognitionService {
     protected void onCancel(Callback callback) {
         if (callback == null) return;
         if (callback == caller.callback) {
+            Log.i(TAG, "service caller_audio: cancelled by the caller");
             retire(caller, "cancel");
             try {
                 cancelCallerAudio();
@@ -292,6 +293,7 @@ public class VoiceRecognitionService extends RecognitionService {
             return;
         }
         if (callback != mic.callback) return;
+        Log.i(TAG, "service microphone: cancelled by the caller");
         retire(mic, "cancel");
         try {
             cancelNative();
