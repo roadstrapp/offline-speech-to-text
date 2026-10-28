@@ -101,11 +101,13 @@ public class VoiceRecognitionService extends RecognitionService {
             if (caller.callback != null) {
                 // One caller-audio job at a time; never cancel the running one.
                 closeQuietly(callerAudio);
+                Log.i(TAG, "service caller_audio: busy, refusing a second request");
                 try { callback.error(SpeechRecognizer.ERROR_RECOGNIZER_BUSY); } catch (RemoteException ignored) {}
                 DiagnosticLog.recognizerError(getFilesDir(), SpeechRecognizer.ERROR_RECOGNIZER_BUSY);
                 return;
             }
             NativeCallbacks target = claim(caller, callback);
+            Log.i(TAG, "service caller_audio: start");
             startListeningFromCallerAudio(recognizerIntent, callback, callerAudio, target);
             return;
         }
@@ -127,6 +129,8 @@ public class VoiceRecognitionService extends RecognitionService {
             try { previous.error(SpeechRecognizer.ERROR_CLIENT); } catch (RemoteException ignored) {}
         }
         NativeCallbacks target = claim(mic, callback);
+        Log.i(TAG, "service microphone: start" + (caller.callback != null
+                ? " (caller-audio job keeps running)" : ""));
 
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
@@ -332,11 +336,13 @@ public class VoiceRecognitionService extends RecognitionService {
         boolean delivered = false;
         try { cb.results(bundle); delivered = true; } catch (RemoteException ignored) {}
         String reason = delivered ? "delivered" : "callback_failed";
+        Log.i(TAG, "service " + slot.route + ": results " + reason);
         DiagnosticLog.event(getFilesDir(), "callback_delivery", "process=service,reason=" + reason);
         retire(slot, reason);
     }
 
     private void deliverError(Slot slot, Callback cb, int errorCode) {
+        Log.i(TAG, "service " + slot.route + ": error " + errorCode);
         DiagnosticLog.recognizerError(getFilesDir(), errorCode);
         try { cb.error(errorCode); } catch (RemoteException ignored) {}
         retire(slot, "error");
