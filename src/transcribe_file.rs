@@ -1,13 +1,21 @@
 //! Bounded file decoding: one model window plus a ten-second Java input block.
 //! Complete-job dictionary cleanup and overlapping boundary reconciliation match
-//! ordinary dictation. Each activity owns its cancellation token and exact job.
+//! ordinary dictation. Each `FileTranscription` owns one handle, its own
+//! cancellation token and exact job, so the share screen, the activity-result
+//! contract and the headless recognition-service request never share state.
+//! File jobs open no microphone and are never cut short by interactive caps:
+//! they end at decoder EOS, on failure, or on cancellation.
 use crate::engine::{self, Engine, TranscriptionJob};
 use jni::objects::{GlobalRef, JClass, JFloatArray, JObject};
-use jni::sys::{jboolean, jint, JNI_FALSE, JNI_TRUE};
+use jni::sys::{jboolean, jint, jlong, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 use once_cell::sync::Lazy;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
+
+/// Largest block `AudioFileDecoder` hands over (10 s at 16 kHz).
+const MAX_BLOCK_SAMPLES: jint = 160_000;
 
 struct FileSession {
     buffer: crate::file_audio::Buffer,
@@ -21,25 +29,36 @@ struct State {
     target: GlobalRef,
     session: Arc<Mutex<FileSession>>,
     cancelled: Arc<AtomicBool>,
+    partials: bool,
 }
-static STATE: Lazy<Mutex<Option<State>>> = Lazy::new(|| Mutex::new(None));
+static STATES: Lazy<Mutex<HashMap<i64, State>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static NEXT_HANDLE: AtomicI64 = AtomicI64::new(1);
+
 fn notify(env: &mut JNIEnv, target: &JObject, method: &str, text: &str) {
     if let Ok(text) = env.new_string(text) {
         let _ = env.call_method(target, method, "(Ljava/lang/String;)V", &[(&text).into()]);
     }
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
+    }
 }
+
+/// Creates one job and warms the shared model on a worker thread. The owner
+/// receives `onStatusUpdate("Ready")` (or an `Error:` status) when it may push.
 #[no_mangle]
-pub unsafe extern "system" fn Java_dev_notune_transcribe_TranscribeFileActivity_initNative(
+pub unsafe extern "system" fn Java_dev_notune_transcribe_FileTranscription_nativeCreate(
     env: JNIEnv,
     _: JClass,
-    activity: JObject,
-) {
+    owner: JObject,
+    partials: jboolean,
+) -> jlong {
     let Ok(vm) = env.get_java_vm() else {
-        return;
+        return 0;
     };
-    let Ok(target) = env.new_global_ref(activity) else {
-        return;
+    let Ok(target) = env.new_global_ref(owner) else {
+        return 0;
     };
+    let handle = NEXT_HANDLE.fetch_add(1, Ordering::SeqCst);
     let cancelled = Arc::new(AtomicBool::new(false));
     let session = Arc::new(Mutex::new(FileSession {
         buffer: crate::file_audio::Buffer::default(),
@@ -49,45 +68,43 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_TranscribeFileActivity_
         failed: false,
         finished: false,
     }));
-    if let Some(old) = STATE.lock().unwrap().replace(State {
-        target: target.clone(),
-        session,
-        cancelled: cancelled.clone(),
-    }) {
-        old.cancelled.store(true, Ordering::SeqCst);
-    }
+    STATES.lock().unwrap().insert(
+        handle,
+        State {
+            target: target.clone(),
+            session,
+            cancelled: cancelled.clone(),
+            partials: partials != JNI_FALSE,
+        },
+    );
     std::thread::spawn(move || {
         if !cancelled.load(Ordering::SeqCst) {
             let _ = engine::ensure_loaded_from_thread(&Arc::new(vm), &target);
         }
     });
+    handle
 }
+
+/// Cancels and forgets one job. Idempotent; a window already inside the model
+/// finishes behind the engine mutex, but nothing is delivered for it.
 #[no_mangle]
-pub unsafe extern "system" fn Java_dev_notune_transcribe_TranscribeFileActivity_cleanupNative(
-    env: JNIEnv,
+pub unsafe extern "system" fn Java_dev_notune_transcribe_FileTranscription_nativeRelease(
+    _env: JNIEnv,
     _: JClass,
-    activity: JObject,
+    handle: jlong,
 ) {
-    let mut guard = STATE.lock().unwrap();
-    if guard
-        .as_ref()
-        .is_some_and(|s| env.is_same_object(&s.target, &activity).unwrap_or(false))
-    {
-        if let Some(old) = guard.take() {
-            old.cancelled.store(true, Ordering::SeqCst);
-        }
+    if let Some(old) = STATES.lock().unwrap().remove(&handle) {
+        old.cancelled.store(true, Ordering::SeqCst);
     }
 }
-fn handles(
-    env: &JNIEnv,
-    activity: &JObject,
-) -> Option<(Arc<Mutex<FileSession>>, Arc<AtomicBool>, GlobalRef)> {
-    STATE
+
+type Handles = (Arc<Mutex<FileSession>>, Arc<AtomicBool>, GlobalRef, bool);
+fn handles(handle: jlong) -> Option<Handles> {
+    STATES
         .lock()
         .unwrap()
-        .as_ref()
-        .filter(|s| env.is_same_object(&s.target, activity).unwrap_or(false))
-        .map(|s| (s.session.clone(), s.cancelled.clone(), s.target.clone()))
+        .get(&handle)
+        .map(|s| (s.session.clone(), s.cancelled.clone(), s.target.clone(), s.partials))
 }
 fn ensure_job(s: &mut FileSession) -> Result<usize, String> {
     if s.failed || s.finished {
@@ -109,32 +126,31 @@ fn ensure_job(s: &mut FileSession) -> Result<usize, String> {
 }
 fn piece(s: &mut FileSession, audio: &[f32], intermediate: bool) -> Result<(), String> {
     let _permit = engine::INFERENCE_GATE.acquire(false);
-    s.engine
-        .as_ref()
-        .unwrap()
-        .lock()
-        .map_err(|_| "model unavailable")?
-        .decode_window(
-            s.job.as_mut().unwrap(),
-            audio,
-            intermediate,
-            &mut s.assembled,
-        )
+    let engine = s.engine.as_ref().unwrap().clone();
+    let FileSession { job, assembled, .. } = s;
+    // A native panic must end this job as a failure, not as a silent hang.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        engine
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .decode_window(job.as_mut().unwrap(), audio, intermediate, assembled)
+    }))
+    .unwrap_or_else(|_| Err("file window failed unexpectedly".into()))
 }
 #[no_mangle]
-pub unsafe extern "system" fn Java_dev_notune_transcribe_TranscribeFileActivity_pushSamples(
+pub unsafe extern "system" fn Java_dev_notune_transcribe_FileTranscription_nativePush(
     mut env: JNIEnv,
     _: JClass,
-    activity: JObject,
+    handle: jlong,
     samples: JFloatArray,
     length: jint,
 ) -> jboolean {
-    let Some((session, cancelled, target)) = handles(&env, &activity) else {
+    let Some((session, cancelled, target, partials)) = handles(handle) else {
         return JNI_FALSE;
     };
     if cancelled.load(Ordering::SeqCst)
         || length < 0
-        || length > 160_000
+        || length > MAX_BLOCK_SAMPLES
         || env.get_array_length(&samples).unwrap_or(0) < length
     {
         return JNI_FALSE;
@@ -152,7 +168,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_TranscribeFileActivity_
                 return Ok(());
             }
             piece(&mut s, &audio, true)?;
-            if !cancelled.load(Ordering::SeqCst) {
+            if partials && !cancelled.load(Ordering::SeqCst) {
                 let text =
                     Engine::finish_file_job(s.job.as_ref().unwrap().clone(), s.assembled.clone());
                 notify(&mut env, target.as_obj(), "onPartialText", &text);
@@ -160,7 +176,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_TranscribeFileActivity_
         }
         Ok(())
     })();
-    if result.is_err() {
+    if result.is_err() && !cancelled.load(Ordering::SeqCst) {
         s.failed = true;
         notify(
             &mut env,
@@ -176,12 +192,12 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_TranscribeFileActivity_
     }
 }
 #[no_mangle]
-pub unsafe extern "system" fn Java_dev_notune_transcribe_TranscribeFileActivity_finishSamples(
+pub unsafe extern "system" fn Java_dev_notune_transcribe_FileTranscription_nativeFinish(
     mut env: JNIEnv,
     _: JClass,
-    activity: JObject,
+    handle: jlong,
 ) {
-    let Some((session, cancelled, target)) = handles(&env, &activity) else {
+    let Some((session, cancelled, target, _)) = handles(handle) else {
         return;
     };
     let mut s = session.lock().unwrap();

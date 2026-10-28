@@ -121,4 +121,12 @@
 <string name="file_no_audio">Keine Audiodatei erhalten</string>
 <string name="file_decode_error">Diese Audiodatei konnte nicht dekodiert werden</string>
 <string name="file_no_speech">In dieser Datei wurde keine Sprache erkannt</string>
+<string name="file_copy">Kopieren</string>
+<string name="file_share">Teilen</string>
+<string name="file_save">Speichern</string>
+<string name="file_share_title">Transkript teilen</string>
+<string name="file_share_failed">Keine App kann das Transkript empfangen</string>
+<string name="file_saved">Transkript gespeichert</string>
+<string name="file_save_failed">Das Transkript konnte nicht gespeichert werden</string>
+<string name="file_not_audio">Diese Datei scheint keine Audiodatei zu sein</string>
 </resources>

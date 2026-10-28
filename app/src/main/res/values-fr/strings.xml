@@ -121,4 +121,12 @@
 <string name="file_no_audio">Aucun fichier audio reçu</string>
 <string name="file_decode_error">Impossible de décoder ce fichier audio</string>
 <string name="file_no_speech">Aucune parole reconnue dans ce fichier</string>
+<string name="file_copy">Copier</string>
+<string name="file_share">Partager</string>
+<string name="file_save">Enregistrer</string>
+<string name="file_share_title">Partager la transcription</string>
+<string name="file_share_failed">Aucune application ne peut recevoir la transcription</string>
+<string name="file_saved">Transcription enregistrée</string>
+<string name="file_save_failed">Impossible d\'enregistrer la transcription</string>
+<string name="file_not_audio">Ce fichier ne semble pas être un fichier audio</string>
 </resources>
