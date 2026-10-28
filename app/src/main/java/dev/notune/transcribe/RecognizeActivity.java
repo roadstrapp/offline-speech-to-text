@@ -11,7 +11,10 @@ import android.widget.FrameLayout;
 import android.widget.TextView;
 import android.content.pm.PackageManager;
 
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+
+import com.google.android.material.button.MaterialButton;
 
 import java.util.ArrayList;
 
@@ -32,6 +35,9 @@ public class RecognizeActivity extends AppCompatActivity {
     private boolean awaitingResult = false;
     private MicLevelView micLevel;
     private View processingRing;
+    private MaterialButton micSource;
+    private AlertDialog micSwitchDialog;
+    private final Runnable micSourceListener = this::onMicSourceChanged;
     private final AudioFocusPauser audioPauser = new AudioFocusPauser();
     private boolean pauseAudioActive = false;
 
@@ -55,6 +61,14 @@ public class RecognizeActivity extends AppCompatActivity {
         micLevel = findViewById(R.id.mic_level);
         processingRing = findViewById(R.id.mic_processing_ring);
         status = findViewById(R.id.txt_status);
+        micSource = findViewById(R.id.btn_mic_source);
+        if (micSource != null) {
+            micSource.setOnClickListener(v -> {
+                if (!isRecording) return;
+                micSwitchDialog = MicSourceToggle.confirm(this, null, this::restartOnMicrophone);
+            });
+        }
+        BluetoothMicRoute.addListener(micSourceListener);
 
         findViewById(R.id.btn_close).setOnClickListener(v -> {
             // discard current recording
@@ -89,12 +103,43 @@ public class RecognizeActivity extends AppCompatActivity {
             pauseAudioActive = true;
         }
         startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
+        // Native start routes synchronously, so the switch reflects this capture.
+        refreshMicSource();
+    }
+
+    private void onMicSourceChanged() {
+        refreshMicSource();
+        if (!isRecording || awaitingResult) return;
+        if (BluetoothMicRoute.takeFallbackNotice()) {
+            status.setText(R.string.mic_fallback_status);
+        } else if (BluetoothMicRoute.isWaitingForSound()) {
+            status.setText(R.string.mic_bt_waiting);
+        } else if (android.text.TextUtils.equals(status.getText(), getString(R.string.mic_bt_waiting))) {
+            status.setText(R.string.voice_listening);
+        }
+    }
+
+    /** Shows the microphone that really carries the recording (Bluetooth or phone). */
+    private void refreshMicSource() {
+        MicSourceToggle.refresh(micSource, this, isRecording && !awaitingResult);
+    }
+
+    /** The switch's confirmed choice: discard this recording and record again on the other mic. */
+    private void restartOnMicrophone(boolean bluetooth) {
+        if (!isRecording || isFinishing()) return;
+        try { cancelRecording(); } catch (Throwable t) { /* ignore */ }
+        BluetoothMicRoute.overrideNextStart(bluetooth);
+        status.setText(R.string.voice_listening);
+        if (micLevel != null) micLevel.setLevel(0f);
+        startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
+        refreshMicSource();
     }
 
     /** Stop capture and transcribe — used by both tap-to-stop and auto-stop. */
     private void finishRecording() {
         if (!isRecording) return;
         isRecording = false;
+        dismissMicSwitch();
         awaitingResult = true;
         status.setText(R.string.voice_processing);
         showProcessing(true);
@@ -130,8 +175,15 @@ public class RecognizeActivity extends AppCompatActivity {
         }
     }
 
+    private void dismissMicSwitch() {
+        if (micSwitchDialog != null && micSwitchDialog.isShowing()) micSwitchDialog.dismiss();
+        micSwitchDialog = null;
+    }
+
     @Override
     protected void onDestroy() {
+        BluetoothMicRoute.removeListener(micSourceListener);
+        dismissMicSwitch();
         super.onDestroy();
         if (pauseAudioActive) {
             audioPauser.abandon(this);
@@ -206,6 +258,7 @@ public class RecognizeActivity extends AppCompatActivity {
             processingRing.setVisibility(processing ? View.VISIBLE : View.GONE);
         }
         if (processing && micLevel != null) micLevel.setLevel(0f);
+        if (processing && micSource != null) micSource.setVisibility(View.GONE);
     }
 
     private static boolean isProcessingStatus(String status) {

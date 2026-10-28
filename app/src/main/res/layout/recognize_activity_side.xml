@@ -69,6 +69,26 @@
             android:textColor="?attr/colorOnSurface"
             android:textAppearance="?attr/textAppearanceBodySmall" />
 
+        <!-- Which microphone carries the recording; tap to switch. Shown
+             while recording when a Bluetooth microphone is usable. -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_mic_source"
+            style="@style/Widget.Material3.Button.TonalButton.Icon"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:minHeight="36dp"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:text="@string/mic_toggle_phone"
+            android:textAppearance="?attr/textAppearanceLabelMedium"
+            android:visibility="gone"
+            app:icon="@drawable/ic_phone_android"
+            app:iconSize="16dp"
+            app:iconPadding="2dp" />
+
         <ImageButton
             android:id="@+id/btn_close"
             android:layout_width="48dp"

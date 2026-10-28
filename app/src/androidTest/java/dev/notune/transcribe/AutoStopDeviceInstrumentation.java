@@ -28,6 +28,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
     private boolean donationUi;
     private boolean redesignUi;
     private boolean seedUiUpgrade;
+    private boolean bluetoothMic;
     private static final class InjectedFixtureFailure extends Exception {}
 
     @Override
@@ -43,6 +44,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         donationUi = arguments != null && "true".equals(arguments.getString("donation_ui"));
         redesignUi = arguments != null && "true".equals(arguments.getString("redesign_ui"));
         seedUiUpgrade = arguments != null && "true".equals(arguments.getString("seed_ui_upgrade"));
+        bluetoothMic = arguments != null && "true".equals(arguments.getString("bluetooth_mic"));
         installedModelsUi = arguments != null && "true".equals(arguments.getString("installed_models_ui"));
         qualificationBilingual = arguments != null && "true".equals(arguments.getString("qualify_bilingual"));
         qualificationModel = arguments == null ? null : arguments.getString("qualify_model");
@@ -52,6 +54,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
     @Override
     public void onStart() {
         if (qualifyPrepared) { ModelQualificationDeviceTest.runPrepared(this); return; }
+        if (bluetoothMic) { testBluetoothMic(); return; }
         if (donationUi) { testDonationUi(); return; }
         if (qualificationModel != null) { ModelQualificationDeviceTest.run(this, qualificationModel, qualificationBilingual); return; }
         if (installedModelsUi) { testInstalledModelsUi(); return; }
@@ -212,6 +215,20 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
                 code = Activity.RESULT_CANCELED;
                 result.putString("cleanup", "settings restoration failed");
             }
+        }
+        finish(code, result);
+    }
+
+    private void testBluetoothMic() {
+        Bundle result;
+        int code = Activity.RESULT_OK;
+        try {
+            result = BluetoothMicDeviceTest.run(this);
+        } catch (Throwable failure) {
+            code = Activity.RESULT_CANCELED;
+            result = new Bundle();
+            result.putString("failure_type", failure.getClass().getSimpleName());
+            if (failure instanceof AssertionError) result.putString("failure", failure.getMessage());
         }
         finish(code, result);
     }

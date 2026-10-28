@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::HostTrait;
 use jni::objects::{GlobalRef, JClass, JObject, JValue};
 use jni::sys::jint;
 use jni::JNIEnv;
@@ -185,7 +185,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
 /// silence-based endpoint monitor.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService_startListening(
-    env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
     service: JObject,
 ) {
@@ -205,7 +205,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
 
     // Open the microphone (16 kHz mono, matching the model + voice_session).
     let host = cpal::default_host();
-    let device = match host.default_input_device() {
+    let _device = match host.default_input_device() {
         Some(d) => d,
         None => {
             let mut env2 = jvm.attach_current_thread().unwrap();
@@ -214,27 +214,24 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
             return;
         }
     };
-    let config = cpal::StreamConfig {
-        channels: 1,
-        sample_rate: cpal::SampleRate(16000),
-        buffer_size: cpal::BufferSize::Default,
-    };
-
+    // Optional Bluetooth microphone, held by the capture (see managed_capture.rs).
     let cb_shared = shared.clone();
     let mut analyzer = AudioAnalyzer::new();
-    let stream = device.build_input_stream(
-        &config,
-        move |data: &[f32], _: &_| audio_callback(&cb_shared, data, &mut analyzer),
-        |e| log::error!("RecognitionService stream error: {}", e),
-        None,
+    let stream = crate::managed_capture::ManagedCapture::open(
+        &mut env,
+        &jvm,
+        &service,
+        move |data: &[f32]| audio_callback(&cb_shared, data, &mut analyzer),
+        |e: String| log::error!("RecognitionService stream error: {}", e),
     );
 
     match stream {
         Ok(s) => {
+            let s = SendStream(s);
             if shared.cancelled.load(Ordering::SeqCst) {
                 return;
             }
-            if let Err(e) = s.play() {
+            if let Err(e) = s.0.play() {
                 log::error!("Failed to start microphone: {}", e);
                 let mut env2 = jvm.attach_current_thread().unwrap();
                 call_error(&mut env2, shared.target.as_obj(), ERROR_AUDIO);
@@ -245,7 +242,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
                 drop(s);
                 return;
             }
-            *stream_holder.lock().unwrap() = Some(SendStream(s));
+            *stream_holder.lock().unwrap() = Some(s);
         }
         Err(e) => {
             log::error!("Failed to open microphone: {}", e);
