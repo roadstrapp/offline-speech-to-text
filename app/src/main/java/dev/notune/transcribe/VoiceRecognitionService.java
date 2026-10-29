@@ -4,6 +4,8 @@ import android.content.ContextParams;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.media.AudioFormat;
+import android.net.Uri;
+import android.os.Process;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -54,7 +56,7 @@ public class VoiceRecognitionService extends RecognitionService {
     }
 
     /** Concurrent sessions: one microphone request plus one caller-audio request. */
-    private static final int MAX_SESSIONS = 2;
+    private static final int MAX_SESSIONS = 3;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
@@ -72,6 +74,8 @@ public class VoiceRecognitionService extends RecognitionService {
 
     private final Slot mic = new Slot("microphone");
     private final Slot caller = new Slot("caller_audio");
+    private final Slot file = new Slot("file");
+    private FileRequest fileRequest;
 
     @Override
     public void onCreate() {
@@ -97,6 +101,18 @@ public class VoiceRecognitionService extends RecognitionService {
     @Override
     protected void onStartListening(Intent recognizerIntent, Callback callback) {
         ParcelFileDescriptor callerAudio = callerAudioSource(recognizerIntent);
+        if (hasExtra(recognizerIntent, FileTranscriptionContract.EXTRA_AUDIO_URI)) {
+            if (file.callback != null) {
+                closeQuietly(callerAudio);
+                try { callback.error(SpeechRecognizer.ERROR_RECOGNIZER_BUSY); } catch (RemoteException ignored) {}
+                return;
+            }
+            NativeCallbacks target = claim(file, callback);
+            boolean ambiguous = callerAudio != null;
+            closeQuietly(callerAudio);
+            startListeningFromFile(recognizerIntent, callback, ambiguous, target);
+            return;
+        }
         Callback previous = mic.callback;
         RecognitionSessionPolicy.Action action = RecognitionSessionPolicy.admit(
                 callerAudio != null, caller.callback != null,
@@ -166,9 +182,11 @@ public class VoiceRecognitionService extends RecognitionService {
         ++slot.generation;
         slot.callback = null;
         finishTroubleshooting(slot, reason);
+        if (slot == file) cancelFileRequest();
     }
 
     private static void closeQuietly(ParcelFileDescriptor descriptor) {
+        if (descriptor == null) return;
         try { descriptor.close(); } catch (java.io.IOException ignored) {}
     }
 
@@ -224,6 +242,62 @@ public class VoiceRecognitionService extends RecognitionService {
         }
     }
 
+    /**
+     * Transcribes an existing audio file named by {@link FileTranscriptionContract#EXTRA_AUDIO_URI}.
+     *
+     * <p>The caller grants read access to a {@code content:} Uri before {@code startListening};
+     * nothing here opens a microphone or launches an activity, so a caller running as a
+     * foreground service with the screen locked is served the same way. The session is
+     * attributed to the caller for the same reason as caller-supplied audio: the platform's
+     * RECORD_AUDIO data-delivery note guards a microphone this path never opens.
+     *
+     * <p>Decoding and inference use the bounded file pipeline shared with the share screen,
+     * with no interactive timeout, silence stop or session cap. The final transcript arrives
+     * through {@code onResults}; when {@link FileTranscriptionContract#EXTRA_OUTPUT_URI} is
+     * present it is first written there as UTF-8, and a failed write fails the request.
+     * {@code stopListening} does not end a file request early; {@code cancel} discards it.
+     */
+    private void startListeningFromFile(Intent intent, Callback callback, boolean hasCallerAudio, NativeCallbacks target) {
+        attributeSessionToCaller(callback);
+
+        Uri audio = uriExtra(intent, FileTranscriptionContract.EXTRA_AUDIO_URI);
+        boolean outputRequested = hasExtra(intent, FileTranscriptionContract.EXTRA_OUTPUT_URI);
+        Uri output = outputRequested ? uriExtra(intent, FileTranscriptionContract.EXTRA_OUTPUT_URI) : null;
+        boolean callerIsSelf = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                && callback.getCallingUid() == Process.myUid();
+        if (!FileTranscriptionContract.acceptRequest(
+                FileTranscriptionAccess.scheme(audio), FileTranscriptionAccess.isOwnProvider(this, audio),
+                FileTranscriptionAccess.scheme(output), FileTranscriptionAccess.isOwnProvider(this, output),
+                outputRequested && output == null, hasCallerAudio, callerIsSelf)) {
+            safeError(file, SpeechRecognizer.ERROR_CLIENT);
+            return;
+        }
+        if (!SpeechModelInventory.hasUsableModel(getFilesDir(), BuildConfig.HAS_BUNDLED_MODEL)) {
+            safeError(file, FileTranscriptionContract.recognizerError(FileTranscriptionContract.Failure.NO_MODEL));
+            return;
+        }
+
+        FileRequest request = new FileRequest(target);
+        fileRequest = request;
+        // Provider calls may block on another process: keep them off the main thread.
+        Thread opener = new Thread(() -> request.open(audio, output), "transcribe-file-open");
+        opener.start();
+    }
+
+    private void cancelFileRequest() {
+        FileRequest request = fileRequest;
+        fileRequest = null;
+        if (request != null) request.cancel();
+    }
+
+    private static boolean hasExtra(Intent intent, String name) {
+        try {
+            return intent != null && intent.hasExtra(name);
+        } catch (Throwable t) {
+            // Unparcelable extras from another process make the whole request malformed.
+            return false;
+        }
+    }
     @SuppressWarnings("deprecation")
     private ParcelFileDescriptor callerAudioSource(Intent recognizerIntent) {
         try {
@@ -262,6 +336,7 @@ public class VoiceRecognitionService extends RecognitionService {
     @Override
     protected void onStopListening(Callback callback) {
         if (callback == null) return;
+        if (callback == file.callback) return;
         if (callback == caller.callback) {
             try {
                 stopCallerAudio();
@@ -282,6 +357,11 @@ public class VoiceRecognitionService extends RecognitionService {
     @Override
     protected void onCancel(Callback callback) {
         if (callback == null) return;
+        if (callback == file.callback) {
+            retire(file, "cancel");
+            cancelFileRequest();
+            return;
+        }
         if (callback == caller.callback) {
             Log.i(TAG, "service caller_audio: cancelled by the caller");
             retire(caller, "cancel");
@@ -306,7 +386,7 @@ public class VoiceRecognitionService extends RecognitionService {
     public void onDestroy() {
         // A live request must not wait for a result that can no longer come.
         int gone = RecognitionSessionPolicy.destroyedError(Build.VERSION.SDK_INT);
-        for (Slot slot : new Slot[] { mic, caller }) {
+        for (Slot slot : new Slot[] { mic, caller, file }) {
             Callback cb = slot.callback;
             retire(slot, "destroy");
             if (cb != null) {
@@ -314,6 +394,7 @@ public class VoiceRecognitionService extends RecognitionService {
                 try { cb.error(gone); } catch (RemoteException ignored) {}
             }
         }
+        cancelFileRequest();
         try {
             destroyNative();
         } catch (Throwable t) {

@@ -121,4 +121,12 @@
 <string name="file_no_audio">Аудиофайл не получен</string>
 <string name="file_decode_error">Не удалось декодировать этот аудиофайл</string>
 <string name="file_no_speech">В этом файле речь не распознана</string>
+<string name="file_copy">Копировать</string>
+<string name="file_share">Поделиться</string>
+<string name="file_save">Сохранить</string>
+<string name="file_share_title">Поделиться текстом</string>
+<string name="file_share_failed">Нет приложения, которое может принять текст</string>
+<string name="file_saved">Текст сохранён</string>
+<string name="file_save_failed">Не удалось сохранить текст</string>
+<string name="file_not_audio">Этот файл не похож на аудиофайл</string>
 </resources>

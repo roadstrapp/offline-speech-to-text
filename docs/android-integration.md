@@ -1,6 +1,6 @@
 # Android integration
 
-Offline Speech to Text exposes four Android contracts. Choose the contract before recording; each has a separate owner and lifecycle.
+Offline Speech to Text exposes six Android contracts: four for live speech and two for existing audio files. Choose the contract before recording; each has a separate owner and lifecycle.
 
 ## Choose a surface
 
@@ -10,8 +10,10 @@ Offline Speech to Text exposes four Android contracts. Choose the contract befor
 | `SpeechRecognizer` bound to an eligible `RecognitionService` | Calling app | Normally the provider | `RecognitionListener` callbacks |
 | `SpeechRecognizer` with `RecognizerIntent.EXTRA_AUDIO_SOURCE` | Calling app | Calling app | `RecognitionListener` callbacks |
 | Voice IME | Offline Speech to Text keyboard | Offline Speech to Text | Text committed through Android's input-method contract |
+| `SpeechRecognizer` with `app.offlinespeechtotext.extra.AUDIO_URI` | Calling app (or none) | No microphone; a caller-granted audio file | `onResults`, optionally also a caller-granted text file |
+| `app.offlinespeechtotext.action.TRANSCRIBE_AUDIO` | Provider activity | No microphone; a caller-granted audio file | Activity result in `RecognizerIntent.EXTRA_RESULTS` |
 
-Use the provider activity when compatibility matters more than a custom interface. Use `SpeechRecognizer` only after resolving a service that is eligible on the current device. Use caller-supplied audio for app-owned controls on Android 13+ only after establishing that the exact provider build consumes it. Android enables and selects the Offline Speech to Text IME through user-mediated system UI.
+Use the provider activity when compatibility matters more than a custom interface. To transcribe audio that already exists as a file, use the [file contracts](#existing-audio-files): they run without user interaction and have no duration cap. Use `SpeechRecognizer` only after resolving a service that is eligible on the current device. Use caller-supplied audio for app-owned controls on Android 13+ only after establishing that the exact provider build consumes it. Android enables and selects the Offline Speech to Text IME through user-mediated system UI.
 
 All `SpeechRecognizer` construction and control calls must run on the main thread.
 
@@ -109,6 +111,8 @@ Offline Speech to Text currently reports ready, beginning-of-speech, RMS, end-of
 Offline Speech to Text snapshots the private preferred-word list once per transcription. Capable Whisper backends receive a bounded prompt; every model also restores exact preferred words and phrases, including letter-and-digit names and hyphenated and apostrophe-joined names with identical punctuation, applies conservative close-spelling cleanup to single words, and recognizes a few narrowly defined spoken identifier forms after decoding. For English output, standalone “uh” and “um” fillers are removed after dictionary processing. Output counts as English when the model or language setting says so, or when the transcript itself is clearly English (at least two English-only function words making up a quarter of its words); other output is unchanged. All-capital UH and UM, quoted text, code and paths remain literal. A preferred UH or UM entry also preserves and capitalizes its lowercase matches. Exact correction sources match the raw transcript, so a source containing an intervening filler must include it. The multilingual Parakeet v3 model does not report a detected language in Auto mode, so there cleanup relies on that transcript check; very short utterances may lack the evidence, and selecting English in OSTT's model-language setting removes the doubt. If the user enables advanced exact correction pairs, they run first on the final assembled transcript so an explicit rule wins over a preferred match or close-spelling guess. Every activity, recognition-service, file, subtitle, long-recording, and IME result receives the same final processing. Whisper hints and cleanup derive from one immutable word-list read per complete job. Exact replacements and matched preferred terms stay protected through later cleanup, with protection offsets updated after spelling changes; each pass also checks the whole match against quotes, code, URLs, email addresses, and dotted identifiers. OSTT supplies the complete cleanup pass for integrators. This is not native Parakeet phrase boosting or general phonetic matching, and dictionary contents are never exposed to callers or diagnostic logs.
 
 Long caller-audio sessions remain one ordinary recognition request. OSTT keeps the supplied PCM as one continuous utterance and calls the standard final `onResults` only after the writer closes or the caller stops listening. Caller audio is decoded like a shared file while it arrives: in the model's bounded windows (one minute for Whisper), split at quiet points with overlapping text reconciliation, so a short recording is one model run. An ordinary hesitation is never used as an app-level endpoint. Do not enable `EXTRA_SEGMENTED_SESSION` or concatenate partial callbacks. `cancel()` discards the captured utterance.
+
+A caller-audio session is bounded to 60 seconds of wall-clock time from `startListening`, however fast the PCM arrives. When that bound passes before the writer closes, OSTT stops reading and finalizes only the audio already received, so the transcript can miss the rest of a longer stream. The complete utterance is held in memory (about 3.8 MB per minute) until the writer closes. To transcribe a saved recording, pass it as a file through `EXTRA_AUDIO_URI` instead; that path decodes with bounded memory and has no duration or wall-clock cap.
 
 ### Caller-audio completion and errors
 
@@ -405,6 +409,154 @@ class CallerAudioSpeechSession(
 The platform-neutral [caller-audio lifecycle core](examples/CallerAudioSessionCore.java) isolates that state machine behind fakeable recorder, descriptor, recognizer, and main-queue interfaces. `tests/CallerAudioLifecycleTest.java` executes synchronous start failure, asynchronous read/write failure, Stop, Cancel, Results, Error, Destroy, and queued-callback races; keep it aligned when adapting the Android wrapper.
 
 A blocked provider reader can fill a pipe. The capture side must therefore be nonblocking or use a bounded queue with a drop/fail policy; an unbounded blocking write can leave the microphone open after Stop or Cancel. Do not log PCM, transcript text, target identifiers, message drafts, or content-derived filenames. Content-free state, duration, byte counts, dropped-byte counts, and error codes are sufficient for diagnosis.
+
+## Existing audio files
+
+OSTT can transcribe an audio file another app already holds, with the same model and final transcript processing as every other path. It opens no microphone and does not record. The caller passes a `content:` Uri and grants read access; OSTT never accepts `file:` Uris. Supported inputs are whatever the device's `MediaExtractor` and `MediaCodec` decode: WAV, AAC/M4A, Ogg/Opus, MP3, AMR, FLAC, and the audio track of MP4, 3GP or WebM video. Decoding streams ten-second blocks through overlapping model windows, so memory stays bounded for any duration. No interactive limit applies: no initial-silence timeout, no **Stop after silence**, and no ten-minute cap. A 25-minute recording is one ordinary request.
+
+| Name | Type | Meaning |
+|---|---|---|
+| `app.offlinespeechtotext.extra.AUDIO_URI` | `Uri` | Audio to transcribe, in the `SpeechRecognizer` recognition intent |
+| `app.offlinespeechtotext.action.TRANSCRIBE_AUDIO` | Activity action | Audio to transcribe is the intent data |
+| `app.offlinespeechtotext.extra.OUTPUT_URI` | `Uri`, optional | Also write the UTF-8 transcript to this caller-granted, writable document |
+
+Both contracts refuse Uris served by OSTT's own providers when the caller is another app, and a request that combines `AUDIO_URI` with `EXTRA_AUDIO_SOURCE`. With `OUTPUT_URI`, OSTT opens the destination before decoding, truncates it, and writes the transcript only after recognition succeeds; a failed request can leave it empty. The transcript is never logged, never placed in a notification, and never copied to the clipboard by these contracts.
+
+### Headless recognition
+
+Resolve and pin the eligible OSTT `RecognitionService` component as described [above](#app-ui-with-provider-microphone-capture). Grant read access to that component's package, then start an ordinary recognition request on the main thread. This works without an activity, so a foreground service can run it with the screen locked. Hold a partial wake lock for the duration if the device may otherwise sleep; OSTT does not hold one.
+
+```kotlin
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+
+const val EXTRA_AUDIO_URI = "app.offlinespeechtotext.extra.AUDIO_URI"
+
+/** One file request. Construct, start and cancel on the main thread. */
+class FileTranscriptionRequest(
+    private val context: Context,
+    private val component: ComponentName, // pinned, eligible OSTT recognition service
+    private val audio: Uri,                // content:// Uri, e.g. from your FileProvider
+    private val onFinal: (String) -> Unit,
+    private val onFailure: (Int) -> Unit,
+) : RecognitionListener {
+    private val main = Handler(Looper.getMainLooper())
+    private var recognizer: SpeechRecognizer? = null
+    private var done = false
+    private val timeout = Runnable { fail(SpeechRecognizer.ERROR_SPEECH_TIMEOUT) }
+
+    fun start(timeoutMs: Long) {
+        check(Looper.myLooper() == Looper.getMainLooper())
+        context.grantUriPermission(
+            component.packageName, audio, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        recognizer = SpeechRecognizer.createSpeechRecognizer(context, component).also {
+            it.setRecognitionListener(this)
+            it.startListening(
+                Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                    .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                        RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                    .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+                    .putExtra(EXTRA_AUDIO_URI, audio),
+            )
+        }
+        main.postDelayed(timeout, timeoutMs)
+    }
+
+    fun cancel() {
+        check(Looper.myLooper() == Looper.getMainLooper())
+        if (done) return
+        recognizer?.cancel()
+        release()
+    }
+
+    private fun release() {
+        done = true
+        main.removeCallbacks(timeout)
+        runCatching { recognizer?.destroy() }
+        recognizer = null
+        context.revokeUriPermission(
+            component.packageName, audio, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+
+    private fun fail(error: Int) {
+        if (done) return
+        recognizer?.cancel()
+        release()
+        onFailure(error)
+    }
+
+    override fun onResults(results: Bundle?) {
+        if (done) return
+        val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+        release()
+        if (text.isNullOrBlank()) onFailure(SpeechRecognizer.ERROR_NO_MATCH) else onFinal(text)
+    }
+
+    override fun onError(error: Int) = fail(error)
+    override fun onReadyForSpeech(params: Bundle?) = Unit // model loaded; decoding started
+    override fun onEndOfSpeech() = Unit                   // file read; final window running
+    override fun onBeginningOfSpeech() = Unit
+    override fun onRmsChanged(rmsdB: Float) = Unit
+    override fun onBufferReceived(buffer: ByteArray?) = Unit
+    override fun onPartialResults(partialResults: Bundle?) = Unit
+    override fun onEvent(eventType: Int, params: Bundle?) = Unit
+}
+```
+
+To also receive a text file, add `.putExtra("app.offlinespeechtotext.extra.OUTPUT_URI", output)` and grant `FLAG_GRANT_WRITE_URI_PERMISSION` for `output` the same way. Size the caller's own timeout to the recording: inference speed depends on the phone and model, so allow several minutes beyond the audio's duration for a long file. OSTT itself fails a request with `ERROR_SERVER` only when neither decoding nor inference has advanced for 15 minutes.
+
+Callbacks: `onReadyForSpeech` when the model is loaded and decoding starts, `onEndOfSpeech` when the whole file has been read, then exactly one of `onResults` or `onError`. There are no partial results and no level callbacks. `stopListening()` does not shorten a file request. `cancel()` stops decoding at the next ten-second block and skips every remaining model window; a window already running finishes in the background, and nothing is delivered.
+
+| Outcome | Callback |
+|---|---|
+| Transcript | `onResults` with one hypothesis in `RESULTS_RECOGNITION` |
+| Missing, non-`content:` or unreadable Uri, missing grant, own-provider Uri, `AUDIO_URI` with `EXTRA_AUDIO_SOURCE`, unwritable `OUTPUT_URI` or failed transcript write | `ERROR_CLIENT` |
+| No decodable audio track or decoder failure | `ERROR_AUDIO` |
+| Audio decoded, no recognized text | `ERROR_NO_MATCH` |
+| No speech model installed, or it failed to load | `ERROR_LANGUAGE_UNAVAILABLE` (13) |
+| Inference failure, or no progress for 15 minutes | `ERROR_SERVER` |
+| Another client's request is active | `ERROR_RECOGNIZER_BUSY` (from Android) |
+
+Android checks the caller's own permissions before OSTT sees any request without `EXTRA_AUDIO_SOURCE`: the caller must hold `RECORD_AUDIO`, or the platform answers `ERROR_INSUFFICIENT_PERMISSIONS`. On Android 12 and later OSTT attributes the file session to the caller and the platform notes no microphone access, because none is opened. On Android 11 and earlier the platform still checks `RECORD_AUDIO` access when the session starts, so a background caller there needs a microphone-typed foreground service. Callers that do not hold `RECORD_AUDIO` use the activity contract below.
+
+### Activity result
+
+`TRANSCRIBE_AUDIO` opens OSTT's file screen, which shows progress and returns the transcript. It needs no permissions in the calling app.
+
+```kotlin
+private val transcribe = registerForActivityResult(
+    ActivityResultContracts.StartActivityForResult(),
+) { result ->
+    val text = result.data
+        ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+        ?.firstOrNull()
+    if (result.resultCode == Activity.RESULT_OK && !text.isNullOrBlank()) acceptTranscript(text)
+}
+
+fun transcribeFile(audio: Uri) {
+    transcribe.launch(
+        Intent("app.offlinespeechtotext.action.TRANSCRIBE_AUDIO")
+            .setPackage("app.offlinespeechtotext")
+            .setDataAndType(audio, "audio/*")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+    )
+}
+```
+
+To also write a text file, add `OUTPUT_URI` and carry it in the intent's `ClipData` so the write grant covers it: `clipData = ClipData.newRawUri("", audio).apply { addItem(ClipData.Item(output)) }` with `FLAG_GRANT_READ_URI_PERMISSION or FLAG_GRANT_WRITE_URI_PERMISSION`. Failures return `RecognizerIntent.RESULT_CLIENT_ERROR`, `RESULT_AUDIO_ERROR`, `RESULT_NO_MATCH` or `RESULT_SERVER_ERROR` (also for a missing model) and leave a short message on screen until the user closes it; closing before completion returns `RESULT_CANCELED`. The screen does not copy this transcript to the clipboard.
+
+### Sharing a file to OSTT
+
+Users can also share audio to OSTT, or open it with OSTT. The share target accepts `audio/*`, `application/ogg`, and `video/mp4`, `video/3gpp` or `video/webm` for video and voice notes. It also accepts `application/octet-stream` when the file name has an audio extension such as `.opus` or `.m4a`. Every file must still contain a decodable audio track. That result screen auto-copies the transcript, and offers **Copy**, **Share** (plain text through the Android share sheet) and **Save** (a `.txt` document named after the audio file) as explicit actions.
 
 ## Lifecycle and result safety
 

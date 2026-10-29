@@ -212,6 +212,45 @@ class DocumentationContractTest(unittest.TestCase):
                     return sample[brace + 1:index]
         raise AssertionError(f"unclosed method: {signature}")
 
+    def test_file_contracts_match_source_and_manifest(self):
+        guide = GUIDE.read_text()
+        service = SERVICE.read_text()
+        manifest = MANIFEST.read_text()
+        contract = (ROOT / "app/src/main/java/dev/notune/transcribe/FileTranscriptionContract.java").read_text()
+        job = (ROOT / "app/src/main/java/dev/notune/transcribe/FileTranscription.java").read_text()
+        native = (ROOT / "src/transcribe_file.rs").read_text()
+        for name in ("app.offlinespeechtotext.extra.AUDIO_URI",
+                     "app.offlinespeechtotext.extra.OUTPUT_URI",
+                     "app.offlinespeechtotext.action.TRANSCRIBE_AUDIO"):
+            self.assertIn(f'"{name}"', contract)
+            self.assertIn(name, guide)
+        self.assertIn('android:name="app.offlinespeechtotext.action.TRANSCRIBE_AUDIO"', manifest)
+        self.assertIn("grantUriPermission", guide)
+        self.assertIn("revokeUriPermission", guide)
+        for code in ("ERROR_CLIENT", "ERROR_AUDIO", "ERROR_NO_MATCH", "ERROR_LANGUAGE_UNAVAILABLE",
+                     "ERROR_SERVER", "RESULT_AUDIO_ERROR", "RESULT_NO_MATCH"):
+            self.assertIn(code, guide)
+        # The file session is attributed to the caller before anything else can fail.
+        body = self._method_body(
+            service, "startListeningFromFile(Intent intent, Callback callback, boolean hasCallerAudio)")
+        self.assertLess(body.index("attributeSessionToCaller(callback)"), body.index("acceptRequest("))
+        # Provider calls stay off the recognition service's main thread.
+        self.assertIn('new Thread(() -> request.open(audio, output)', body)
+        # No interactive limit may end a file job.
+        for interactive in ("MAX_INTERACTIVE_SESSION_MS", "MAX_SESSION_MS", "NO_SPEECH_TIMEOUT_MS",
+                            "AutoStopDelay", "interactive_endpointing"):
+            self.assertNotIn(interactive, job + native)
+        self.assertIn("crate::file_audio::Buffer", native)
+        # Generic binary shares are claimed by SEND only, never by Open with.
+        view = manifest[manifest.index("android.intent.action.VIEW"):]
+        view = view[:view.index("</intent-filter>")]
+        self.assertNotIn("application/octet-stream", view)
+        self.assertIn('android:mimeType="application/octet-stream"', manifest)
+        # Result screen must not be singleTask, or results would not reach the caller.
+        result_activity = manifest[manifest.index('android:name=".TranscribeAudioActivity"'):]
+        result_activity = result_activity[:result_activity.index("</activity>")]
+        self.assertNotIn("launchMode", result_activity)
+
     def test_manifest_supports_documented_entry_points_and_privacy_claim(self):
         readme = README.read_text()
         manifest = MANIFEST.read_text()

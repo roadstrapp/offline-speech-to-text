@@ -56,7 +56,9 @@ javac -d "$OUT" \
   "$ROOT/tests/PersonalCorrectionsStoreTest.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/SpokenLanguages.java" \
   "$ROOT/tests/SpokenLanguagesTest.java" \
-  "$ROOT/tests/PendingTranscriptRecordTest.java"
+  "$ROOT/tests/PendingTranscriptRecordTest.java" \
+  "$ROOT/app/src/main/java/dev/notune/transcribe/FileTranscriptionContract.java" \
+  "$ROOT/tests/FileTranscriptionContractTest.java"
 java -ea -cp "$OUT" dev.notune.transcribe.HomeNavigationTest
 java -ea -cp "$OUT" dev.notune.transcribe.ModelPresentationTest
 java -ea -cp "$OUT" dev.notune.transcribe.BehaviorTest
@@ -69,6 +71,7 @@ java -ea -cp "$OUT" dev.notune.transcribe.CustomTermsStoreTest
 java -ea -cp "$OUT" dev.notune.transcribe.PersonalCorrectionsStoreTest
 java -ea -cp "$OUT" dev.notune.transcribe.PendingTranscriptRecordTest
 java -ea -cp "$OUT" dev.notune.transcribe.SpokenLanguagesTest
+java -ea -cp "$OUT" dev.notune.transcribe.FileTranscriptionContractTest
 
 javac -d "$OUT" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/ForegroundRecordingCoordinator.java" \

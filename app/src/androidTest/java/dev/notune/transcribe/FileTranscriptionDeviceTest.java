@@ -11,7 +11,7 @@ import java.io.File;
 import java.io.InputStream;
 import java.nio.file.Files;
 
-/** Real shared-file entry, cancellation, stale-owner cleanup and native decoding. */
+/** Real shared-file entry, cancellation, independent job handles and native decoding. */
 final class FileTranscriptionDeviceTest {
     static void run(Instrumentation test) throws Exception {
         File directory = new File(test.getTargetContext().getCacheDir(), "diagnostics");
@@ -33,12 +33,12 @@ final class FileTranscriptionDeviceTest {
             test.runOnMainSync(cancelled::finish);
             test.waitForIdleSync();
             second = test.startActivitySync(intent);
-            // Deliberately deliver an old owner's cleanup after the new owner
-            // initialized, matching delayed lifecycle cleanup without destroying it.
-            java.lang.reflect.Method cleanup = TranscribeFileActivity.class
-                    .getDeclaredMethod("cleanupNative", TranscribeFileActivity.class);
-            cleanup.setAccessible(true);
-            cleanup.invoke(first, first);
+            // Each screen owns its own native job handle: the first screen's delayed
+            // cancellation must not reach the new one. Cancel it again deliberately.
+            java.lang.reflect.Field jobField = TranscribeFileActivity.class.getDeclaredField("job");
+            jobField.setAccessible(true);
+            Object stale = jobField.get(first);
+            if (stale != null) ((FileTranscription) stale).cancel();
             Activity active = second;
             long deadline = SystemClock.elapsedRealtime() + 60000;
             boolean[] complete = new boolean[1];

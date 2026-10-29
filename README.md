@@ -8,7 +8,7 @@ Offline Speech to Text (OSTT) turns speech into text on your Android phone. Reco
 - Dictate into apps through Android voice input or the optional voice keyboard. The popup supports left-handed and right-handed placement. Ordinary dictation keeps a complete model context through hesitations; long recordings use overlapping windows with boundary reconciliation.
 - Recover a completed keyboard transcript when the editor closes. OSTT inserts into the current safe composer after temporary UI recreation. Otherwise it preserves an exact pending transcript for later recovery. Password fields stay blocked.
 - Use pause/resume while recording, then choose whether to stay in the voice keyboard after inserting. Hold and drag Backspace to preview the selected range before deleting it. The globe returns to another keyboard.
-- Caption device audio with Live Subtitles, or share an audio file for transcription. Audio-file decoding keeps a bounded sliding window; it retains overlap while discarding consumed audio. Dictionary cleanup runs on the complete result.
+- Caption device audio with Live Subtitles, or share an audio file for transcription, including messenger voice notes. Audio-file decoding keeps a bounded sliding window; it retains overlap while discarding consumed audio. Dictionary cleanup runs on the complete result. Copy, share or save the transcript as a text file.
 - Choose a verified speech model for your phone. Parakeet TDT 0.6B v3 Q4 supports 25 European languages. The catalogue also includes Whisper and other Parakeet variants. Recommendations account for available memory and storage; German-primary phones receive a German-tuned option.
 - Pick **Languages I speak** to restrict recognition to your own languages. With two or more, each recording is matched to one of them by a small on-device language detector (a one-time 26 MB download), limiting the detector’s candidates; recognition can still make mistakes. It needs a model that follows a language choice, such as Canary 1B v2 or Whisper; Parakeet v3 picks its own language and ignores the setting.
 - Add preferred words or phrases in one private dictionary. Exact corrections have separate **What was heard** and **Replace with** fields. Matching protects quoted text and code. URLs and email addresses stay literal. Whisper also receives the preferred terms that fit its native prompt.
@@ -39,7 +39,7 @@ Live Subtitles require Android 10 or later and the system screen-audio capture p
 
 ## Android integration
 
-Apps can use OSTT through standard Android APIs. `ACTION_RECOGNIZE_SPEECH` opens the provider-owned popup. `SpeechRecognizer` uses the exported recognition service. A custom app UI can pass caller-captured audio using `EXTRA_AUDIO_SOURCE`; see the [integration guide](docs/android-integration.md) for permissions and executable lifecycle examples.
+Apps can use OSTT through standard Android APIs. `ACTION_RECOGNIZE_SPEECH` opens the provider-owned popup. `SpeechRecognizer` uses the exported recognition service. A custom app UI can pass caller-captured audio using `EXTRA_AUDIO_SOURCE`. Apps can also transcribe an existing audio file on the device without user interaction, through `SpeechRecognizer` or an activity result. See the [integration guide](docs/android-integration.md) for permissions and executable lifecycle examples.
 
 ## Privacy
 

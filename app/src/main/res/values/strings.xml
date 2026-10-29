@@ -388,4 +388,12 @@
 <string name="file_no_audio">No audio file received</string>
 <string name="file_decode_error">Could not decode this audio file</string>
 <string name="file_no_speech">No speech recognized in this file</string>
+<string name="file_copy">Copy</string>
+<string name="file_share">Share</string>
+<string name="file_save">Save</string>
+<string name="file_share_title">Share transcript</string>
+<string name="file_share_failed">No app can receive the transcript</string>
+<string name="file_saved">Transcript saved</string>
+<string name="file_save_failed">Could not save the transcript</string>
+<string name="file_not_audio">This file does not look like audio</string>
 </resources>

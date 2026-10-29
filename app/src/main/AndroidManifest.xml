@@ -90,11 +90,20 @@
             android:launchMode="singleTask"
             android:theme="@style/AppTheme">
 
-            <!-- Handle "Share" from other apps -->
+            <!-- Handle "Share" from other apps. Messengers share voice notes as audio/*
+                 (AAC, M4A, Ogg/Opus, MP3), as video/mp4 or 3GPP for video and some voice
+                 notes, as application/ogg, or as generic binary data. A generic share is
+                 accepted only with an audio file name, and every file must still contain a
+                 decodable audio track. -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="audio/*" />
+                <data android:mimeType="application/ogg" />
+                <data android:mimeType="video/mp4" />
+                <data android:mimeType="video/3gpp" />
+                <data android:mimeType="video/webm" />
+                <data android:mimeType="application/octet-stream" />
             </intent-filter>
 
             <!-- Handle "Open with" for audio files -->
@@ -103,6 +112,28 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <!-- MIME-only VIEW is intentional for Android's Open with flow. -->
                 <data android:mimeType="audio/*" />
+                <data android:mimeType="application/ogg" />
+            </intent-filter>
+        </activity>
+
+        <!-- Public activity-result contract: transcribe the granted content Uri in the
+             intent data and return RecognizerIntent.EXTRA_RESULTS. Standard launch mode so
+             the result always reaches the requesting activity. -->
+        <activity
+            android:name=".TranscribeAudioActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:theme="@style/AppTheme">
+            <intent-filter tools:ignore="AppLinkUrlError">
+                <action android:name="app.offlinespeechtotext.action.TRANSCRIBE_AUDIO" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" android:mimeType="*/*" />
+            </intent-filter>
+            <!-- A provider may report no type for its Uri. -->
+            <intent-filter>
+                <action android:name="app.offlinespeechtotext.action.TRANSCRIBE_AUDIO" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
             </intent-filter>
         </activity>
 

@@ -121,4 +121,12 @@
 <string name="file_no_audio">No se recibió ningún archivo de audio</string>
 <string name="file_decode_error">No se pudo decodificar este archivo de audio</string>
 <string name="file_no_speech">No se reconoció voz en este archivo</string>
+<string name="file_copy">Copiar</string>
+<string name="file_share">Compartir</string>
+<string name="file_save">Guardar</string>
+<string name="file_share_title">Compartir transcripción</string>
+<string name="file_share_failed">Ninguna app puede recibir la transcripción</string>
+<string name="file_saved">Transcripción guardada</string>
+<string name="file_save_failed">No se pudo guardar la transcripción</string>
+<string name="file_not_audio">Este archivo no parece ser de audio</string>
 </resources>
