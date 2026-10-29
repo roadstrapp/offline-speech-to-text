@@ -1,0 +1,1 @@
+Report a busy file-transcription queue correctly and allow cancelled jobs to release their slots for later requests. Skip file jobs cancelled before startup. Harden file-model worker creation and ensure extractor cleanup even when an audio codec throws during teardown.

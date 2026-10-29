@@ -401,6 +401,7 @@ public class VoiceRecognitionService extends RecognitionService {
             if (cancelled) return;
             int outcome = failure == FileTranscriptionContract.Failure.NO_SPEECH ? 2 : 3;
             if (failure != FileTranscriptionContract.Failure.NO_MODEL
+                    && failure != FileTranscriptionContract.Failure.BUSY
                     && failure != FileTranscriptionContract.Failure.ENGINE) {
                 target.onRecognitionOutcome(outcome, 0);
             }

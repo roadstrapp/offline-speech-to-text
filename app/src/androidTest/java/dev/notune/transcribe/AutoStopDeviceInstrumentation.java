@@ -32,6 +32,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
     private boolean qualifySetup;
     private boolean callerAudioOnly;
     private boolean fileApi;
+    private boolean fileAdmission;
     private int fileApiMinutes;
     private int callerAudioMinutes;
     private int callerAudioPace;
@@ -56,6 +57,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         qualificationBilingual = arguments != null && "true".equals(arguments.getString("qualify_bilingual"));
         qualificationModel = arguments == null ? null : arguments.getString("qualify_model");
         fileApi = arguments != null && "true".equals(arguments.getString("file_api"));
+        fileAdmission = arguments != null && "true".equals(arguments.getString("file_admission"));
         fileApiMinutes = 25;
         if (arguments != null && arguments.getString("file_api_minutes") != null) {
             fileApiMinutes = Integer.parseInt(arguments.getString("file_api_minutes"));
@@ -73,6 +75,12 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
 
     @Override
     public void onStart() {
+        if (fileAdmission) {
+            Bundle result = new Bundle(); int code = Activity.RESULT_OK;
+            try { FileAdmissionDeviceTest.run(this); result.putBoolean("file_admission", true); }
+            catch (Throwable error) { code = Activity.RESULT_CANCELED; result.putString("failure", error.toString()); }
+            finish(code, result); return;
+        }
         if (callerAudioOnly) {
             Bundle result = new Bundle(); int code = Activity.RESULT_OK;
             try { CallerAudioProviderDeviceTest.runWithoutMicrophone(this); result.putBoolean("caller_audio_only", true); }

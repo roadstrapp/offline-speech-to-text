@@ -294,6 +294,7 @@ public class TranscribeFileActivity extends AppCompatActivity {
             switch (failure) {
                 case NO_SPEECH: message = getString(R.string.file_no_speech); break;
                 case NO_MODEL: message = getString(R.string.no_model_short); break;
+                case BUSY: message = getString(R.string.file_busy); break;
                 case ENGINE: message = "Error: file transcription failed"; break;
                 default: message = getString(R.string.file_decode_error); break;
             }

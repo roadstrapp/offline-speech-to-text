@@ -161,6 +161,7 @@
     <string name="models_delete_confirm">Delete %1$s from the app\'s storage?</string>
     <string name="models_select_failed">Could not change the active model</string>
     <string name="models_busy">Wait for the current model operation to finish</string>
+    <string name="file_busy">File transcription is busy. Try again when a current job finishes.</string>
     <string name="models_language_section">Language</string>
     <string name="models_language_desc">Use “Automatic” unless language or script is wrong; unsupported choices are ignored.</string>
     <string name="models_language_auto">Automatic</string>

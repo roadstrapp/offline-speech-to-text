@@ -27,6 +27,7 @@ final class FileTranscriptionContract {
     static final int ERROR_SERVER = 4;
     static final int ERROR_CLIENT = 5;
     static final int ERROR_NO_MATCH = 7;
+    static final int ERROR_RECOGNIZER_BUSY = 8;
     /** No usable speech model; the platform's code for a missing on-device language pack. */
     static final int ERROR_LANGUAGE_UNAVAILABLE = 13;
 
@@ -46,6 +47,8 @@ final class FileTranscriptionContract {
         NO_SPEECH,
         /** No speech model is installed or it failed to load. */
         NO_MODEL,
+        /** All bounded file-job slots are occupied; a later request may proceed. */
+        BUSY,
         /** Inference failed, or the job made no progress within its bound. */
         ENGINE,
     }
@@ -56,6 +59,7 @@ final class FileTranscriptionContract {
             case UNDECODABLE: return ERROR_AUDIO;
             case NO_SPEECH: return ERROR_NO_MATCH;
             case NO_MODEL: return ERROR_LANGUAGE_UNAVAILABLE;
+            case BUSY: return ERROR_RECOGNIZER_BUSY;
             default: return ERROR_SERVER;
         }
     }

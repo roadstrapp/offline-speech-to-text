@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class FileTranscription extends ContextWrapper {
     private static final String TAG = "OfflineVoiceInput";
     private static final long WATCHDOG_INTERVAL_MS = 5_000L;
+    private static final long CREATE_BUSY = -1;
 
     static {
         try {
@@ -75,6 +76,7 @@ final class FileTranscription extends ContextWrapper {
     /** Starts model loading; decoding follows on its own thread. Call once. */
     void start() {
         if (!started.compareAndSet(false, true)) return;
+        if (cancelled || terminal.get()) return;
         startedAt = SystemClock.elapsedRealtime();
         lastProgressAt = startedAt;
         long created;
@@ -87,15 +89,16 @@ final class FileTranscription extends ContextWrapper {
         boolean discard;
         synchronized (this) {
             discard = cancelled || terminal.get();
-            if (!discard) handle = created;
+            if (!discard && created > 0) handle = created;
             nativeCreated = true;
         }
         if (discard) {
-            if (created != 0) nativeRelease(created);
+            if (created > 0) nativeRelease(created);
             return;
         }
-        if (created == 0) {
-            fail(FileTranscriptionContract.Failure.ENGINE);
+        if (created <= 0) {
+            fail(created == CREATE_BUSY ? FileTranscriptionContract.Failure.BUSY
+                    : FileTranscriptionContract.Failure.ENGINE);
             return;
         }
         Thread watchdog = new Thread(this::watch, "transcribe-file-watchdog");

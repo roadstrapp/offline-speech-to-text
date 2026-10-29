@@ -526,7 +526,7 @@ Callbacks: `onReadyForSpeech` when the model is loaded and decoding starts, `onE
 | Audio decoded, no recognized text | `ERROR_NO_MATCH` |
 | No speech model installed, or it failed to load | `ERROR_LANGUAGE_UNAVAILABLE` (13) |
 | Inference failure, or no progress for 15 minutes | `ERROR_SERVER` |
-| Another client's request is active | `ERROR_RECOGNIZER_BUSY` (from Android) |
+| Another client's request is active, or both file-job slots are occupied | `ERROR_RECOGNIZER_BUSY` (8) |
 
 Android checks the caller's own permissions before OSTT sees any request without `EXTRA_AUDIO_SOURCE`: the caller must hold `RECORD_AUDIO`, or the platform answers `ERROR_INSUFFICIENT_PERMISSIONS`. On Android 12 and later OSTT attributes the file session to the caller and the platform notes no microphone access, because none is opened. On Android 11 and earlier the platform still checks `RECORD_AUDIO` access when the session starts, so a background caller there needs a microphone-typed foreground service. Callers that do not hold `RECORD_AUDIO` use the activity contract below.
 
@@ -554,7 +554,7 @@ fun transcribeFile(audio: Uri) {
 }
 ```
 
-To also write a text file, add `OUTPUT_URI` and carry it in the intent's `ClipData` so the write grant covers it: `clipData = ClipData.newRawUri("", audio).apply { addItem(ClipData.Item(output)) }` with `FLAG_GRANT_READ_URI_PERMISSION or FLAG_GRANT_WRITE_URI_PERMISSION`. Failures return `RecognizerIntent.RESULT_CLIENT_ERROR`, `RESULT_AUDIO_ERROR`, `RESULT_NO_MATCH` or `RESULT_SERVER_ERROR` (also for a missing model) and leave a short message on screen until the user closes it; closing before completion returns `RESULT_CANCELED`. The screen does not copy this transcript to the clipboard.
+To also write a text file, add `OUTPUT_URI` and carry it in the intent's `ClipData` so the write grant covers it: `clipData = ClipData.newRawUri("", audio).apply { addItem(ClipData.Item(output)) }` with `FLAG_GRANT_READ_URI_PERMISSION or FLAG_GRANT_WRITE_URI_PERMISSION`. Failures return `RecognizerIntent.RESULT_CLIENT_ERROR`, `RESULT_AUDIO_ERROR`, `RESULT_NO_MATCH` or `RESULT_SERVER_ERROR` (also for a missing model or a full file-job queue) and leave a short message on screen until the user closes it; closing before completion returns `RESULT_CANCELED`. The screen does not copy this transcript to the clipboard.
 
 ### Sharing a file to OSTT
 

@@ -128,11 +128,15 @@ final class AudioFileDecoder {
             out.flush();
             return out.produced;
         } finally {
-            if (codec != null) {
-                try { codec.stop(); } catch (RuntimeException ignored) { }
-                codec.release();
+            try {
+                if (codec != null) {
+                    try { codec.stop(); } catch (RuntimeException ignored) { }
+                    codec.release();
+                }
+            } finally {
+                // Vendor codecs may throw during release as well as stop.
+                extractor.release();
             }
-            extractor.release();
         }
     }
 

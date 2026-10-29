@@ -16,6 +16,8 @@ use std::sync::{Arc, Mutex};
 
 /// Largest block `AudioFileDecoder` hands over (10 s at 16 kHz).
 const MAX_BLOCK_SAMPLES: jint = 160_000;
+// Negative creation results are failures, never owned handles.
+const CREATE_BUSY: jlong = -1;
 
 struct FileSession {
     buffer: crate::file_audio::Buffer,
@@ -69,7 +71,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_FileTranscription_nativ
         finished: false,
     }));
     let mut states = STATES.lock().unwrap_or_else(|p| p.into_inner());
-    if states.len() >= 2 { return 0; }
+    if states.len() >= 2 { return CREATE_BUSY; }
     states.insert(
         handle,
         State {
@@ -80,11 +82,16 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_FileTranscription_nativ
         },
     );
     drop(states);
-    std::thread::spawn(move || {
+    let worker = std::thread::Builder::new().name("file-model-load".into()).spawn(move || {
         if !cancelled.load(Ordering::SeqCst) {
             let _ = engine::ensure_loaded_from_thread(&Arc::new(vm), &target);
         }
     });
+    if worker.is_err() {
+        // Thread exhaustion must not panic across JNI or consume a file slot.
+        STATES.lock().unwrap_or_else(|p| p.into_inner()).remove(&handle);
+        return 0;
+    }
     handle
 }
 
@@ -105,7 +112,7 @@ type Handles = (Arc<Mutex<FileSession>>, Arc<AtomicBool>, GlobalRef, bool);
 fn handles(handle: jlong) -> Option<Handles> {
     STATES
         .lock()
-        .unwrap()
+        .unwrap_or_else(|p| p.into_inner())
         .get(&handle)
         .map(|s| (s.session.clone(), s.cancelled.clone(), s.target.clone(), s.partials))
 }

@@ -19,6 +19,7 @@ public final class FileTranscriptionContractTest {
         check(FileTranscriptionContract.recognizerError(Failure.NO_SPEECH) == 7, "no-match code");
         check(FileTranscriptionContract.recognizerError(Failure.NO_MODEL) == 13, "model code");
         check(FileTranscriptionContract.recognizerError(Failure.ENGINE) == 4, "server code");
+        check(FileTranscriptionContract.recognizerError(Failure.BUSY) == 8, "busy code");
         // RecognizerIntent activity results; none of them is RESULT_OK (-1) or CANCELED (0).
         check(FileTranscriptionContract.activityResult(Failure.CLIENT) == 2, "client result");
         check(FileTranscriptionContract.activityResult(Failure.UNDECODABLE) == 5, "audio result");
