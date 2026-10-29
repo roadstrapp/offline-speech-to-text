@@ -64,10 +64,16 @@ public final class ImeDictationService extends Service {
             return START_NOT_STICKY;
         }
         if (wakeLock == null) {
-            wakeLock = getSystemService(PowerManager.class)
-                    .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ostt:ime-dictation");
-            wakeLock.setReferenceCounted(false);
-            wakeLock.acquire(WAKE_LOCK_MS);
+            // a missing wake lock costs at most some audio with the screen off; never the dictation
+            try {
+                PowerManager.WakeLock lock = getSystemService(PowerManager.class)
+                        .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ostt:ime-dictation");
+                lock.setReferenceCounted(false);
+                lock.acquire(WAKE_LOCK_MS);
+                wakeLock = lock;
+            } catch (RuntimeException e) {
+                Log.w(TAG, "no wake lock for dictation", e);
+            }
         }
         Log.i(TAG, "keep-alive started");
         return START_NOT_STICKY;
