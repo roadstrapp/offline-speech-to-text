@@ -53,10 +53,11 @@ final class BluetoothAudioRecord {
     /** Null when the recorder cannot be created on this device. */
     @SuppressLint("MissingPermission")
     static BluetoothAudioRecord open(AudioManager manager, int inputDeviceId, long handle) {
+        AudioRecord record = null;
         try {
             int min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT);
-            AudioRecord record = new AudioRecord.Builder()
+            record = new AudioRecord.Builder()
                     .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
                     .setAudioFormat(new AudioFormat.Builder()
                             .setSampleRate(RATE)
@@ -79,6 +80,7 @@ final class BluetoothAudioRecord {
             if (input != null) record.setPreferredDevice(input);
             return new BluetoothAudioRecord(record, handle, input == null ? 0 : input.getId());
         } catch (RuntimeException e) {
+            if (record != null) { try { record.release(); } catch (RuntimeException ignored) { } }
             Log.w(BluetoothMicRoute.TAG, "AudioRecord: could not be created", e);
             return null;
         }
@@ -87,6 +89,8 @@ final class BluetoothAudioRecord {
     /** Starts recording and the reader thread; false if Android refused. */
     synchronized boolean start() {
         if (running) return true;
+        if (thread != null && thread.isAlive()) return false;
+        if (primer != null && primer.isAlive()) return false;
         try {
             record.startRecording();
         } catch (RuntimeException e) {
@@ -106,6 +110,7 @@ final class BluetoothAudioRecord {
     }
 
     private Thread primer;
+    private volatile AudioTrack primerTrack;
 
     /** Plays {@link #PRIME_MS} of silence on the communication route, unless stopped first. */
     private void prime() {
@@ -126,6 +131,8 @@ final class BluetoothAudioRecord {
                     .setTransferMode(AudioTrack.MODE_STREAM)
                     .setBufferSizeInBytes(Math.max(min, RATE / 5))
                     .build();
+            primerTrack = track;
+            if (!running) return;
             track.play();
             short[] silence = new short[RATE / 50];
             long until = System.currentTimeMillis() + PRIME_MS;
@@ -137,6 +144,7 @@ final class BluetoothAudioRecord {
         } catch (RuntimeException e) {
             Log.w(BluetoothMicRoute.TAG, "primer: unavailable", e);
         } finally {
+            if (primerTrack == track) primerTrack = null;
             if (track != null) {
                 try {
                     track.stop();
@@ -148,11 +156,15 @@ final class BluetoothAudioRecord {
 
     synchronized void stop() {
         running = false;
+        AudioTrack primeOutput = primerTrack;
+        if (primeOutput != null) {
+            try { primeOutput.stop(); } catch (RuntimeException ignored) { }
+        }
         try {
             record.stop();
         } catch (RuntimeException ignored) { }
         Thread reader = thread;
-        thread = null;
+
         if (reader != null && reader != Thread.currentThread()) {
             try {
                 reader.join(2_000);
@@ -160,9 +172,15 @@ final class BluetoothAudioRecord {
                 Thread.currentThread().interrupt();
             }
         }
+        if (reader == null || !reader.isAlive()) thread = null;
+        Thread prime = primer;
+        if (prime != null && prime != Thread.currentThread()) {
+            try { prime.join(1000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        }
+        if (prime == null || !prime.isAlive()) primer = null;
     }
 
-    /** Stops and frees the recorder; afterwards native code frees {@code handle}. */
+    /** Stops and frees the recorder; native callback admission is retired separately. */
     void release() {
         stop();
         try {
@@ -172,8 +190,14 @@ final class BluetoothAudioRecord {
 
     /** The routed input; right after start Android may not report it yet. */
     int routedDeviceId() {
-        AudioDeviceInfo routed = record.getRoutedDevice();
-        return routed != null ? routed.getId() : preferredDeviceId;
+        long deadline = android.os.SystemClock.elapsedRealtime() + 500L;
+        do {
+            AudioDeviceInfo routed = record.getRoutedDevice();
+            if (routed != null) return routed.getId();
+            if (!running) return 0;
+            android.os.SystemClock.sleep(10L);
+        } while (android.os.SystemClock.elapsedRealtime() < deadline);
+        return 0; // Requested input is not evidence of actual routing.
     }
 
     int sessionId() {
@@ -191,6 +215,7 @@ final class BluetoothAudioRecord {
                 for (int i = 0; i < read; i++) samples[i] = pcm[i] / 32768f;
                 nativeFeed(handle, samples, read);
             } else if (read < 0) {
+                running = false;
                 nativeError(handle, read);
                 return;
             }

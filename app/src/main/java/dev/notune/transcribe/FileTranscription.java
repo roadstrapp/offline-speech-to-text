@@ -62,6 +62,8 @@ final class FileTranscription extends ContextWrapper {
     private volatile long decodedSamples;
     private long startedAt;
     private long handle;
+    private boolean nativeCreated;
+    private boolean readyPending;
 
     FileTranscription(Context base, Uri uri, boolean partials, Listener listener) {
         super(base.getApplicationContext() != null ? base.getApplicationContext() : base);
@@ -82,7 +84,16 @@ final class FileTranscription extends ContextWrapper {
             Log.e(TAG, "file job creation failed");
             created = 0;
         }
-        synchronized (this) { handle = created; }
+        boolean discard;
+        synchronized (this) {
+            discard = cancelled || terminal.get();
+            if (!discard) handle = created;
+            nativeCreated = true;
+        }
+        if (discard) {
+            if (created != 0) nativeRelease(created);
+            return;
+        }
         if (created == 0) {
             fail(FileTranscriptionContract.Failure.ENGINE);
             return;
@@ -90,6 +101,7 @@ final class FileTranscription extends ContextWrapper {
         Thread watchdog = new Thread(this::watch, "transcribe-file-watchdog");
         watchdog.setDaemon(true);
         watchdog.start();
+        beginDecodeWhenReady();
     }
 
     /**
@@ -145,11 +157,8 @@ final class FileTranscription extends ContextWrapper {
         lastProgressAt = SystemClock.elapsedRealtime();
         if (status != null && status.startsWith("Ready")) {
             // A later "Ready" (e.g. after a settings reload) must not start a second decode.
-            if (decodeStarted.compareAndSet(false, true)) {
-                listener.onReady();
-                Thread decoder = new Thread(this::decode, "transcribe-file");
-                decoder.start();
-            }
+            synchronized (this) { readyPending = true; }
+            beginDecodeWhenReady();
         } else if (NativeStatus.isError(status)) {
             fail(decodeStarted.get()
                     ? FileTranscriptionContract.Failure.ENGINE
@@ -157,6 +166,17 @@ final class FileTranscription extends ContextWrapper {
         } else if (!decodeStarted.get()) {
             listener.onStatus(status);
         }
+    }
+
+    /** Native loading may finish before nativeCreate returns its owned handle. */
+    private void beginDecodeWhenReady() {
+        synchronized (this) {
+            if (!nativeCreated || !readyPending || handle == 0 || cancelled || terminal.get()
+                    || !decodeStarted.compareAndSet(false, true)) return;
+        }
+        if (cancelled || terminal.get()) return;
+        listener.onReady();
+        new Thread(this::decode, "transcribe-file").start();
     }
 
     public void onPartialText(String text) {

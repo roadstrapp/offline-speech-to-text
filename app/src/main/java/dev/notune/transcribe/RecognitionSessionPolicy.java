@@ -7,7 +7,8 @@ package dev.notune.transcribe;
  * opens no microphone (caller-supplied audio, or a file). They never affect
  * each other. Every request that does not end with a result ends with exactly
  * one error, including a request that is refused or replaced: a newer
- * microphone request replaces the previous one, and the replaced caller hears
+ * microphone request admitted by Android replaces the previous one (the platform
+ * can refuse admission when both slots are occupied), and the replaced caller hears
  * {@link #ERROR_RECOGNIZER_BUSY} first, the same code a refused request gets.
  * Integers mirror {@code android.speech.SpeechRecognizer} so this runs in host
  * tests.

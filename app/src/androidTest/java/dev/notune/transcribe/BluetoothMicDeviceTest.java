@@ -38,6 +38,8 @@ final class BluetoothMicDeviceTest {
         AudioManager manager = context.getSystemService(AudioManager.class);
         File marker = new File(context.getFilesDir(), BluetoothMicRoute.MARKER);
         boolean wasEnabled = marker.exists();
+        android.app.Activity foreground = fixture.startActivitySync(new Intent(context, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         SpeechRecognizer[] recognizer = new SpeechRecognizer[1];
         fixture.runOnMainSync(() -> recognizer[0] = SpeechRecognizer.createSpeechRecognizer(
                 context, new ComponentName(context, VoiceRecognitionService.class)));
@@ -63,7 +65,7 @@ final class BluetoothMicDeviceTest {
             check(!BluetoothMicRoute.isRouted(), "route held while disabled");
             result.putString("communication_after_disabled", typeOf(manager.getCommunicationDevice()));
         } finally {
-            fixture.runOnMainSync(() -> recognizer[0].destroy());
+            fixture.runOnMainSync(() -> { recognizer[0].destroy(); foreground.finish(); });
             fixture.waitForIdleSync();
             if (wasEnabled) marker.createNewFile();
             else marker.delete();
@@ -76,13 +78,14 @@ final class BluetoothMicDeviceTest {
             throws Exception {
         CountDownLatch ready = new CountDownLatch(1);
         int[] error = {0};
+        boolean[] deliveredReady = {false};
         long[] startMs = {0L};
         long[] readyMs = {0L};
         fixture.runOnMainSync(() -> {
             recognizer.setRecognitionListener(new RecognitionListener() {
-                @Override public void onReadyForSpeech(Bundle params) { }
+                @Override public void onReadyForSpeech(Bundle params) { deliveredReady[0] = true; ready.countDown(); }
                 @Override public void onBeginningOfSpeech() { }
-                @Override public void onRmsChanged(float rmsdB) { ready.countDown(); }
+                @Override public void onRmsChanged(float rmsdB) { }
                 @Override public void onBufferReceived(byte[] buffer) { }
                 @Override public void onEndOfSpeech() { }
                 @Override public void onError(int code) { error[0] = code; ready.countDown(); }
@@ -95,9 +98,9 @@ final class BluetoothMicDeviceTest {
                     .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                             RecognizerIntent.LANGUAGE_MODEL_FREE_FORM));
         });
-        // The level callback needs real (non-silenced) audio; a locked phone
-        // may withhold it, so routing evidence is sampled either way.
-        ready.await(CAPTURE_SAMPLE_MS, TimeUnit.MILLISECONDS);
+        check(ready.await(15, TimeUnit.SECONDS), label + " microphone startup timed out");
+        check(error[0] == 0 && deliveredReady[0], label + " microphone startup failed: " + error[0]);
+        SystemClock.sleep(500);
         readyMs[0] = SystemClock.elapsedRealtime() - startMs[0];
         String inputType = "none";
         List<AudioRecordingConfiguration> active = manager.getActiveRecordingConfigurations();
@@ -105,6 +108,9 @@ final class BluetoothMicDeviceTest {
             AudioDeviceInfo device = configuration.getAudioDevice();
             if (device != null) inputType = typeOf(device);
         }
+        check(!"none".equals(inputType), label + " has no active recording input");
+        check(error[0] == 0, label + " microphone capture failed: " + error[0]);
+        if ("disabled".equals(label)) check(!BluetoothMicRoute.isRouted(), "disabled setting routed Bluetooth");
         result.putInt(label + "_error", error[0]);
         result.putBoolean(label + "_routed", BluetoothMicRoute.isRouted());
         result.putString(label + "_input", inputType);

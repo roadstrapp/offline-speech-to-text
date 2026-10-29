@@ -10,7 +10,8 @@ PYTHON=${PYTHON_BIN:-python3}
   cd "$ROOT"
   "$PYTHON" -m unittest \
     tests.test_release_configuration \
-    tests.test_documentation_contract -v
+    tests.test_documentation_contract \
+    tests.test_audio_lifecycle_regressions -v
 )
 javac -d "$OUT" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/HomeNavigation.java" \

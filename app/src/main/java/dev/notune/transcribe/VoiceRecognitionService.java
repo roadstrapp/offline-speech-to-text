@@ -56,7 +56,7 @@ public class VoiceRecognitionService extends RecognitionService {
     }
 
     /** Concurrent sessions: one microphone request plus one caller-audio request. */
-    private static final int MAX_SESSIONS = 3;
+    private static final int MAX_SESSIONS = 2;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
@@ -100,9 +100,21 @@ public class VoiceRecognitionService extends RecognitionService {
 
     @Override
     protected void onStartListening(Intent recognizerIntent, Callback callback) {
+        try {
+            if (recognizerIntent == null) throw new IllegalArgumentException();
+            recognizerIntent.hasExtra(FileTranscriptionContract.EXTRA_AUDIO_URI);
+            recognizerIntent.getExtras();
+        } catch (RuntimeException malformed) {
+            try { callback.error(SpeechRecognizer.ERROR_CLIENT); } catch (RemoteException ignored) {}
+            return;
+        }
         ParcelFileDescriptor callerAudio = callerAudioSource(recognizerIntent);
+        if (hasExtra(recognizerIntent, RecognizerIntent.EXTRA_AUDIO_SOURCE) && callerAudio == null) {
+            try { callback.error(SpeechRecognizer.ERROR_CLIENT); } catch (RemoteException ignored) {}
+            return;
+        }
         if (hasExtra(recognizerIntent, FileTranscriptionContract.EXTRA_AUDIO_URI)) {
-            if (file.callback != null) {
+            if (file.callback != null || caller.callback != null) {
                 closeQuietly(callerAudio);
                 try { callback.error(SpeechRecognizer.ERROR_RECOGNIZER_BUSY); } catch (RemoteException ignored) {}
                 return;
@@ -115,7 +127,7 @@ public class VoiceRecognitionService extends RecognitionService {
         }
         Callback previous = mic.callback;
         RecognitionSessionPolicy.Action action = RecognitionSessionPolicy.admit(
-                callerAudio != null, caller.callback != null,
+                callerAudio != null, caller.callback != null || file.callback != null,
                 previous != null && previous != callback);
         if (action == RecognitionSessionPolicy.Action.REFUSE_BUSY) {
             // One caller-audio job at a time; never cancel the running one.
@@ -163,6 +175,12 @@ public class VoiceRecognitionService extends RecognitionService {
 
         try {
             startListening(target);
+            mainHandler.postDelayed(() -> {
+                if (mic.callback == callback && mic.generation == target.generation && !target.readyDelivered) {
+                    try { cancelNative(); } catch (Throwable ignored) { }
+                    safeError(mic, SpeechRecognizer.ERROR_AUDIO);
+                }
+            }, 15_000L);
         } catch (Throwable t) {
             Log.e(TAG, "startListening failed", t);
             safeError(mic, SpeechRecognizer.ERROR_CLIENT);
@@ -272,6 +290,13 @@ public class VoiceRecognitionService extends RecognitionService {
             safeError(file, SpeechRecognizer.ERROR_CLIENT);
             return;
         }
+        int uid = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ? callback.getCallingUid() : -1;
+        if (!FileTranscriptionAccess.callerCanAccess(this, audio, uid, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                || (outputRequested && !FileTranscriptionAccess.callerCanAccess(
+                        this, output, uid, Intent.FLAG_GRANT_WRITE_URI_PERMISSION))) {
+            safeError(file, SpeechRecognizer.ERROR_CLIENT);
+            return;
+        }
         if (!SpeechModelInventory.hasUsableModel(getFilesDir(), BuildConfig.HAS_BUNDLED_MODEL)) {
             safeError(file, FileTranscriptionContract.recognizerError(FileTranscriptionContract.Failure.NO_MODEL));
             return;
@@ -298,6 +323,121 @@ public class VoiceRecognitionService extends RecognitionService {
             return false;
         }
     }
+    @SuppressWarnings("deprecation")
+    private static Uri uriExtra(Intent intent, String name) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                return intent.getParcelableExtra(name, Uri.class);
+            }
+            Object value = intent.getParcelableExtra(name);
+            return value instanceof Uri ? (Uri) value : null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** One file request. Every terminal path goes through the request's exact callbacks. */
+    private final class FileRequest implements FileTranscription.Listener {
+        private final NativeCallbacks target;
+        private volatile boolean cancelled;
+        private FileTranscription job;
+        private ParcelFileDescriptor output;
+
+        FileRequest(NativeCallbacks target) {
+            this.target = target;
+        }
+
+        /** Worker thread: separate a missing grant from undecodable audio, then start. */
+        void open(Uri audio, Uri outputUri) {
+            if (!FileTranscriptionAccess.canRead(VoiceRecognitionService.this, audio)) {
+                finishWithFailure(FileTranscriptionContract.Failure.CLIENT);
+                return;
+            }
+            ParcelFileDescriptor opened = null;
+            if (outputUri != null) {
+                // Open before decoding so an unwritable destination fails in milliseconds,
+                // not after a long file has been transcribed. It stays empty until success.
+                opened = FileTranscriptionAccess.openForWrite(VoiceRecognitionService.this, outputUri);
+                if (opened == null) {
+                    finishWithFailure(FileTranscriptionContract.Failure.CLIENT);
+                    return;
+                }
+            }
+            FileTranscription created = new FileTranscription(
+                    VoiceRecognitionService.this, audio, false, this);
+            synchronized (this) {
+                if (cancelled) {
+                    closeQuietly(opened);
+                    return;
+                }
+                output = opened;
+                job = created;
+            }
+            created.start();
+        }
+
+        void cancel() {
+            FileTranscription running;
+            ParcelFileDescriptor pending;
+            synchronized (this) {
+                cancelled = true;
+                running = job;
+                pending = output;
+                job = null;
+                output = null;
+            }
+            if (running != null) running.cancel();
+            closeQuietly(pending);
+        }
+
+        private synchronized ParcelFileDescriptor takeOutput() {
+            ParcelFileDescriptor taken = output;
+            output = null;
+            return taken;
+        }
+
+        private void finishWithFailure(FileTranscriptionContract.Failure failure) {
+            closeQuietly(takeOutput());
+            if (cancelled) return;
+            int outcome = failure == FileTranscriptionContract.Failure.NO_SPEECH ? 2 : 3;
+            if (failure != FileTranscriptionContract.Failure.NO_MODEL
+                    && failure != FileTranscriptionContract.Failure.ENGINE) {
+                target.onRecognitionOutcome(outcome, 0);
+            }
+            target.onError(FileTranscriptionContract.recognizerError(failure));
+        }
+
+        @Override public void onStatus(String status) {
+            target.onStatusUpdate(status);
+        }
+        @Override public void onReady() {
+            if (!cancelled) target.onReadyForSpeech();
+        }
+        @Override public void onPartial(String text) { }
+        @Override public void onProgress(long decodedSamples, long durationUs) { }
+        @Override public void onDecodeComplete() {
+            if (!cancelled) target.onEndOfSpeech();
+        }
+        @Override public void onResult(String text, long audioMs, long computeMs) {
+            ParcelFileDescriptor destination = takeOutput();
+            if (cancelled) {
+                closeQuietly(destination);
+                return;
+            }
+            if (destination != null && !FileTranscriptionAccess.write(destination, text)) {
+                finishWithFailure(FileTranscriptionContract.Failure.CLIENT);
+                return;
+            }
+            if (cancelled) return;
+            target.onTranscriptionMetrics(audioMs, computeMs, 0);
+            target.onRecognitionOutcome(0, audioMs);
+            target.onResults(text);
+        }
+        @Override public void onFailure(FileTranscriptionContract.Failure failure) {
+            finishWithFailure(failure);
+        }
+    }
+
     @SuppressWarnings("deprecation")
     private ParcelFileDescriptor callerAudioSource(Intent recognizerIntent) {
         try {
@@ -359,7 +499,6 @@ public class VoiceRecognitionService extends RecognitionService {
         if (callback == null) return;
         if (callback == file.callback) {
             retire(file, "cancel");
-            cancelFileRequest();
             return;
         }
         if (callback == caller.callback) {
@@ -394,7 +533,6 @@ public class VoiceRecognitionService extends RecognitionService {
                 try { cb.error(gone); } catch (RemoteException ignored) {}
             }
         }
-        cancelFileRequest();
         try {
             destroyNative();
         } catch (Throwable t) {
@@ -502,6 +640,7 @@ public class VoiceRecognitionService extends RecognitionService {
         private final Callback callback;
         private final long sessionId;
         private final long generation;
+        private boolean readyDelivered;
         NativeCallbacks(Slot slot, Callback callback) {
             super(VoiceRecognitionService.this);
             this.slot = slot;
@@ -514,7 +653,7 @@ public class VoiceRecognitionService extends RecognitionService {
                 if (slot.callback == callback && slot.generation == generation) action.run();
             });
         }
-        public void onReadyForSpeech() { deliver(() -> deliverReadyForSpeech(callback)); }
+        public void onReadyForSpeech() { deliver(() -> { readyDelivered = true; deliverReadyForSpeech(callback); }); }
         public void onBeginningOfSpeech() { deliver(() -> deliverBeginningOfSpeech(callback)); }
         public void onEndOfSpeech() { deliver(() -> deliverEndOfSpeech(slot, callback)); }
         public void onRmsChanged(float value) { deliver(() -> deliverRmsChanged(callback, value)); }

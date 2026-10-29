@@ -1,0 +1,1 @@
+package dev.notune.transcribe; class FileTranscriptionContract { static final long STALL_TIMEOUT_MS=900000;enum Failure {ENGINE,NO_SPEECH,NO_MODEL,UNDECODABLE} static boolean stalled(long a,long b){return b-a>STALL_TIMEOUT_MS;} }

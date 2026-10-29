@@ -5,6 +5,7 @@ pub(crate) struct Buffer {
     samples: Vec<f32>,
 }
 impl Buffer {
+    pub(crate) fn len(&self) -> usize { self.samples.len() }
     pub(crate) fn push(&mut self, samples: &[f32]) {
         self.samples.extend_from_slice(samples);
     }

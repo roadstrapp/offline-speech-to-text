@@ -103,11 +103,12 @@ public class RecognizeActivity extends AppCompatActivity {
             pauseAudioActive = true;
         }
         startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
-        // Native start routes synchronously, so the switch reflects this capture.
+        // Route listeners refresh this while asynchronous microphone setup completes.
         refreshMicSource();
     }
 
     private void onMicSourceChanged() {
+        dismissMicSwitch();
         refreshMicSource();
         if (!isRecording || awaitingResult) return;
         if (BluetoothMicRoute.takeFallbackNotice()) {

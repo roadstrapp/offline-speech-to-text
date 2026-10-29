@@ -39,7 +39,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * other than a Bluetooth input releases the route and native code reopens on
  * the phone microphone, so the recording screen can always say which
  * microphone really carries the recording. Every decision is logged under the
- * {@value #TAG} tag (device types and names only, never audio).
+ * {@value #TAG} tag (device types only, never audio).
  *
  * The request is tied to the application context's AudioManager because the
  * platform keys it to that manager's client token; clearing through another
@@ -174,12 +174,21 @@ final class BluetoothMicRoute {
      * headset switches to its call link. Never throws.
      */
     static long acquire(Context context) {
-        Boolean override;
+        return acquireForStart(context, takeStartOverride());
+    }
+
+    /** Snapshot synchronously for the exact capture before its setup worker starts. */
+    static int takeStartOverride() {
         synchronized (LOCK) {
-            override = nextStartOverride;
+            int choice = nextStartOverride == null ? -1 : nextStartOverride ? 1 : 0;
             nextStartOverride = null;
-            fallbackNotice = false;
+            return choice;
         }
+    }
+
+    static long acquireForStart(Context context, int choice) {
+        Boolean override = choice < 0 ? null : choice != 0;
+        synchronized (LOCK) { fallbackNotice = false; }
         if (context == null) return 0L;
         if (!isSupported()) {
             Log.i(TAG, "start: phone microphone (Android " + Build.VERSION.SDK_INT + " < 12)");
@@ -208,7 +217,6 @@ final class BluetoothMicRoute {
         } catch (RuntimeException e) {
             // Includes a vendor SecurityException; fall back to the phone mic.
             Log.w(TAG, "start: routing failed, phone microphone", e);
-            clearActive();
             return 0L;
         }
     }
@@ -225,7 +233,6 @@ final class BluetoothMicRoute {
             return acquireApi31(app == null ? context : app);
         } catch (RuntimeException e) {
             Log.w(TAG, "reroute failed", e);
-            clearActive();
             return 0L;
         }
     }
@@ -368,7 +375,7 @@ final class BluetoothMicRoute {
             activeSessionId = sessionId;
         }
         Log.i(TAG, "recording from Bluetooth microphone " + describe(device));
-        watchRecording(manager, sessionId);
+        watchRecording(manager, sessionId, token);
         notifyListeners();
         return true;
     }
@@ -378,8 +385,9 @@ final class BluetoothMicRoute {
         if (token <= 0L) return;
         synchronized (LOCK) {
             if (token != activeToken) return;
+            clearActiveLocked();
         }
-        clearActive();
+        notifyListeners();
     }
 
     @RequiresApi(Build.VERSION_CODES.S)
@@ -398,13 +406,14 @@ final class BluetoothMicRoute {
             return 0L;
         }
 
-        long token;
+        long token = 0L;
         boolean already;
+        try {
         long started = SystemClock.elapsedRealtime();
         synchronized (LOCK) {
             // One capture per process; a stale request from an earlier stream
-            // is replaced rather than stacked.
-            clearActiveLocked();
+            // is refused rather than stacked.
+            if (activeToken != 0L) return 0L;
             AudioDeviceInfo current = manager.getCommunicationDevice();
             already = current != null && current.getId() == target.getId();
             if (!manager.setCommunicationDevice(target)) {
@@ -451,6 +460,10 @@ final class BluetoothMicRoute {
                 + (input >= 0 ? describe(inputs[input]) + " id " + inputId
                         : "not listed, following the route"));
         return token;
+        } catch (RuntimeException e) {
+            if (token != 0L) release(token);
+            throw e;
+        }
     }
 
     /** The best Bluetooth communication device with a microphone, or null. */
@@ -469,7 +482,7 @@ final class BluetoothMicRoute {
      * it, and drops the Bluetooth label if the input moves elsewhere (the
      * headset disconnected) so the recording screen keeps telling the truth.
      */
-    private static void watchRecording(AudioManager manager, int sessionId) {
+    private static void watchRecording(AudioManager manager, int sessionId, long token) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return;
         AudioManager.AudioRecordingCallback callback = new AudioManager.AudioRecordingCallback() {
             private int lastDevice = -1;
@@ -488,7 +501,7 @@ final class BluetoothMicRoute {
                     Log.i(TAG, "recording input now " + describe(device)
                             + (silenced ? " (silenced by Android)" : ""));
                     boolean bluetooth = device != null
-                            && BluetoothMicPolicy.isBluetoothMicType(device.getType());
+                            && BluetoothMicPolicy.isBluetoothMicType(device.getType()) && !silenced;
                     boolean changed;
                     synchronized (LOCK) {
                         boolean mine = activeToken != 0L && activeSessionId == sessionId;
@@ -504,10 +517,12 @@ final class BluetoothMicRoute {
             }
         };
         try {
-            manager.registerAudioRecordingCallback(callback, MAIN);
             synchronized (LOCK) {
+                if (token != activeToken || recordingCallback != null) return;
+                manager.registerAudioRecordingCallback(callback, MAIN);
                 recordingCallback = callback;
             }
+            callback.onRecordingConfigChanged(manager.getActiveRecordingConfigurations());
         } catch (RuntimeException ignored) { }
     }
 
@@ -529,6 +544,7 @@ final class BluetoothMicRoute {
         activeInputId = 0;
         confirmed = false;
         live = false;
+        recovering = false;
         routedName = "";
         activeSessionId = 0;
         recordingCallback = null;
@@ -551,8 +567,8 @@ final class BluetoothMicRoute {
 
     private static String describe(AudioDeviceInfo device) {
         if (device == null) return "none";
-        return "\"" + productName(device) + "\" (type " + device.getType() + ", "
-                + (device.isSource() ? "input" : "output") + ", " + device.getAddress() + ")";
+        return "type " + device.getType() + ", "
+                + (device.isSource() ? "input" : "output");
     }
 
     private static String describeAll(List<AudioDeviceInfo> devices) {
@@ -569,7 +585,8 @@ final class BluetoothMicRoute {
         List<BluetoothMicPolicy.Device> described = new ArrayList<>();
         if (devices == null) return described;
         for (AudioDeviceInfo device : devices) {
-            described.add(new BluetoothMicPolicy.Device(device.getType(), device.getAddress()));
+            described.add(new BluetoothMicPolicy.Device(device.getType(),
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ? device.getAddress() : ""));
         }
         return described;
     }
@@ -578,7 +595,8 @@ final class BluetoothMicRoute {
         List<BluetoothMicPolicy.Device> described = new ArrayList<>();
         if (devices == null) return described;
         for (AudioDeviceInfo device : devices) {
-            described.add(new BluetoothMicPolicy.Device(device.getType(), device.getAddress()));
+            described.add(new BluetoothMicPolicy.Device(device.getType(),
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ? device.getAddress() : ""));
         }
         return described;
     }

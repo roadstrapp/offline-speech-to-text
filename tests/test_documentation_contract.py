@@ -232,7 +232,7 @@ class DocumentationContractTest(unittest.TestCase):
             self.assertIn(code, guide)
         # The file session is attributed to the caller before anything else can fail.
         body = self._method_body(
-            service, "startListeningFromFile(Intent intent, Callback callback, boolean hasCallerAudio)")
+            service, "startListeningFromFile(Intent intent, Callback callback, boolean hasCallerAudio, NativeCallbacks target)")
         self.assertLess(body.index("attributeSessionToCaller(callback)"), body.index("acceptRequest("))
         # Provider calls stay off the recognition service's main thread.
         self.assertIn('new Thread(() -> request.open(audio, output)', body)

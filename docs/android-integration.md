@@ -112,7 +112,7 @@ Offline Speech to Text snapshots the private preferred-word list once per transc
 
 Long caller-audio sessions remain one ordinary recognition request. OSTT keeps the supplied PCM as one continuous utterance and calls the standard final `onResults` only after the writer closes or the caller stops listening. Caller audio is decoded like a shared file while it arrives: in the model's bounded windows (one minute for Whisper), split at quiet points with overlapping text reconciliation, so a short recording is one model run. An ordinary hesitation is never used as an app-level endpoint. Do not enable `EXTRA_SEGMENTED_SESSION` or concatenate partial callbacks. `cancel()` discards the captured utterance.
 
-A caller-audio session is bounded to 60 seconds of wall-clock time from `startListening`, however fast the PCM arrives. When that bound passes before the writer closes, OSTT stops reading and finalizes only the audio already received, so the transcript can miss the rest of a longer stream. The complete utterance is held in memory (about 3.8 MB per minute) until the writer closes. To transcribe a saved recording, pass it as a file through `EXTRA_AUDIO_URI` instead; that path decodes with bounded memory and has no duration or wall-clock cap.
+A caller-audio session is bounded to 60 seconds of wall-clock time from `startListening`, however fast the PCM arrives. When that bound passes before the writer closes, OSTT stops reading and finalizes only the audio already received, so the transcript can miss the rest of a longer stream. Pending PCM is bounded to two minutes (about 7.7 MB), with backpressure when decoding falls behind; consumed windows are discarded apart from their reconciliation overlap. A fast writer cannot grow the queue without bound. To transcribe a saved recording, pass it as a file through `EXTRA_AUDIO_URI` instead; that path decodes with bounded memory and has no duration or wall-clock cap.
 
 ### Caller-audio completion and errors
 
@@ -125,7 +125,7 @@ working: the transcription runs as background work, window by window, and an
 interactive final decode runs before its next window on the same loaded model.
 A microphone request never cancels a caller-audio request.
 
-Only one caller-audio request runs at a time. A second one while the first is
+Only one background recognition-service request (caller audio or file URI) runs at a time. A second one while the first is
 running is refused with `ERROR_RECOGNIZER_BUSY`; the running one is not
 affected. Retry after the first one finishes. A microphone request made while
 OSTT's own keyboard, popup or long recording holds the microphone also gets
@@ -134,8 +134,10 @@ OSTT's own keyboard, popup or long recording holds the microphone also gets
 Every request ends with exactly one `onResults` or one `onError`, unless the
 caller itself cancels it:
 
-- A newer microphone request replaces an unfinished earlier one; the earlier
-  caller receives `ERROR_RECOGNIZER_BUSY` before the new request starts.
+- When Android admits a newer microphone request, it replaces the earlier one,
+  which receives `ERROR_RECOGNIZER_BUSY`. With both service slots already occupied
+  on Android 13+, the platform can refuse the new request before OSTT receives it;
+  callers should cancel their old request before starting a replacement.
 - If the service is destroyed while a request is live, the caller receives
   `ERROR_SERVER_DISCONNECTED` (Android 12+) or `ERROR_SERVER`.
 - An input failure on the caller's descriptor ends with `ERROR_AUDIO`, as below.
@@ -611,3 +613,9 @@ The request is held only while OSTT's input stream is open. However the capture 
 While recording, the voice keyboard and popup show a **Bluetooth mic** / **Phone mic** switch whenever a Bluetooth microphone is usable. It names the microphone that really carries the recording, not the setting. Tapping it asks for confirmation, because switching discards the recording so far and starts again on the other microphone: **Switch for this recording** leaves the setting alone, **Switch and keep Bluetooth/phone** also changes it.
 
 While the headset microphone is open, the headset runs its call profile, so other audio plays at call quality until capture ends. Callers that pass `EXTRA_AUDIO_SOURCE` own their microphone and its routing; this setting does not affect them. Live Subtitles capture device audio, not the microphone, and are unaffected.
+
+Caller-audio diagnostics report content-free total audio/compute timings and terminal outcomes. Per-window plans and preparation pipeline timings remain specific to microphone dictation; they are not emitted for the caller-audio queue.
+
+File requests must use granted `content:` URIs. Headless file requests require Android9/API28 or later so OSTT can verify the caller uid. The caller must own the provider or itself hold the requested URI read/write grant; OSTT does not lend unrelated grants it holds. File-provider URIs owned by OSTT are refused for external callers. Share/Open-with accepts only external content URIs. Two native file jobs may exist concurrently across activities and the service; additional file-job creation fails with a server error without cancelling existing jobs. Screen rotations/fold size changes preserve the active result screen.
+
+Output-document requests open the caller-granted URI in truncate mode before decoding. A later failure or cancellation can therefore leave that document empty; callers should provide a new destination rather than an existing document they need to preserve. The two-job file admission cap counts registered jobs; an already executing model window may finish internally after cancellation, without delivering a result.

@@ -13,7 +13,7 @@
 //! kept. Recovery runs on the watchdog thread and never holds the stream lock
 //! while it waits for a route, so pause/stop stay responsive.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -59,12 +59,16 @@ struct Inner {
     route: Option<RouteGuard>,
     paused: bool,
     playing: bool,
+    epoch: u64,
 }
 
 struct Shared {
     inner: Mutex<Inner>,
     health: Health,
     closed: AtomicBool,
+    next_epoch: AtomicU64,
+    active_epoch: AtomicU64,
+    ready: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// The current stream is a verified Bluetooth stream under watch.
     bluetooth: Arc<AtomicBool>,
     last_error: Mutex<Option<String>>,
@@ -89,8 +93,8 @@ pub struct ManagedCapture {
 }
 
 impl ManagedCapture {
-    /// Opens the recording's microphone. Must run on a thread entered from
-    /// Java; may block for a few seconds while a Bluetooth route comes up.
+    /// Creates one recording capture; routing/opening runs on its owned worker.
+    /// Resolve the app class on a thread entered from Java before dispatch.
     pub fn open<D, E>(
         env: &mut JNIEnv,
         jvm: &Arc<jni::JavaVM>,
@@ -103,16 +107,42 @@ impl ManagedCapture {
         E: FnMut(String) + Send + 'static,
     {
         let class = bluetooth_mic::route_class(env);
+        Self::open_with_class(env, jvm, context, data, error, class, None)
+    }
+
+    /// The Java entry thread resolves the class before handing setup to a worker.
+    pub fn open_with_class<D, E>(
+        env: &mut JNIEnv, jvm: &Arc<jni::JavaVM>, context: &JObject,
+        data: D, error: E, class: Option<GlobalRef>, ready: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<Self, String>
+    where D: FnMut(&[f32]) + Send + 'static, E: FnMut(String) + Send + 'static,
+    {
         let context = env.new_global_ref(context).map_err(|e| e.to_string())?;
+        let ready = ready.or_else(|| {
+            let vm = jvm.clone();
+            let target = context.clone();
+            Some(Box::new(move || {
+                if let Ok(mut env) = vm.attach_current_thread() {
+                    if let Ok(text) = env.new_string("Listening...") {
+                        let _ = env.call_method(target.as_obj(), "onStatusUpdate", "(Ljava/lang/String;)V", &[(&text).into()]);
+                    }
+                    let _ = env.exception_clear();
+                }
+            }) as Box<dyn FnOnce() + Send>)
+        });
         let shared = Arc::new(Shared {
             inner: Mutex::new(Inner {
                 stream: None,
                 route: None,
                 paused: false,
                 playing: false,
+                epoch: 0,
             }),
             health: Health::new(),
             closed: AtomicBool::new(false),
+            next_epoch: AtomicU64::new(1),
+            active_epoch: AtomicU64::new(0),
+            ready: Mutex::new(ready),
             bluetooth: Arc::new(AtomicBool::new(false)),
             last_error: Mutex::new(None),
             simulate_zeros: AtomicBool::new(false),
@@ -123,46 +153,58 @@ impl ManagedCapture {
             class,
             context,
         });
-        let route = shared
-            .class
-            .as_ref()
-            .and_then(|class| bluetooth_mic::acquire(env, jvm, class, shared.context.as_obj(), false));
-        let method = first_method(env, &shared);
-        shared
-            .simulate_zeros
-            .store(debug_marker(env, &shared, "simulateZeros"), Ordering::SeqCst);
-        shared
-            .observe_only
-            .store(debug_marker(env, &shared, "observeOnly"), Ordering::SeqCst);
-        let (stream, route) = open_stream(env, &shared, route, method)?;
-        let bluetooth = route.is_some();
-        {
-            let mut inner = shared.inner.lock().unwrap();
-            inner.stream = Some(stream);
-            inner.route = route;
-        }
-        shared.bluetooth.store(bluetooth, Ordering::SeqCst);
-        if bluetooth {
-            let watched = shared.clone();
-            std::thread::spawn(move || watchdog(watched, method));
-        }
+        // Setup may wait for a Bluetooth route. Keep every UI entry nonblocking;
+        // play/pause/Drop update the owned session while this worker is pending.
+        shared.bluetooth.store(true, Ordering::SeqCst); // setup also suspends startup liveness probes
+        shared.simulate_zeros.store(debug_marker(env, &shared, "simulateZeros"), Ordering::SeqCst);
+        shared.observe_only.store(debug_marker(env, &shared, "observeOnly"), Ordering::SeqCst);
+        let choice = shared.class.as_ref().map(|class| bluetooth_mic::take_start_override(env, class));
+        let pending = shared.clone();
+        std::thread::spawn(move || {
+            let Ok(mut env) = pending.jvm.attach_current_thread() else { return; };
+            if pending.closed.load(Ordering::SeqCst) { return; }
+            let route = pending.class.as_ref().and_then(|class| {
+                bluetooth_mic::acquire(&mut env, &pending.jvm, class, pending.context.as_obj(), false, choice)
+            });
+            if pending.closed.load(Ordering::SeqCst) { drop(route); return; }
+            let method = first_method(&mut env, &pending);
+            match open_stream(&mut env, &pending, route, method) {
+                Ok((stream, route, epoch)) => {
+                    let bluetooth = route.is_some();
+                    if install(&pending, stream, route, epoch) {
+                        pending.bluetooth.store(bluetooth, Ordering::SeqCst);
+                        if bluetooth { watchdog(pending.clone(), method); }
+                    }
+                }
+                Err(error) => {
+                    pending.bluetooth.store(false, Ordering::SeqCst);
+                    if !pending.closed.load(Ordering::SeqCst) {
+                        if let Ok(mut callback) = pending.error.lock() { callback(error); }
+                    }
+                }
+            }
+        });
         Ok(Self { shared })
     }
 
     pub fn play(&self) -> Result<(), String> {
-        let mut inner = self.shared.inner.lock().unwrap();
+        let mut inner = self.shared.inner.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(stream) = inner.stream.as_ref() {
+            stream.play()?;
+            if let Some(ready) = self.shared.ready.lock().unwrap_or_else(|p| p.into_inner()).take() { ready(); }
+            self.shared.active_epoch.store(inner.epoch, Ordering::SeqCst);
+        }
         inner.paused = false;
         inner.playing = true;
         self.shared.health.restart();
-        match inner.stream.as_ref() {
-            Some(stream) => stream.play(),
-            None => Ok(()),
-        }
+        Ok(())
     }
 
     pub fn pause(&self) -> Result<(), String> {
-        let mut inner = self.shared.inner.lock().unwrap();
+        let mut inner = self.shared.inner.lock().unwrap_or_else(|p| p.into_inner());
         inner.paused = true;
+        self.shared.active_epoch.store(0, Ordering::SeqCst);
+        drop(self.shared.data.lock().unwrap_or_else(|p| p.into_inner()));
         match inner.stream.as_ref() {
             Some(stream) => stream.pause(),
             None => Ok(()),
@@ -178,10 +220,12 @@ impl ManagedCapture {
 
 impl Drop for ManagedCapture {
     fn drop(&mut self) {
+        self.shared.active_epoch.store(0, Ordering::SeqCst);
         self.shared.closed.store(true, Ordering::SeqCst);
+        drop(self.shared.data.lock().unwrap_or_else(|p| p.into_inner()));
         self.shared.bluetooth.store(false, Ordering::SeqCst);
         let (stream, route) = {
-            let mut inner = self.shared.inner.lock().unwrap();
+            let mut inner = self.shared.inner.lock().unwrap_or_else(|p| p.into_inner());
             (inner.stream.take(), inner.route.take())
         };
         drop(stream);
@@ -225,7 +269,9 @@ fn callbacks(
 ) -> (
     impl FnMut(&[f32]) + Send + 'static,
     impl FnMut(String) + Send + 'static,
+    u64,
 ) {
+    let epoch = shared.next_epoch.fetch_add(1, Ordering::SeqCst);
     let data = {
         let shared = shared.clone();
         let routed = routed.clone();
@@ -240,8 +286,10 @@ fn callbacks(
             } else {
                 samples
             };
-            shared.health.record(samples);
+            if shared.closed.load(Ordering::SeqCst) || shared.active_epoch.load(Ordering::SeqCst) != epoch { return; }
             if let Ok(mut data) = shared.data.lock() {
+                if shared.closed.load(Ordering::SeqCst) || shared.active_epoch.load(Ordering::SeqCst) != epoch { return; }
+                shared.health.record(samples);
                 data(samples);
             }
         }
@@ -252,15 +300,16 @@ fn callbacks(
         let shared = shared.clone();
         let routed = routed.clone();
         move |message: String| {
+            if shared.closed.load(Ordering::SeqCst) || shared.active_epoch.load(Ordering::SeqCst) != epoch { return; }
             if routed.load(Ordering::SeqCst) {
-                *shared.last_error.lock().unwrap() = Some(message);
+                *shared.last_error.lock().unwrap_or_else(|p| p.into_inner()) = Some(message);
                 shared.health.mark_error();
             } else if let Ok(mut error) = shared.error.lock() {
                 error(message);
             }
         }
     };
-    (data, error)
+    (data, error, epoch)
 }
 
 /// Opens one stream feeding the shared callbacks: on `route` with `method`
@@ -271,13 +320,13 @@ fn open_stream(
     shared: &Arc<Shared>,
     route: Option<RouteGuard>,
     method: Method,
-) -> Result<(CaptureStream, Option<RouteGuard>), String> {
+) -> Result<(CaptureStream, Option<RouteGuard>, u64), String> {
     let device = cpal::traits::HostTrait::default_input_device(&cpal::default_host())
         .ok_or_else(|| "no microphone available".to_string())?;
     let route = match (route, method) {
         (Some(route), Method::AudioRecord) => {
             let routed = Arc::new(AtomicBool::new(true));
-            let (data, error) = callbacks(shared, &routed);
+            let (data, error, epoch) = callbacks(shared, &routed);
             match crate::bt_audio_record::JavaStream::open(
                 env,
                 &shared.jvm,
@@ -286,7 +335,7 @@ fn open_stream(
                 Box::new(error),
             ) {
                 Some((stream, opened)) if route.confirm(env, &opened) => {
-                    return Ok((CaptureStream::Java(stream), Some(route)));
+                    return Ok((CaptureStream::Java(stream), Some(route), epoch));
                 }
                 // Not on the Bluetooth input after all, or refused: try AAudio
                 // on the same route before the phone microphone.
@@ -304,7 +353,7 @@ fn open_stream(
         (route, _) => route,
     };
     let routed_stream = Arc::new(AtomicBool::new(false));
-    let (data, error) = callbacks(shared, &routed_stream);
+    let (data, error, epoch) = callbacks(shared, &routed_stream);
     let route_env = &mut *env;
     let route_open = route.as_ref().map(|route| {
         (route.input_device_id(), move |opened: &bluetooth_mic::OpenedStream| {
@@ -313,7 +362,7 @@ fn open_stream(
     });
     let (stream, routed) = capture_stream::open_input(&device, route_open, data, error)?;
     routed_stream.store(routed, Ordering::SeqCst);
-    Ok((stream, if routed { route } else { None }))
+    Ok((stream, if routed { route } else { None }, epoch))
 }
 
 fn log(env: &mut JNIEnv, shared: &Shared, message: &str) {
@@ -323,8 +372,8 @@ fn log(env: &mut JNIEnv, shared: &Shared, message: &str) {
 }
 
 /// Puts a recovered stream in place, unless the recording ended meanwhile.
-fn install(shared: &Shared, stream: CaptureStream, route: Option<RouteGuard>) -> bool {
-    let mut inner = shared.inner.lock().unwrap();
+fn install(shared: &Shared, stream: CaptureStream, route: Option<RouteGuard>, epoch: u64) -> bool {
+    let mut inner = shared.inner.lock().unwrap_or_else(|p| p.into_inner());
     if shared.closed.load(Ordering::SeqCst) {
         drop(inner);
         drop(stream);
@@ -332,18 +381,44 @@ fn install(shared: &Shared, stream: CaptureStream, route: Option<RouteGuard>) ->
         return false;
     }
     shared.health.restart();
+    inner.epoch = epoch;
+    let mut terminal_error = None;
     if !inner.paused && inner.playing {
-        if let Err(e) = stream.play() {
-            *shared.last_error.lock().unwrap() = Some(e);
-            shared.health.mark_error();
+        match stream.play() {
+            Ok(()) => {
+                if let Some(ready) = shared.ready.lock().unwrap_or_else(|p| p.into_inner()).take() { ready(); }
+                shared.active_epoch.store(epoch, Ordering::SeqCst);
+            }
+            Err(e) => {
+                *shared.last_error.lock().unwrap_or_else(|p| p.into_inner()) = Some(e.clone());
+                shared.health.mark_error();
+                if route.is_none() { terminal_error = Some(e); }
+            }
         }
+    } else if let Err(error) = stream.pause() {
+        drop(inner);
+        drop(stream);
+        drop(route);
+        if !shared.closed.load(Ordering::SeqCst) {
+            if let Ok(mut callback) = shared.error.lock() { callback(error); }
+        }
+        return false;
     }
+
     inner.stream = Some(stream);
     inner.route = route;
+    drop(inner);
+    if let Some(error) = terminal_error {
+        if !shared.closed.load(Ordering::SeqCst) {
+            if let Ok(mut callback) = shared.error.lock() { callback(error); }
+        }
+        return false;
+    }
     true
 }
 
 fn watchdog(shared: Arc<Shared>, first: Method) {
+    let _thread_attachment = shared.jvm.attach_current_thread_permanently();
     let mut reopened = false;
     let mut method = first;
     let mut logged_start = u64::MAX;
@@ -357,7 +432,7 @@ fn watchdog(shared: Arc<Shared>, first: Method) {
             return;
         }
         {
-            let inner = shared.inner.lock().unwrap();
+            let inner = shared.inner.lock().unwrap_or_else(|p| p.into_inner());
             if inner.paused || !inner.playing {
                 continue;
             }
@@ -470,7 +545,7 @@ fn recover(
     log(&mut env, shared, &message);
 
     let (old_stream, old_route) = {
-        let mut inner = shared.inner.lock().unwrap();
+        let mut inner = shared.inner.lock().unwrap_or_else(|p| p.into_inner());
         if shared.closed.load(Ordering::SeqCst) {
             drop(inner);
             if let Some(class) = &shared.class {
@@ -480,6 +555,8 @@ fn recover(
         }
         (inner.stream.take(), inner.route.take())
     };
+    shared.active_epoch.store(0, Ordering::SeqCst);
+    drop(shared.data.lock().unwrap_or_else(|p| p.into_inner()));
     drop(old_stream);
     // Clears the communication device, so the retry re-asserts and settles it.
     drop(old_route);
@@ -488,28 +565,29 @@ fn recover(
         *reopened = true;
         *method = method.other();
         let route = shared.class.as_ref().and_then(|class| {
-            bluetooth_mic::acquire(&mut env, &shared.jvm, class, shared.context.as_obj(), true)
+            bluetooth_mic::acquire(&mut env, &shared.jvm, class, shared.context.as_obj(), true, None)
         });
         if route.is_some() {
             match open_stream(&mut env, shared, route, *method) {
-                Ok((stream, Some(route))) => {
+                Ok((stream, Some(route), epoch)) => {
                     let message = format!("capture: reopened on Bluetooth with {}", method.label());
                     log(&mut env, shared, &message);
-                    let installed = install(shared, stream, Some(route));
+                    let installed = install(shared, stream, Some(route), epoch);
                     if let Some(class) = &shared.class {
                         bluetooth_mic::set_recovering(&mut env, class, false);
                     }
                     return installed;
                 }
                 // Already a phone stream: keep it rather than opening another.
-                Ok((stream, None)) => {
+                Ok((stream, None, epoch)) => {
                     shared.bluetooth.store(false, Ordering::SeqCst);
-                    if install(shared, stream, None) {
+                    let installed = install(shared, stream, None, epoch);
+                    if installed {
                         log(&mut env, shared, "capture: continuing on the phone microphone");
                     }
                     if let Some(class) = &shared.class {
                         bluetooth_mic::set_recovering(&mut env, class, false);
-                        bluetooth_mic::notify_fallback(&mut env, class, dead.label());
+                        if installed && !shared.closed.load(Ordering::SeqCst) { bluetooth_mic::notify_fallback(&mut env, class, dead.label()); }
                     }
                     return false;
                 }
@@ -521,8 +599,8 @@ fn recover(
 
     shared.bluetooth.store(false, Ordering::SeqCst);
     match open_stream(&mut env, shared, None, *method) {
-        Ok((stream, _)) => {
-            let installed = install(shared, stream, None);
+        Ok((stream, _, epoch)) => {
+            let installed = install(shared, stream, None, epoch);
             if installed {
                 log(&mut env, shared, "capture: continuing on the phone microphone");
             }
@@ -550,6 +628,7 @@ fn recover(
 /// After a fallback, log three seconds of the phone stream so a report shows
 /// whether the recording really continued with sound.
 fn phone_check(shared: &Arc<Shared>) {
+    let _thread_attachment = shared.jvm.attach_current_thread_permanently();
     let started = shared.health.snapshot().started;
     let mut base = shared.health.frames();
     for second in 1..=3 {

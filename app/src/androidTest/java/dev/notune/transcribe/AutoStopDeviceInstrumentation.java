@@ -500,19 +500,19 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             CallerAudioProviderDeviceTest.run(this);
             check(DiagnosticLog.awaitIdleForTest(5000), "caller diagnostics did not drain");
             String log = new String(DiagnosticLog.snapshot(directory), java.nio.charset.StandardCharsets.UTF_8);
-            boolean pipeline = false, session = false, resources = false;
+            boolean timing = false, session = false, resources = false;
             for (String line : log.split("\n")) {
                 int space = line.indexOf(' ');
                 if (space <= 0) continue;
                 try {
                     if (Long.parseLong(line.substring(0, space)) < start) continue;
                 } catch (NumberFormatException oldOrIncompleteLine) { continue; }
+                timing |= line.contains(" timing ") && line.contains("process=service,audio_ms=") && line.contains("duration_ms=");
                 if (!line.contains("route=caller_audio")) continue;
-                pipeline |= line.contains(" pipeline ") && line.contains("stop_wait_ms=") && line.contains("session_id=");
                 session |= line.contains("phase=capture,reason=start,elapsed_ms=");
                 resources |= line.contains(" resource ") && line.contains("cpu_ms=") && line.contains("thermal=");
             }
-            check(pipeline && session && resources, "actual provider JNI/session/resource diagnostics absent");
+            check(timing && session && resources, "actual provider JNI/session/resource diagnostics absent");
         } finally {
             DiagnosticLog.setEnabled(directory, basic);
             if (original == null) Files.deleteIfExists(lease.toPath());

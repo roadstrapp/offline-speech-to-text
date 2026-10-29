@@ -2,7 +2,9 @@ Offline Speech to Text turns speech into text on your Android phone. After downl
 
 Use the built-in voice keyboard to dictate into text fields. You can also select the app as your speech recognition provider in keyboards and apps that support Android's provider interface. Some keyboards use their own service and do not offer this choice.
 
-Share an audio file with the app to transcribe a recording. Files decode in blocks to limit audio-buffer memory. Live subtitles can transcribe audio from other apps when Android allows audio capture.
+Share an audio file or supported video note with the app to transcribe its audio. Copy, share or save the transcript. Files decode in blocks to limit audio-buffer memory. Other apps can request file transcription through documented Android contracts. Live subtitles can transcribe audio from other apps when Android allows audio capture.
+
+On Android 12 and later, optional Bluetooth microphone support can use a connected headset or LE Audio hearing aid. The recording screen identifies the active microphone and lets you switch. If the Bluetooth input stops, capture can continue on the phone microphone with a cue and status message.
 
 Use separate dictionary views for preferred words and explicit heard-to-written corrections. Choose the pause before automatic stopping. Transcript recovery helps preserve text when an editor changes or closes. Password fields are protected from automatic insertion.
 

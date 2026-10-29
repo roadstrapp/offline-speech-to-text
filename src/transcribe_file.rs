@@ -68,7 +68,9 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_FileTranscription_nativ
         failed: false,
         finished: false,
     }));
-    STATES.lock().unwrap().insert(
+    let mut states = STATES.lock().unwrap_or_else(|p| p.into_inner());
+    if states.len() >= 2 { return 0; }
+    states.insert(
         handle,
         State {
             target: target.clone(),
@@ -77,6 +79,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_FileTranscription_nativ
             partials: partials != JNI_FALSE,
         },
     );
+    drop(states);
     std::thread::spawn(move || {
         if !cancelled.load(Ordering::SeqCst) {
             let _ = engine::ensure_loaded_from_thread(&Arc::new(vm), &target);
@@ -93,7 +96,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_FileTranscription_nativ
     _: JClass,
     handle: jlong,
 ) {
-    if let Some(old) = STATES.lock().unwrap().remove(&handle) {
+    if let Some(old) = STATES.lock().unwrap_or_else(|p| p.into_inner()).remove(&handle) {
         old.cancelled.store(true, Ordering::SeqCst);
     }
 }
@@ -159,7 +162,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_FileTranscription_nativ
     if env.get_float_array_region(&samples, 0, &mut chunk).is_err() {
         return JNI_FALSE;
     }
-    let mut s = session.lock().unwrap();
+    let mut s = session.lock().unwrap_or_else(|p| p.into_inner());
     let result = (|| -> Result<(), String> {
         let limit = ensure_job(&mut s)?;
         s.buffer.push(&chunk);
@@ -200,7 +203,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_FileTranscription_nativ
     let Some((session, cancelled, target, _)) = handles(handle) else {
         return;
     };
-    let mut s = session.lock().unwrap();
+    let mut s = session.lock().unwrap_or_else(|p| p.into_inner());
     if s.failed || s.finished || cancelled.load(Ordering::SeqCst) {
         return;
     }
@@ -219,10 +222,11 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_FileTranscription_nativ
         return;
     }
     s.finished = true;
+    if result.is_err() { s.failed = true; }
+    drop(s); // Java result handling may write to a caller-owned output provider.
     match result {
         Ok(text) => notify(&mut env, target.as_obj(), "onTextTranscribed", &text),
         Err(_) => {
-            s.failed = true;
             notify(
                 &mut env,
                 target.as_obj(),

@@ -338,7 +338,7 @@ mod device {
                     && (api.channel_count)(stream) == 1
                     && (api.format)(stream) == AAUDIO_FORMAT_PCM_FLOAT,
             };
-            if !accept(&opened) {
+            if !opened.exact_format || !accept(&opened) {
                 // Never started, so no callback can be running.
                 (api.close)(stream);
                 return reclaim(user);

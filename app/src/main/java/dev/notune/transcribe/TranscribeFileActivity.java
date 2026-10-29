@@ -53,6 +53,7 @@ public class TranscribeFileActivity extends AppCompatActivity {
     private boolean failed = false;
     private volatile boolean cancelled = false;
     private FileTranscription job;
+    private JobListener jobListener;
     private volatile String audioDisplayName;
     private ActivityResultLauncher<String> saveDocument;
 
@@ -109,6 +110,11 @@ public class TranscribeFileActivity extends AppCompatActivity {
             return;
         }
 
+        if (!returnsResult() && !FileTranscriptionContract.acceptUri(
+                FileTranscriptionAccess.scheme(audioUri), FileTranscriptionAccess.isOwnProvider(this, audioUri), false)) {
+            fail(FileTranscriptionContract.Failure.CLIENT, getString(R.string.file_no_audio));
+            return;
+        }
         Uri outputUri = returnsResult() ? outputUri() : null;
         if (returnsResult() && !acceptResultRequest(audioUri, outputUri)) {
             fail(FileTranscriptionContract.Failure.CLIENT, getString(R.string.file_no_audio));
@@ -139,6 +145,9 @@ public class TranscribeFileActivity extends AppCompatActivity {
         FileTranscription running = job;
         job = null;
         if (running != null) running.cancel();
+        JobListener listener = jobListener;
+        jobListener = null;
+        if (listener != null) closeQuietly(listener.takeOutput());
     }
 
     @SuppressWarnings("deprecation")
@@ -179,6 +188,15 @@ public class TranscribeFileActivity extends AppCompatActivity {
         } catch (RuntimeException e) {
             return false;
         }
+        int uid;
+        try {
+            String caller = getCallingPackage();
+            if (caller == null) return false;
+            uid = getPackageManager().getApplicationInfo(caller, 0).uid;
+        } catch (android.content.pm.PackageManager.NameNotFoundException | RuntimeException e) { return false; }
+        if (!FileTranscriptionAccess.callerCanAccess(this, audio, uid, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                || (outputRequested && !FileTranscriptionAccess.callerCanAccess(
+                        this, output, uid, Intent.FLAG_GRANT_WRITE_URI_PERMISSION))) return false;
         boolean callerIsSelf = getPackageName().equals(getCallingPackage());
         return FileTranscriptionContract.acceptRequest(
                 FileTranscriptionAccess.scheme(audio), FileTranscriptionAccess.isOwnProvider(this, audio),
@@ -219,7 +237,8 @@ public class TranscribeFileActivity extends AppCompatActivity {
                 closeQuietly(destination);
                 return;
             }
-            job = new FileTranscription(this, audio, true, new JobListener(destination));
+            jobListener = new JobListener(destination);
+            job = new FileTranscription(this, audio, true, jobListener);
             job.start();
         });
     }
@@ -258,6 +277,10 @@ public class TranscribeFileActivity extends AppCompatActivity {
         }
         @Override public void onResult(String text, long audioMs, long computeMs) {
             ParcelFileDescriptor destination = takeOutput();
+            if (cancelled) {
+                closeQuietly(destination);
+                return;
+            }
             if (destination != null && !FileTranscriptionAccess.write(destination, text)) {
                 runOnUiThread(() -> fail(FileTranscriptionContract.Failure.CLIENT,
                         getString(R.string.file_save_failed)));
@@ -352,6 +375,9 @@ public class TranscribeFileActivity extends AppCompatActivity {
         FileTranscription running = job;
         job = null;
         if (running != null) running.cancel();
+        JobListener listener = jobListener;
+        jobListener = null;
+        if (listener != null) closeQuietly(listener.takeOutput());
         if (returnsResult()) setResult(FileTranscriptionContract.activityResult(failure));
         statusText.setText(message);
         progressBar.setVisibility(View.GONE);
@@ -387,7 +413,10 @@ public class TranscribeFileActivity extends AppCompatActivity {
     private void saveTo(Uri document) {
         if (document == null) return;
         String text = resultText.getText().toString();
-        if (text.isEmpty()) return;
+        if (text.isEmpty()) {
+            Toast.makeText(this, R.string.file_save_failed, Toast.LENGTH_SHORT).show();
+            return;
+        }
         new Thread(() -> {
             boolean saved = FileTranscriptionAccess.write(this, document, text);
             runOnUiThread(() -> Toast.makeText(this,

@@ -58,6 +58,7 @@ final class CallerAudioProviderDeviceTest {
         }
         if (!formatChecked || data < 0 || length != 352000) throw new AssertionError("unexpected benchmark PCM");
         byte[] pcm = java.util.Arrays.copyOfRange(wav, data, data + length);
+        RecognitionConcurrencyDeviceTest.run(fixture, pcm);
         // Keep one service connection across cases. Destroying and immediately
         // recreating recognizers races Android's asynchronous service unbind.
         SpeechRecognizer[] recognizer = new SpeechRecognizer[1];

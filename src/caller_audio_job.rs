@@ -37,17 +37,19 @@ pub(crate) struct Queue {
 
 impl Queue {
     pub(crate) fn push(&self, samples: &[f32]) {
-        if samples.is_empty() {
-            return;
+        // Bound queued audio even when a caller writes much faster than real time.
+        const MAX_QUEUED: usize = 120 * 16_000;
+        for chunk in samples.chunks(16_000) {
+            let mut state = self.lock();
+            while !state.ended && !state.stopped && state.buffer.len() + chunk.len() > MAX_QUEUED {
+                state = self.changed.wait(state).unwrap_or_else(|p| p.into_inner());
+            }
+            if state.ended || state.stopped { return; }
+            state.buffer.push(chunk);
+            state.total_samples = state.total_samples.saturating_add(chunk.len() as u64);
+            drop(state);
+            self.changed.notify_all();
         }
-        let mut state = self.lock();
-        if state.ended || state.stopped {
-            return;
-        }
-        state.buffer.push(samples);
-        state.total_samples = state.total_samples.saturating_add(samples.len() as u64);
-        drop(state);
-        self.changed.notify_all();
     }
 
     pub(crate) fn total_samples(&self) -> u64 {
@@ -74,6 +76,7 @@ impl Queue {
                 return Work::Stop;
             }
             if let Some(window) = state.buffer.take_ready(limit) {
+                self.changed.notify_all();
                 return Work::Window(window);
             }
             if state.ended {
@@ -183,5 +186,31 @@ mod tests {
         fn next_ready(&self, limit: usize) -> Option<Vec<f32>> {
             self.lock().buffer.take_ready(limit)
         }
+    }
+}
+
+#[cfg(test)]
+mod backpressure_tests {
+    use super::*;
+    use std::sync::{Arc, mpsc};
+    #[test]
+    fn fast_writer_is_bounded_and_cancel_releases_it() {
+        let queue = Arc::new(Queue::default());
+        let writer = queue.clone();
+        let (done, completed) = mpsc::channel();
+        let thread = std::thread::spawn(move || { writer.push(&vec![0.1; 121 * 16_000]); done.send(()).unwrap(); });
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let state = queue.lock();
+            assert!(state.buffer.len() <= 120 * 16_000);
+            if state.buffer.len() == 120 * 16_000 { break; }
+            drop(state);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(completed.try_recv().is_err());
+        queue.stop();
+        completed.recv_timeout(Duration::from_secs(2)).unwrap();
+        thread.join().unwrap();
     }
 }

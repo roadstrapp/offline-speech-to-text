@@ -275,6 +275,7 @@ fn start_recording_impl(
     // wanted, and held by the capture so every exit path releases it.
     let jvm_for_capture = state.jvm.clone();
     let target_for_capture = state.target_ref.clone();
+    notify_status(&mut env, state.target_ref.as_obj(), "Preparing microphone...");
     let stream = crate::managed_capture::ManagedCapture::open(
         &mut env,
         &jvm_for_capture,
@@ -351,6 +352,9 @@ fn start_recording_impl(
                 }
             } else {
                 log::error!("Stream error: {}", error);
+                if let Ok(mut env) = error_jvm.attach_current_thread() {
+                    notify_status(&mut env, error_target.as_obj(), "Error: microphone capture failed. Try again.");
+                }
                 error_active.store(false, Ordering::SeqCst);
                 if let Some(completion) = error_background.cancel() {
                     error_inference_running.store(false, Ordering::SeqCst);
@@ -387,7 +391,7 @@ fn start_recording_impl(
                 return 2;
             }
             state.stream = Some(capture);
-            notify_status(&mut env, state.target_ref.as_obj(), "Listening...");
+            // ManagedCapture publishes Listening only when setup/play actually finishes.
 
             if let Some((generation, _)) = gate {
                 let health_callback_count = health_callback_count

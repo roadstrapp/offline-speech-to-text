@@ -123,15 +123,15 @@ pub fn acquire(
     class: &GlobalRef,
     context: &JObject,
     again: bool,
+    choice: Option<i32>,
 ) -> Option<RouteGuard> {
-    let token = env
-        .call_static_method(
-            class,
-            if again { "reacquire" } else { "acquire" },
-            "(Landroid/content/Context;)J",
-            &[JValue::Object(context)],
-        )
-        .and_then(|value| value.j());
+    let token = if let Some(choice) = choice.filter(|_| !again) {
+        env.call_static_method(class, "acquireForStart", "(Landroid/content/Context;I)J",
+            &[JValue::Object(context), JValue::Int(choice)])
+    } else {
+        env.call_static_method(class, if again { "reacquire" } else { "acquire" },
+            "(Landroid/content/Context;)J", &[JValue::Object(context)])
+    }.and_then(|value| value.j());
     if env.exception_check().unwrap_or(true) {
         let _ = env.exception_clear();
         return None;
@@ -201,4 +201,11 @@ pub fn notify_fallback(env: &mut JNIEnv, class: &GlobalRef, reason: &str) {
     if env.exception_check().unwrap_or(true) {
         let _ = env.exception_clear();
     }
+}
+
+/// Bind a one-time UI choice before dispatching asynchronous capture setup.
+pub fn take_start_override(env: &mut JNIEnv, class: &GlobalRef) -> i32 {
+    let choice = env.call_static_method(class, "takeStartOverride", "()I", &[]).and_then(|v| v.i()).unwrap_or(-1);
+    if env.exception_check().unwrap_or(true) { let _ = env.exception_clear(); }
+    choice
 }

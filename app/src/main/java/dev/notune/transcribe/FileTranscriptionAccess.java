@@ -36,6 +36,18 @@ final class FileTranscriptionAccess {
         }
     }
 
+    /** Require the requesting uid's own access, not an unrelated grant held by OSTT. */
+    static boolean callerCanAccess(Context context, Uri uri, int uid, int flags) {
+        if (uri == null || uid < 0) return false;
+        if (uid == android.os.Process.myUid()) return true;
+        try {
+            ProviderInfo provider = context.getPackageManager().resolveContentProvider(uri.getAuthority(), 0);
+            if (provider != null && provider.applicationInfo.uid == uid) return true;
+            return context.checkUriPermission(uri, -1, uid, flags)
+                    == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        } catch (RuntimeException e) { return false; }
+    }
+
     static String scheme(Uri uri) {
         return uri == null ? null : uri.getScheme();
     }

@@ -892,6 +892,7 @@ public class RustInputMethodService extends InputMethodService {
     }
 
     private void onMicSourceChanged() {
+        dismissMicSwitch();
         refreshMicSource();
         if (!isRecording || statusView == null) return;
         if (BluetoothMicRoute.takeFallbackNotice()) {
