@@ -143,6 +143,13 @@ public class MainActivity extends AppCompatActivity {
         bindMarkerSwitch(R.id.switch_auto_record, "auto_record", false);
         bindMarkerSwitch(R.id.switch_select_transcription, "select_transcription", false);
         bindMarkerSwitch(R.id.switch_pause_audio, "pause_audio", false);
+        // Bluetooth microphone routing uses the Android 12+ communication-device
+        // API; older versions keep the phone microphone and hide the option.
+        if (BluetoothMicRoute.isSupported()) {
+            bindMarkerSwitch(R.id.switch_bluetooth_mic, BluetoothMicRoute.MARKER, false);
+        } else {
+            findViewById(R.id.row_bluetooth_mic).setVisibility(View.GONE);
+        }
         bindMarkerSwitch(R.id.switch_background_predecode, "background_predecode", false);
         // Record-in-background defaults to ON; its marker file is the opt-out.
         bindMarkerSwitch(R.id.switch_record_background, "stop_on_hide", true);

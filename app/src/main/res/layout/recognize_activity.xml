@@ -65,16 +65,42 @@
                 app:tint="?attr/colorOnPrimaryContainer" />
         </FrameLayout>
 
-        <TextView
-            android:id="@+id/txt_status"
+        <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:layout_marginStart="12dp"
             android:layout_marginEnd="8dp"
-            android:text="Listening… (tap to stop)"
-            android:textColor="?attr/colorOnSurface"
-            android:textAppearance="?attr/textAppearanceTitleSmall" />
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/txt_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Listening… (tap to stop)"
+                android:textColor="?attr/colorOnSurface"
+                android:textAppearance="?attr/textAppearanceTitleSmall" />
+
+            <!-- Which microphone carries the recording; tap to switch. Shown
+                 while recording when a Bluetooth microphone is usable. -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_mic_source"
+                style="@style/Widget.Material3.Button.TonalButton.Icon"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:minHeight="36dp"
+                android:paddingStart="12dp"
+                android:paddingEnd="14dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:text="@string/mic_toggle_phone"
+                android:textAppearance="?attr/textAppearanceLabelLarge"
+                android:visibility="gone"
+                app:icon="@drawable/ic_phone_android"
+                app:iconSize="18dp"
+                app:iconPadding="6dp" />
+        </LinearLayout>
 
         <!-- Close (discard) -->
         <ImageButton

@@ -129,4 +129,18 @@
 <string name="file_saved">Transkript gespeichert</string>
 <string name="file_save_failed">Das Transkript konnte nicht gespeichert werden</string>
 <string name="file_not_audio">Diese Datei scheint keine Audiodatei zu sein</string>
+    <string name="setting_bluetooth_mic">Bluetooth-Mikrofon verwenden, wenn verbunden</string>
+    <string name="setting_bluetooth_mic_desc">Nimmt in Sprach-Tastatur, Popup, langer Aufnahme und Spracheingabe für andere Apps über ein verbundenes Bluetooth-Headset oder LE-Audio-Hörgerät auf. Solange dessen Mikrofon an ist, wechselt das Headset in den Anrufmodus, daher klingen Musik und andere Töne bis zum Ende der Aufnahme schlechter. Ist keines verbunden, wird das Mikrofon des Telefons verwendet.</string>
+    <string name="mic_toggle_bluetooth">Bluetooth-Mikro</string>
+    <string name="mic_toggle_phone">Telefon-Mikro</string>
+    <string name="mic_toggle_desc_bluetooth">Aufnahme über das Bluetooth-Mikrofon. Tippen, um zum Mikrofon des Telefons zu wechseln.</string>
+    <string name="mic_toggle_desc_phone">Aufnahme über das Mikrofon des Telefons. Tippen, um zum Bluetooth-Mikrofon zu wechseln.</string>
+    <string name="mic_switch_to_bluetooth_title">Über das Bluetooth-Mikrofon aufnehmen?</string>
+    <string name="mic_switch_to_phone_title">Über das Mikrofon des Telefons aufnehmen?</string>
+    <string name="mic_switch_message">Beim Wechseln wird diese Aufnahme beendet, alles bisher Gesagte verworfen und die Aufnahme neu gestartet.</string>
+    <string name="mic_switch_once">Für diese Aufnahme wechseln</string>
+    <string name="mic_switch_keep_bluetooth">Wechseln und Bluetooth beibehalten</string>
+    <string name="mic_switch_keep_phone">Wechseln und Telefon beibehalten</string>
+    <string name="mic_fallback_status">Das Bluetooth-Mikrofon liefert keinen Ton mehr. Die Aufnahme läuft mit dem Mikrofon des Telefons weiter.</string>
+    <string name="mic_bt_waiting">Warte auf das Bluetooth-Mikrofon…</string>
 </resources>

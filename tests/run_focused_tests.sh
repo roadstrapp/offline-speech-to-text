@@ -58,7 +58,9 @@ javac -d "$OUT" \
   "$ROOT/tests/SpokenLanguagesTest.java" \
   "$ROOT/tests/PendingTranscriptRecordTest.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/FileTranscriptionContract.java" \
-  "$ROOT/tests/FileTranscriptionContractTest.java"
+  "$ROOT/tests/FileTranscriptionContractTest.java" \
+  "$ROOT/app/src/main/java/dev/notune/transcribe/BluetoothMicPolicy.java" \
+  "$ROOT/tests/BluetoothMicPolicyTest.java"
 java -ea -cp "$OUT" dev.notune.transcribe.HomeNavigationTest
 java -ea -cp "$OUT" dev.notune.transcribe.ModelPresentationTest
 java -ea -cp "$OUT" dev.notune.transcribe.BehaviorTest
@@ -72,6 +74,7 @@ java -ea -cp "$OUT" dev.notune.transcribe.PersonalCorrectionsStoreTest
 java -ea -cp "$OUT" dev.notune.transcribe.PendingTranscriptRecordTest
 java -ea -cp "$OUT" dev.notune.transcribe.SpokenLanguagesTest
 java -ea -cp "$OUT" dev.notune.transcribe.FileTranscriptionContractTest
+java -ea -cp "$OUT" dev.notune.transcribe.BluetoothMicPolicyTest
 
 javac -d "$OUT" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/ForegroundRecordingCoordinator.java" \
@@ -142,6 +145,8 @@ javac -d "$OUT" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/RecognitionSessionPolicy.java" \
   "$ROOT/tests/RecognitionSessionPolicyTest.java"
 java -ea -cp "$OUT" dev.notune.transcribe.RecognitionSessionPolicyTest
+rustc --edition 2021 --test "$ROOT/src/capture_health.rs" -o "$OUT/capture_health_test"
+"$OUT/capture_health_test"
 
 rustc --edition 2021 --test "$ROOT/tests/UpstreamEndpointTest.rs" -o "$OUT/upstream_endpoint_test"
 "$OUT/upstream_endpoint_test"

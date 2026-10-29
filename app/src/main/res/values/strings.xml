@@ -396,4 +396,18 @@
 <string name="file_saved">Transcript saved</string>
 <string name="file_save_failed">Could not save the transcript</string>
 <string name="file_not_audio">This file does not look like audio</string>
+    <string name="setting_bluetooth_mic">Use Bluetooth microphone when connected</string>
+    <string name="setting_bluetooth_mic_desc">Record from a connected Bluetooth headset or LE Audio hearing aid in the voice keyboard, popup, long recording and voice input for other apps. While its microphone is on, the headset switches to call mode, so music and other sound play at lower quality until recording ends. If none is connected, the phone microphone is used.</string>
+    <string name="mic_toggle_bluetooth">Bluetooth mic</string>
+    <string name="mic_toggle_phone">Phone mic</string>
+    <string name="mic_toggle_desc_bluetooth">Recording from the Bluetooth microphone. Tap to switch to the phone microphone.</string>
+    <string name="mic_toggle_desc_phone">Recording from the phone microphone. Tap to switch to the Bluetooth microphone.</string>
+    <string name="mic_switch_to_bluetooth_title">Record from the Bluetooth microphone?</string>
+    <string name="mic_switch_to_phone_title">Record from the phone microphone?</string>
+    <string name="mic_switch_message">Switching stops this recording, discards everything said so far and starts recording again.</string>
+    <string name="mic_switch_once">Switch for this recording</string>
+    <string name="mic_switch_keep_bluetooth">Switch and keep Bluetooth</string>
+    <string name="mic_switch_keep_phone">Switch and keep phone</string>
+    <string name="mic_fallback_status">Bluetooth microphone stopped sending sound. Recording continues on the phone microphone.</string>
+    <string name="mic_bt_waiting">Waiting for the Bluetooth microphone…</string>
 </resources>

@@ -129,4 +129,18 @@
 <string name="file_saved">Transcription enregistrée</string>
 <string name="file_save_failed">Impossible d\'enregistrer la transcription</string>
 <string name="file_not_audio">Ce fichier ne semble pas être un fichier audio</string>
+    <string name="setting_bluetooth_mic">Utiliser le micro Bluetooth s\'il est connecté</string>
+    <string name="setting_bluetooth_mic_desc">Enregistre avec un casque Bluetooth ou une aide auditive LE Audio connectés dans le clavier vocal, la fenêtre de saisie, l\'enregistrement long et la saisie vocale des autres apps. Tant que son micro est actif, le casque passe en mode appel : la musique et les autres sons sont de moins bonne qualité jusqu\'à la fin de l\'enregistrement. Si aucun n\'est connecté, le micro du téléphone est utilisé.</string>
+    <string name="mic_toggle_bluetooth">Micro Bluetooth</string>
+    <string name="mic_toggle_phone">Micro du téléphone</string>
+    <string name="mic_toggle_desc_bluetooth">Enregistrement avec le micro Bluetooth. Appuyez pour passer au micro du téléphone.</string>
+    <string name="mic_toggle_desc_phone">Enregistrement avec le micro du téléphone. Appuyez pour passer au micro Bluetooth.</string>
+    <string name="mic_switch_to_bluetooth_title">Enregistrer avec le micro Bluetooth ?</string>
+    <string name="mic_switch_to_phone_title">Enregistrer avec le micro du téléphone ?</string>
+    <string name="mic_switch_message">Changer de micro arrête cet enregistrement, supprime tout ce qui a été dit jusqu\'ici et relance l\'enregistrement.</string>
+    <string name="mic_switch_once">Changer pour cet enregistrement</string>
+    <string name="mic_switch_keep_bluetooth">Changer et garder le Bluetooth</string>
+    <string name="mic_switch_keep_phone">Changer et garder le téléphone</string>
+    <string name="mic_fallback_status">Le micro Bluetooth n\'envoie plus de son. L\'enregistrement continue avec le micro du téléphone.</string>
+    <string name="mic_bt_waiting">En attente du micro Bluetooth…</string>
 </resources>

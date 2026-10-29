@@ -11,6 +11,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.text.TextUtils;
 import android.util.Log;
 import android.view.ContextThemeWrapper;
 import android.view.KeyEvent;
@@ -50,6 +51,10 @@ public class RustInputMethodService extends InputMethodService {
 
     private TextView statusView;
     private TextView hintView;
+    private com.google.android.material.button.MaterialButton micSourceButton;
+    private androidx.appcompat.app.AlertDialog micSwitchDialog;
+    private Context micSwitchContext;
+    private final Runnable micSourceListener = this::onMicSourceChanged;
     private View recordContainer;
     private ImageView micIcon;
     private View processingRing;
@@ -218,6 +223,11 @@ public class RustInputMethodService extends InputMethodService {
             micLevelView = view.findViewById(R.id.ime_mic_level);
             recordKey = view.findViewById(R.id.ime_record_key);
             hintView = view.findViewById(R.id.ime_hint);
+            micSourceButton = view.findViewById(R.id.ime_mic_source);
+            micSwitchContext = themed;
+            micSourceButton.setOnClickListener(v -> confirmMicSwitch());
+            BluetoothMicRoute.removeListener(micSourceListener);
+            BluetoothMicRoute.addListener(micSourceListener);
             recordingActions = view.findViewById(R.id.ime_recording_actions);
             pauseResumeButton = view.findViewById(R.id.ime_pause_resume);
             cancelRecordingButton = view.findViewById(R.id.ime_cancel_recording);
@@ -351,6 +361,7 @@ public class RustInputMethodService extends InputMethodService {
                 processingResult = false;
                 updateRecordButtonUI(true);
                 startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
+                refreshMicSource();
             });
 
             recordContainer.setOnLongClickListener(v -> {
@@ -492,6 +503,7 @@ public class RustInputMethodService extends InputMethodService {
             recordingPaused = false;
             updateRecordButtonUI(true);
             startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
+            refreshMicSource();
         } finally {
             automaticStartInFlight = false;
         }
@@ -873,8 +885,85 @@ public class RustInputMethodService extends InputMethodService {
             if (hintView != null) hintView.setText("Pause, cancel, or insert");
         } else {
             if (micLevelView != null) micLevelView.setLevel(0f);
+            dismissMicSwitch();
             updateUiState();
         }
+        refreshMicSource();
+    }
+
+    private void onMicSourceChanged() {
+        refreshMicSource();
+        if (!isRecording || statusView == null) return;
+        if (BluetoothMicRoute.takeFallbackNotice()) {
+            setStatusText(R.string.mic_fallback_status);
+        } else if (BluetoothMicRoute.isWaitingForSound()) {
+            setStatusText(R.string.mic_bt_waiting);
+        } else if (!recordingPaused && TextUtils.equals(statusView.getText(),
+                getString(R.string.mic_bt_waiting))) {
+            setStatusText("Listening...");
+        }
+    }
+
+    /** Shows the microphone that really carries the recording (Bluetooth or phone). */
+    private void refreshMicSource() {
+        MicSourceToggle.refresh(micSourceButton, this, isRecording);
+    }
+
+    private void confirmMicSwitch() {
+        if (!isRecording || inputView == null || micSwitchContext == null) return;
+        dismissMicSwitch();
+        try {
+            micSwitchDialog = MicSourceToggle.confirm(micSwitchContext,
+                    inputView.getWindowToken(), this::restartOnMicrophone);
+        } catch (RuntimeException e) {
+            // A window that went away between the tap and the dialog keeps recording.
+            Log.w(TAG, "microphone switch dialog unavailable", e);
+            micSwitchDialog = null;
+        }
+    }
+
+    private void dismissMicSwitch() {
+        if (micSwitchDialog != null && micSwitchDialog.isShowing()) {
+            try { micSwitchDialog.dismiss(); } catch (RuntimeException ignored) { }
+        }
+        micSwitchDialog = null;
+    }
+
+    /**
+     * The switch's confirmed choice: discard this recording completely and
+     * record again, into the same editor, on the other microphone.
+     */
+    private void restartOnMicrophone(boolean bluetooth) {
+        micSwitchDialog = null;
+        if (!isRecording) return;
+        processingResult = false;
+        pendingSwitchBack = false;
+        recordingSession.discard();
+        finishTroubleshooting("discarded");
+        try {
+            cancelRecording();
+        } catch (Throwable t) {
+            Log.w(TAG, "cancelRecording failed, stopping without commit", t);
+            try { stopRecording(); } catch (Throwable ignored) { }
+        }
+        updateRecordButtonUI(false);
+        lastStatus = "Ready";
+        InputConnection editor = getCurrentInputConnection();
+        if (!editorSafeForDictation || !inputActive || editor == null) {
+            releasePauseAudio();
+            if (statusView != null) setStatusText(R.string.ime_recording_discarded);
+            return;
+        }
+        if (isPauseAudioEnabled() && !pauseAudioActive) {
+            audioPauser.request(this);
+            pauseAudioActive = true;
+        }
+        BluetoothMicRoute.overrideNextStart(bluetooth);
+        recordingSession.begin(editor, editorGeneration);
+        recordingPaused = false;
+        updateRecordButtonUI(true);
+        startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
+        refreshMicSource();
     }
 
     private void updateRecordingActionsUi() {
@@ -905,6 +994,8 @@ public class RustInputMethodService extends InputMethodService {
 
     @Override
     public void onDestroy() {
+        BluetoothMicRoute.removeListener(micSourceListener);
+        dismissMicSwitch();
         finishTroubleshooting("destroy");
         unbindLongRecordingState();
         cancelDeletePreview();

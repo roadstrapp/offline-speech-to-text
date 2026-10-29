@@ -129,4 +129,18 @@
 <string name="file_saved">Trascrizione salvata</string>
 <string name="file_save_failed">Impossibile salvare la trascrizione</string>
 <string name="file_not_audio">Questo file non sembra un file audio</string>
+    <string name="setting_bluetooth_mic">Usa il microfono Bluetooth se connesso</string>
+    <string name="setting_bluetooth_mic_desc">Registra da cuffie Bluetooth o da un apparecchio acustico LE Audio connessi nella tastiera vocale, nella finestra di immissione, nella registrazione lunga e nell\'immissione vocale per altre app. Finché il microfono è attivo, le cuffie passano alla modalità chiamata, quindi musica e altri suoni hanno una qualità inferiore fino alla fine della registrazione. Se non ne è connesso nessuno, viene usato il microfono del telefono.</string>
+    <string name="mic_toggle_bluetooth">Microfono Bluetooth</string>
+    <string name="mic_toggle_phone">Microfono del telefono</string>
+    <string name="mic_toggle_desc_bluetooth">Registrazione dal microfono Bluetooth. Tocca per passare al microfono del telefono.</string>
+    <string name="mic_toggle_desc_phone">Registrazione dal microfono del telefono. Tocca per passare al microfono Bluetooth.</string>
+    <string name="mic_switch_to_bluetooth_title">Registrare dal microfono Bluetooth?</string>
+    <string name="mic_switch_to_phone_title">Registrare dal microfono del telefono?</string>
+    <string name="mic_switch_message">Il cambio interrompe questa registrazione, scarta tutto ciò che è stato detto finora e ricomincia a registrare.</string>
+    <string name="mic_switch_once">Cambia per questa registrazione</string>
+    <string name="mic_switch_keep_bluetooth">Cambia e mantieni Bluetooth</string>
+    <string name="mic_switch_keep_phone">Cambia e mantieni il telefono</string>
+    <string name="mic_fallback_status">Il microfono Bluetooth ha smesso di inviare audio. La registrazione continua con il microfono del telefono.</string>
+    <string name="mic_bt_waiting">In attesa del microfono Bluetooth…</string>
 </resources>

@@ -129,4 +129,18 @@
 <string name="file_saved">Transcrição salva</string>
 <string name="file_save_failed">Não foi possível salvar a transcrição</string>
 <string name="file_not_audio">Este arquivo não parece ser de áudio</string>
+    <string name="setting_bluetooth_mic">Usar microfone Bluetooth quando conectado</string>
+    <string name="setting_bluetooth_mic_desc">Grava com um headset Bluetooth ou um aparelho auditivo LE Audio conectado no teclado de voz, na janela de entrada, na gravação longa e na entrada de voz de outros apps. Enquanto o microfone está ativo, o headset muda para o modo de chamada, então músicas e outros sons ficam com qualidade menor até o fim da gravação. Se nenhum estiver conectado, o microfone do telefone é usado.</string>
+    <string name="mic_toggle_bluetooth">Microfone Bluetooth</string>
+    <string name="mic_toggle_phone">Microfone do telefone</string>
+    <string name="mic_toggle_desc_bluetooth">Gravando com o microfone Bluetooth. Toque para mudar para o microfone do telefone.</string>
+    <string name="mic_toggle_desc_phone">Gravando com o microfone do telefone. Toque para mudar para o microfone Bluetooth.</string>
+    <string name="mic_switch_to_bluetooth_title">Gravar com o microfone Bluetooth?</string>
+    <string name="mic_switch_to_phone_title">Gravar com o microfone do telefone?</string>
+    <string name="mic_switch_message">A troca interrompe esta gravação, descarta tudo o que foi dito até agora e começa a gravar de novo.</string>
+    <string name="mic_switch_once">Trocar nesta gravação</string>
+    <string name="mic_switch_keep_bluetooth">Trocar e manter Bluetooth</string>
+    <string name="mic_switch_keep_phone">Trocar e manter o telefone</string>
+    <string name="mic_fallback_status">O microfone Bluetooth parou de enviar som. A gravação continua com o microfone do telefone.</string>
+    <string name="mic_bt_waiting">Aguardando o microfone Bluetooth…</string>
 </resources>

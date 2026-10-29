@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::HostTrait;
 use jni::objects::{GlobalRef, JObject, JValue};
 use jni::JNIEnv;
 
@@ -38,7 +38,9 @@ fn has_two_seconds_of_digital_zero(since_last_nonzero: Duration) -> bool {
     since_last_nonzero >= DIGITAL_ZERO_TIMEOUT
 }
 
-pub struct SendStream(#[allow(dead_code)] pub cpal::Stream);
+/// The recording's microphone; it owns the optional Bluetooth route and its
+/// recovery (see managed_capture.rs).
+pub struct SendStream(pub crate::managed_capture::ManagedCapture);
 unsafe impl Send for SendStream {}
 unsafe impl Sync for SendStream {}
 
@@ -196,7 +198,7 @@ fn start_recording_impl(
     state.owns_session.store(true, Ordering::SeqCst);
     state.inference_running.store(false, Ordering::SeqCst);
     let host = cpal::default_host();
-    let device = match host.default_input_device() {
+    let _device = match host.default_input_device() {
         Some(d) => d,
         None => {
             notify_status(
@@ -207,12 +209,6 @@ fn start_recording_impl(
             release_owned_session(state);
             return 2;
         }
-    };
-
-    let config = cpal::StreamConfig {
-        channels: 1,
-        sample_rate: cpal::SampleRate(16000),
-        buffer_size: cpal::BufferSize::Default,
     };
 
     state.audio_buffer.lock().unwrap().reset();
@@ -275,9 +271,15 @@ fn start_recording_impl(
     let mut endpointer = crate::endpoint::Endpointer::new();
     let mut last_level_sent = Instant::now();
     let mut audio_started = false;
-    let stream = device.build_input_stream(
-        &config,
-        move |data: &[f32], _: &_| {
+    // Optional Bluetooth microphone: requested only for a start that is still
+    // wanted, and held by the capture so every exit path releases it.
+    let jvm_for_capture = state.jvm.clone();
+    let target_for_capture = state.target_ref.clone();
+    let stream = crate::managed_capture::ManagedCapture::open(
+        &mut env,
+        &jvm_for_capture,
+        target_for_capture.as_obj(),
+        move |data: &[f32]| {
             if let Some(callback_count) = &health_callback_count_data {
                 callback_count.fetch_add(1, Ordering::Relaxed);
             }
@@ -335,7 +337,7 @@ fn start_recording_impl(
                 }
             }
         },
-        move |error| {
+        move |error: String| {
             if let Some(generation) = error_generation {
                 if error_active.swap(false, Ordering::SeqCst) {
                     if let Ok(mut callback_env) = error_jvm.attach_current_thread() {
@@ -361,18 +363,19 @@ fn start_recording_impl(
                 }
             }
         },
-        None,
     );
 
     match stream {
         Ok(s) => {
+            let bluetooth_watched = s.bluetooth_watched();
+            let capture = SendStream(s);
             if start_is_cancelled(&mut env, state, gate) {
                 state.session_active.store(false, Ordering::SeqCst);
                 stop_background_worker(state);
                 release_owned_session(state);
                 return 1;
             }
-            if let Err(e) = s.play() {
+            if let Err(e) = capture.0.play() {
                 state.session_active.store(false, Ordering::SeqCst);
                 stop_background_worker(state);
                 release_owned_session(state);
@@ -383,7 +386,7 @@ fn start_recording_impl(
                 );
                 return 2;
             }
-            state.stream = Some(SendStream(s));
+            state.stream = Some(capture);
             notify_status(&mut env, state.target_ref.as_obj(), "Listening...");
 
             if let Some((generation, _)) = gate {
@@ -403,6 +406,14 @@ fn start_recording_impl(
                         std::thread::sleep(Duration::from_millis(CAPTURE_HEALTH_MONITOR_MS));
                         if !session_active.load(Ordering::SeqCst) {
                             return;
+                        }
+                        if bluetooth_watched.load(Ordering::SeqCst) {
+                            // The Bluetooth watchdog judges this stream and
+                            // recovers it (a moment of zeros after a route
+                            // switch is normal there); judge only what follows.
+                            callback_changed = Instant::now();
+                            nonzero_changed = Instant::now();
+                            continue;
                         }
                         let callbacks = health_callback_count.load(Ordering::Relaxed);
                         if callbacks != callback_seen {

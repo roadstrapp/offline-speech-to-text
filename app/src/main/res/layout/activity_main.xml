@@ -63,6 +63,13 @@
                     </LinearLayout>
                     <com.google.android.material.materialswitch.MaterialSwitch ns0:id="@+id/switch_pause_audio" ns0:layout_width="wrap_content" ns0:layout_height="wrap_content" />
                 </LinearLayout>
+                <LinearLayout ns0:id="@+id/row_bluetooth_mic" ns0:layout_width="match_parent" ns0:layout_height="wrap_content" ns0:orientation="horizontal" ns0:gravity="center_vertical" ns0:layout_marginTop="16dp">
+                    <LinearLayout ns0:layout_width="0dp" ns0:layout_height="wrap_content" ns0:layout_weight="1" ns0:orientation="vertical" ns0:layout_marginEnd="16dp">
+                        <TextView ns0:layout_width="wrap_content" ns0:layout_height="wrap_content" ns0:text="@string/setting_bluetooth_mic" ns0:textAppearance="?attr/textAppearanceBodyLarge" ns0:labelFor="@id/switch_bluetooth_mic" />
+                        <TextView ns0:layout_width="wrap_content" ns0:layout_height="wrap_content" ns0:layout_marginTop="2dp" ns0:text="@string/setting_bluetooth_mic_desc" ns0:textAppearance="?attr/textAppearanceBodyMedium" ns0:textColor="?attr/colorOnSurfaceVariant" />
+                    </LinearLayout>
+                    <com.google.android.material.materialswitch.MaterialSwitch ns0:id="@+id/switch_bluetooth_mic" ns0:layout_width="wrap_content" ns0:layout_height="wrap_content" />
+                </LinearLayout>
                 <LinearLayout ns0:layout_width="match_parent" ns0:layout_height="wrap_content" ns0:orientation="horizontal" ns0:gravity="center_vertical" ns0:layout_marginTop="16dp">
                     <LinearLayout ns0:layout_width="0dp" ns0:layout_height="wrap_content" ns0:layout_weight="1" ns0:orientation="vertical" ns0:layout_marginEnd="16dp">
                         <TextView ns0:layout_width="wrap_content" ns0:layout_height="wrap_content" ns0:text="@string/setting_auto_stop" ns0:textAppearance="?attr/textAppearanceBodyLarge" ns0:labelFor="@id/switch_auto_stop" />

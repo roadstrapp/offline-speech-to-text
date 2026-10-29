@@ -129,4 +129,18 @@
 <string name="file_saved">Текст сохранён</string>
 <string name="file_save_failed">Не удалось сохранить текст</string>
 <string name="file_not_audio">Этот файл не похож на аудиофайл</string>
+    <string name="setting_bluetooth_mic">Использовать Bluetooth-микрофон, если подключён</string>
+    <string name="setting_bluetooth_mic_desc">Запись через подключённую Bluetooth-гарнитуру или слуховой аппарат LE Audio в голосовой клавиатуре, окне ввода, длинной записи и голосовом вводе для других приложений. Пока микрофон включён, гарнитура переходит в режим звонка, поэтому музыка и другие звуки звучат хуже до конца записи. Если ничего не подключено, используется микрофон телефона.</string>
+    <string name="mic_toggle_bluetooth">Bluetooth-микрофон</string>
+    <string name="mic_toggle_phone">Микрофон телефона</string>
+    <string name="mic_toggle_desc_bluetooth">Запись через Bluetooth-микрофон. Нажмите, чтобы переключиться на микрофон телефона.</string>
+    <string name="mic_toggle_desc_phone">Запись через микрофон телефона. Нажмите, чтобы переключиться на Bluetooth-микрофон.</string>
+    <string name="mic_switch_to_bluetooth_title">Записывать через Bluetooth-микрофон?</string>
+    <string name="mic_switch_to_phone_title">Записывать через микрофон телефона?</string>
+    <string name="mic_switch_message">Переключение остановит эту запись, удалит всё сказанное до этого момента и начнёт запись заново.</string>
+    <string name="mic_switch_once">Переключить для этой записи</string>
+    <string name="mic_switch_keep_bluetooth">Переключить и оставить Bluetooth</string>
+    <string name="mic_switch_keep_phone">Переключить и оставить телефон</string>
+    <string name="mic_fallback_status">Bluetooth-микрофон перестал передавать звук. Запись продолжается через микрофон телефона.</string>
+    <string name="mic_bt_waiting">Ожидание Bluetooth-микрофона…</string>
 </resources>
