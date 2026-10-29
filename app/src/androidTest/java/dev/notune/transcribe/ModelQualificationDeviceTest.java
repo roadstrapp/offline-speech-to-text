@@ -32,7 +32,11 @@ final class ModelQualificationDeviceTest {
         this.directory = test.getTargetContext().getFilesDir();
     }
 
-    static void runPrepared(Instrumentation test) {
+    static void runPrepared(Instrumentation test) { runPrepared(test, false); }
+
+    static void runSetup(Instrumentation test) { runPrepared(test, true); }
+
+    private static void runPrepared(Instrumentation test, boolean setupOnly) {
         ModelQualificationDeviceTest fixture = new ModelQualificationDeviceTest(test);
         Bundle result = new Bundle();
         Activity main = null;
@@ -48,15 +52,17 @@ final class ModelQualificationDeviceTest {
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             fixture.download(ModelCatalog.findByFileName(REFERENCE));
             fixture.select(REFERENCE);
-            fixture.report.put("transcription", fixture.transcribe());
-            fixture.closeFile();
-            main = test.startActivitySync(new Intent(test.getTargetContext(), MainActivity.class)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-            long[] evidence = PreparedWindowsDeviceTest.run(test, main);
-            fixture.report.put("prepared_windows", evidence[1]);
-            fixture.report.put("deferred_ms", evidence[2]);
-            fixture.report.put("early_ms", evidence[3]);
-            fixture.report.put("prepared_stop_ms", evidence[4]);
+            if (!setupOnly) {
+                fixture.report.put("transcription", fixture.transcribe());
+                fixture.closeFile();
+                main = test.startActivitySync(new Intent(test.getTargetContext(), MainActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                long[] evidence = PreparedWindowsDeviceTest.run(test, main);
+                fixture.report.put("prepared_windows", evidence[1]);
+                fixture.report.put("deferred_ms", evidence[2]);
+                fixture.report.put("early_ms", evidence[3]);
+                fixture.report.put("prepared_stop_ms", evidence[4]);
+            }
             fixture.report.put("status", "PASS");
         } catch (Throwable error) {
             code = Activity.RESULT_CANCELED;
@@ -67,7 +73,7 @@ final class ModelQualificationDeviceTest {
             if (main != null) { Activity closing = main; test.runOnMainSync(closing::finish); }
             if (fixture.models != null) test.runOnMainSync(fixture.models::finish);
         }
-        result.putString("prepared_qualification", fixture.report.toString());
+        result.putString(setupOnly ? "model_setup" : "prepared_qualification", fixture.report.toString());
         test.finish(code, result);
     }
 

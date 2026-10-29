@@ -28,6 +28,8 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
     private boolean donationUi;
     private boolean redesignUi;
     private boolean seedUiUpgrade;
+    private boolean captureCapability;
+    private boolean qualifySetup;
     private boolean fileApi;
     private int fileApiMinutes;
     private int callerAudioMinutes;
@@ -62,11 +64,15 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             String pace = arguments.getString("caller_audio_pace");
             callerAudioPace = pace == null ? 0 : Integer.parseInt(pace);
         }
+        qualifySetup = arguments != null && "true".equals(arguments.getString("qualify_setup"));
+        captureCapability = arguments != null && "true".equals(arguments.getString("capture_capability"));
         start();
     }
 
     @Override
     public void onStart() {
+        if (qualifySetup) { ModelQualificationDeviceTest.runSetup(this); return; }
+        if (captureCapability) { AudioCaptureCapabilityDeviceTest.run(this); return; }
         if (qualifyPrepared) { ModelQualificationDeviceTest.runPrepared(this); return; }
         if (fileApi) { FileApiDeviceTest.run(this, fileApiMinutes); return; }
         if (callerAudioMinutes > 0) {
