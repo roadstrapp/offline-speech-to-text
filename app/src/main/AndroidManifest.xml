@@ -184,6 +184,12 @@
                 android:resource="@xml/recognition_service" />
         </service>
 
+        <!-- Keeps a keyboard dictation recording while the keyboard is hidden -->
+        <service
+            android:name=".ImeDictationService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
         <!-- IME Service -->
         <service
             android:name=".RustInputMethodService"

@@ -143,4 +143,8 @@
     <string name="mic_switch_keep_phone">Wechseln und Telefon beibehalten</string>
     <string name="mic_fallback_status">Das Bluetooth-Mikrofon liefert keinen Ton mehr. Die Aufnahme läuft mit dem Mikrofon des Telefons weiter.</string>
     <string name="mic_bt_waiting">Warte auf das Bluetooth-Mikrofon…</string>
+    <string name="ime_dictation_channel">Tastatur-Diktat</string>
+    <string name="ime_dictation_title">Diktat läuft</string>
+    <string name="ime_dictation_text">Die Aufnahme läuft auch bei ausgeschaltetem Bildschirm weiter. Zum Einfügen des Textes stoppen.</string>
+    <string name="ime_dictation_stop">Stopp</string>
 </resources>

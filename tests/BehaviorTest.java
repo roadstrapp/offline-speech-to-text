@@ -655,18 +655,20 @@ public final class BehaviorTest {
         Object replacementEditor = new Object();
         ImeRecordingSession session = new ImeRecordingSession();
 
-        session.begin(originalEditor, 7L);
+        session.begin(originalEditor, 7L, "com.example.chat");
         assertEquals(true, session.canCommitTo(originalEditor, 7L, true, true),
                 "a transcription may commit to its original active safe editor");
         assertEquals(true, session.canCommitTo(replacementEditor, 7L, true, true),
                 "a replacement IPC wrapper remains valid in the same editor lifecycle");
         assertEquals(false, session.canCommitTo(originalEditor, 8L, true, true),
                 "a transcription never commits after Android starts another editor");
-        assertEquals(true, session.canDeliverToCurrent(replacementEditor, true, true),
+        assertEquals(true, session.canDeliverToCurrent(replacementEditor, true, true, "com.example.chat"),
                 "a completed result follows Android's current safe composer");
-        assertEquals(false, session.canDeliverToCurrent(null, true, true),
+        assertEquals(false, session.canDeliverToCurrent(replacementEditor, true, true, "com.example.other"),
+                "a dictation that outlived its editor (screen lock, app switch) never goes to another app");
+        assertEquals(false, session.canDeliverToCurrent(null, true, true, "com.example.chat"),
                 "delivery waits while a recreated composer has no connection");
-        assertEquals(false, session.canDeliverToCurrent(replacementEditor, false, true),
+        assertEquals(false, session.canDeliverToCurrent(replacementEditor, false, true, "com.example.chat"),
                 "delivery never targets a sensitive replacement composer");
         assertEquals(false, session.canCommitTo(originalEditor, 7L, false, true),
                 "a transcription never commits to a sensitive editor");
@@ -674,11 +676,11 @@ public final class BehaviorTest {
                 "a transcription never commits without active input");
 
         ImeRecordingSession failedSession = new ImeRecordingSession();
-        failedSession.begin(originalEditor, 7L);
+        failedSession.begin(originalEditor, 7L, "com.example.chat");
         failedSession.onError();
         assertEquals(false, failedSession.canCommitTo(originalEditor, 7L, true, true),
                 "an error fail-closes an otherwise active recording");
-        assertEquals(false, failedSession.canDeliverToCurrent(replacementEditor, true, true),
+        assertEquals(false, failedSession.canDeliverToCurrent(replacementEditor, true, true, "com.example.chat"),
                 "an error also blocks delivery to a replacement composer");
 
         session.discard();
@@ -686,7 +688,7 @@ public final class BehaviorTest {
         assertEquals(false, session.canCommitTo(originalEditor, 7L, true, true),
                 "an error cannot clear the discard latch for a late transcription");
 
-        session.begin(originalEditor, 9L);
+        session.begin(originalEditor, 9L, "com.example.chat");
         assertEquals(true, session.canCommitTo(originalEditor, 9L, true, true),
                 "only a new recording clears the discard latch");
         session.finish();

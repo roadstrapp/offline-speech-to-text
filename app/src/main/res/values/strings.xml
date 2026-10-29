@@ -411,4 +411,8 @@
     <string name="mic_switch_keep_phone">Switch and keep phone</string>
     <string name="mic_fallback_status">Bluetooth microphone stopped sending sound. Recording continues on the phone microphone.</string>
     <string name="mic_bt_waiting">Waiting for the Bluetooth microphone…</string>
+    <string name="ime_dictation_channel">Keyboard dictation</string>
+    <string name="ime_dictation_title">Dictation in progress</string>
+    <string name="ime_dictation_text">Keeps recording with the screen off. Stop to insert the text.</string>
+    <string name="ime_dictation_stop">Stop</string>
 </resources>

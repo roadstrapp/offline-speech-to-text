@@ -143,4 +143,8 @@
     <string name="mic_switch_keep_phone">Trocar e manter o telefone</string>
     <string name="mic_fallback_status">O microfone Bluetooth parou de enviar som. A gravação continua com o microfone do telefone.</string>
     <string name="mic_bt_waiting">Aguardando o microfone Bluetooth…</string>
+    <string name="ime_dictation_channel">Ditado do teclado</string>
+    <string name="ime_dictation_title">Ditado em curso</string>
+    <string name="ime_dictation_text">Continua a gravar com o ecrã desligado. Pare para inserir o texto.</string>
+    <string name="ime_dictation_stop">Parar</string>
 </resources>
