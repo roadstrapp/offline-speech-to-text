@@ -322,8 +322,8 @@ final class ModelQualificationDeviceTest {
         check(modelPath.equals(loadedPath()), "wrong engine before file decode");
         String configuration = loadedConfiguration();
         check(configuration != null, "loaded configuration unavailable before decode");
-        Uri uri = new Uri.Builder().scheme("content").authority(test.getTargetContext().getPackageName()+".fileprovider")
-                .appendPath("diagnostic_exports").appendPath(audio.getName()).build();
+        Uri uri = new Uri.Builder().scheme("content").authority("app.offlinespeechtotext.validation.test.public_audio")
+                .appendPath(asset).build();
         long start = SystemClock.elapsedRealtime();
         fileActivity = test.startActivitySync(new Intent(Intent.ACTION_VIEW, uri, test.getTargetContext(), TranscribeFileActivity.class)
                 .setDataAndType(uri,"audio/wav").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION));
