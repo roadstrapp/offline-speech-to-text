@@ -13,9 +13,6 @@ import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 
-import androidx.activity.result.ActivityResult;
-import androidx.activity.result.ActivityResultLauncher;
-import androidx.activity.result.contract.ActivityResultContracts;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -33,7 +30,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * File-transcription contracts against the real service and activity: request admission,
  * error mapping, the no-model answer, bench transcription with an output document, a long
  * (default 25-minute) file, prompt cancellation and the activity result. Only lengths,
- * counts, codes and timings are reported; transcript text stays in memory.
+ * counts, codes and timings are reported. Public-fixture transcripts are written
+ * only to the owned fixture cache for output comparisons.
  *
  * <p>Run with {@code -e file_api true}; add {@code -e file_api_minutes N} to change the
  * long-file duration (0 skips it). Without an installed model only the stages that need no
@@ -220,42 +218,51 @@ final class FileApiDeviceTest {
                     "long file windowing: " + repeats + "/" + expected);
         }
 
-        // The activity-result contract, hosted by this app's own ComponentActivity.
-        Activity host = test.startActivitySync(new Intent(test.getTargetContext(), MainActivity.class)
+        report.putString("completed_stage", "file-service-checks");
+        test.sendStatus(0, new Bundle(report));
+        Activity requestForeground = test.startActivitySync(new Intent(test.getTargetContext(), MainActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         try {
-            Files.write(output.toPath(), "stale".getBytes(StandardCharsets.UTF_8));
-            AtomicReference<ActivityResult> result = new AtomicReference<>();
-            CountDownLatch done = new CountDownLatch(1);
-            Intent intent = new Intent(FileTranscriptionContract.ACTION_TRANSCRIBE_AUDIO)
-                    .setPackage(test.getTargetContext().getPackageName())
-                    .setDataAndType(uri(bench), "audio/wav")
-                    .putExtra(FileTranscriptionContract.EXTRA_OUTPUT_URI, uri(output))
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-            @SuppressWarnings("unchecked")
-            ActivityResultLauncher<Intent>[] launcher = new ActivityResultLauncher[1];
-            test.runOnMainSync(() -> {
-                launcher[0] = ((androidx.activity.ComponentActivity) host).getActivityResultRegistry()
-                        .register("file-api-test", new ActivityResultContracts.StartActivityForResult(),
-                                value -> { result.set(value); done.countDown(); });
-                launcher[0].launch(intent);
-            });
-            check(done.await(120, TimeUnit.SECONDS), "activity result timed out");
-            test.runOnMainSync(() -> launcher[0].unregister());
-            check(result.get().getResultCode() == Activity.RESULT_OK,
-                    "activity result code " + result.get().getResultCode());
-            ArrayList<String> results = result.get().getData() == null ? null
-                    : result.get().getData().getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
-            check(results != null && results.size() == 1, "EXTRA_RESULTS missing");
-            check(words(results.get(0)).endsWith("for your country"), "activity transcript lost tail");
-            check(new String(Files.readAllBytes(output.toPath()), StandardCharsets.UTF_8).equals(results.get(0)),
-                    "activity output document differs");
+            String requestId = java.util.UUID.randomUUID().toString();
+            // A real distinct-UID caller; no dependency on classes removed by app shrinking.
+            test.getTargetContext().startActivity(new Intent().setComponent(new ComponentName(
+                    test.getContext().getPackageName(), ContractResultHostActivity.class.getName()))
+                    .putExtra("request_id", requestId)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            org.json.JSONObject returned = null;
+            long deadline = SystemClock.elapsedRealtime() + 120000;
+            while (SystemClock.elapsedRealtime() < deadline) {
+                try (InputStream input = test.getTargetContext().getContentResolver().openInputStream(ContractFixtureProvider.uri("report.json"))) {
+                    if (input != null) returned = new org.json.JSONObject(new String(readAll(input), StandardCharsets.UTF_8));
+                } catch (Exception pending) { SystemClock.sleep(100); continue; }
+                if (returned != null && requestId.equals(returned.optString("request_id"))) break;
+                returned = null; SystemClock.sleep(100);
+            }
+            check(returned != null, "activity result timed out");
+            check(returned.getInt("result_code") == Activity.RESULT_OK, "activity result code " + returned.optInt("result_code"));
+            org.json.JSONArray returnedText = returned.getJSONArray("results");
+            check(returnedText.length() == 1, "EXTRA_RESULTS missing");
+            String returnedTranscript = returnedText.getString(0);
+            check(words(returnedTranscript).endsWith("for your country"), "activity transcript lost tail");
+            try (InputStream input = test.getTargetContext().getContentResolver().openInputStream(ContractFixtureProvider.uri("output.txt"))) {
+                check(input != null && new String(readAll(input), StandardCharsets.UTF_8).equals(returnedTranscript), "activity output document differs");
+            }
         } finally {
-            test.runOnMainSync(host::finish);
+            test.runOnMainSync(requestForeground::finish);
             test.waitForIdleSync();
         }
         report.putString("checks", "admission, unreadable/undecodable/silence errors, bench+output, "
                 + (longFile != null ? "cancel+reuse, long file, " : "") + "activity result+output");
+    }
+
+    private static byte[] readAll(InputStream input) throws java.io.IOException {
+        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+        byte[] block = new byte[8192]; int count;
+        while ((count = input.read(block)) != -1) {
+            if (output.size() + count > 1048576) throw new java.io.IOException("Fixture response too large");
+            output.write(block, 0, count);
+        }
+        return output.toByteArray();
     }
 
     private void close() {

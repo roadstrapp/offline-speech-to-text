@@ -20,7 +20,11 @@ import java.util.concurrent.TimeUnit;
  * Requires the packaged public benchmark and an already installed supported model.
  * Recognition text stays in memory; no saved transcript or model file is collected. */
 final class CallerAudioProviderDeviceTest {
-    static void run(Instrumentation fixture) throws Exception {
+    static void run(Instrumentation fixture) throws Exception { run(fixture, true); }
+
+    static void runWithoutMicrophone(Instrumentation fixture) throws Exception { run(fixture, false); }
+
+    private static void run(Instrumentation fixture, boolean includeMicrophone) throws Exception {
         byte[] wav;
         try (InputStream input = fixture.getTargetContext().getAssets().open("bench.wav")) {
             ByteArrayOutputStream output = new ByteArrayOutputStream();
@@ -58,7 +62,7 @@ final class CallerAudioProviderDeviceTest {
         }
         if (!formatChecked || data < 0 || length != 352000) throw new AssertionError("unexpected benchmark PCM");
         byte[] pcm = java.util.Arrays.copyOfRange(wav, data, data + length);
-        RecognitionConcurrencyDeviceTest.run(fixture, pcm);
+        if (includeMicrophone) RecognitionConcurrencyDeviceTest.run(fixture, pcm);
         // Keep one service connection across cases. Destroying and immediately
         // recreating recognizers races Android's asynchronous service unbind.
         SpeechRecognizer[] recognizer = new SpeechRecognizer[1];
@@ -68,6 +72,8 @@ final class CallerAudioProviderDeviceTest {
         try {
             String eof = recognize(fixture, recognizer[0], pcm, false, 0);
             String stop = recognize(fixture, recognizer[0], pcm, true, 0);
+            if (!eof.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z ]", "").trim().endsWith("for your country"))
+                throw new AssertionError("caller benchmark lost its tail");
             if (!eof.equals(stop)) throw new AssertionError("Stop differed from complete EOF benchmark");
             recognize(fixture, recognizer[0], new byte[] {1, 2, 3}, false, SpeechRecognizer.ERROR_AUDIO);
             recognize(fixture, recognizer[0], new byte[320], false, SpeechRecognizer.ERROR_NO_MATCH);

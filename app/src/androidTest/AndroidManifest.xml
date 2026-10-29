@@ -3,5 +3,9 @@
         <provider android:name="dev.notune.transcribe.PublicAudioProvider"
             android:authorities="app.offlinespeechtotext.validation.test.public_audio"
             android:exported="true" />
+        <provider android:name="dev.notune.transcribe.ContractFixtureProvider"
+            android:authorities="app.offlinespeechtotext.validation.test.contract_fixture"
+            android:exported="false" android:grantUriPermissions="true" />
+        <activity android:name="dev.notune.transcribe.ContractResultHostActivity" android:exported="true" />
     </application>
 </manifest>
