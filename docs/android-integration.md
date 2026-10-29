@@ -108,9 +108,34 @@ Offline Speech to Text currently reports ready, beginning-of-speech, RMS, end-of
 
 Offline Speech to Text snapshots the private preferred-word list once per transcription. Capable Whisper backends receive a bounded prompt; every model also restores exact preferred words and phrases, including letter-and-digit names and hyphenated and apostrophe-joined names with identical punctuation, applies conservative close-spelling cleanup to single words, and recognizes a few narrowly defined spoken identifier forms after decoding. For English output, standalone “uh” and “um” fillers are removed after dictionary processing. Output counts as English when the model or language setting says so, or when the transcript itself is clearly English (at least two English-only function words making up a quarter of its words); other output is unchanged. All-capital UH and UM, quoted text, code and paths remain literal. A preferred UH or UM entry also preserves and capitalizes its lowercase matches. Exact correction sources match the raw transcript, so a source containing an intervening filler must include it. The multilingual Parakeet v3 model does not report a detected language in Auto mode, so there cleanup relies on that transcript check; very short utterances may lack the evidence, and selecting English in OSTT's model-language setting removes the doubt. If the user enables advanced exact correction pairs, they run first on the final assembled transcript so an explicit rule wins over a preferred match or close-spelling guess. Every activity, recognition-service, file, subtitle, long-recording, and IME result receives the same final processing. Whisper hints and cleanup derive from one immutable word-list read per complete job. Exact replacements and matched preferred terms stay protected through later cleanup, with protection offsets updated after spelling changes; each pass also checks the whole match against quotes, code, URLs, email addresses, and dotted identifiers. OSTT supplies the complete cleanup pass for integrators. This is not native Parakeet phrase boosting or general phonetic matching, and dictionary contents are never exposed to callers or diagnostic logs.
 
-Long caller-audio sessions remain one ordinary recognition request. OSTT keeps the supplied PCM as one continuous utterance and calls the standard final `onResults` only after the writer closes or the caller stops listening. Ordinary dictations use one model run. Whisper owns its native long-input windows; long input to other offline families is bounded with overlapping quiet-point windows and text-overlap reconciliation inside OSTT. An ordinary hesitation is never used as an app-level endpoint. Do not enable `EXTRA_SEGMENTED_SESSION` or concatenate partial callbacks. `cancel()` discards the captured utterance.
+Long caller-audio sessions remain one ordinary recognition request. OSTT keeps the supplied PCM as one continuous utterance and calls the standard final `onResults` only after the writer closes or the caller stops listening. Caller audio is decoded like a shared file while it arrives: in the model's bounded windows (one minute for Whisper), split at quiet points with overlapping text reconciliation, so a short recording is one model run. An ordinary hesitation is never used as an app-level endpoint. Do not enable `EXTRA_SEGMENTED_SESSION` or concatenate partial callbacks. `cancel()` discards the captured utterance.
 
 ### Caller-audio completion and errors
+
+#### Concurrency and busy answers
+
+Caller audio opens no microphone, so it does not take OSTT's single microphone
+and capture slot. While a caller-audio request is being transcribed, the OSTT
+voice keyboard, the popup and a microphone request from another app keep
+working: the transcription runs as background work, window by window, and an
+interactive final decode runs before its next window on the same loaded model.
+A microphone request never cancels a caller-audio request.
+
+Only one caller-audio request runs at a time. A second one while the first is
+running is refused with `ERROR_RECOGNIZER_BUSY`; the running one is not
+affected. Retry after the first one finishes. A microphone request made while
+OSTT's own keyboard, popup or long recording holds the microphone also gets
+`ERROR_RECOGNIZER_BUSY` (earlier versions answered `ERROR_AUDIO`).
+
+Every request ends with exactly one `onResults` or one `onError`, unless the
+caller itself cancels it:
+
+- A newer microphone request replaces an unfinished earlier one; the earlier
+  caller receives `ERROR_RECOGNIZER_BUSY` before the new request starts.
+- If the service is destroyed while a request is live, the caller receives
+  `ERROR_SERVER_DISCONNECTED` (Android 12+) or `ERROR_SERVER`.
+- An input failure on the caller's descriptor ends with `ERROR_AUDIO`, as below.
+- After `cancel()`, no further callback arrives.
 
 Closing the writer after its final PCM frame is the clearest completion signal. On OSTT
 0.12.2+, `stopListening()` also drains PCM already readable by the service before
