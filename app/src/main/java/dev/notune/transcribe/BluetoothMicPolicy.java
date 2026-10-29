@@ -52,6 +52,27 @@ final class BluetoothMicPolicy {
      * microphone path, and both being available means two devices connected.
      */
     static int choose(List<Device> communicationDevices, List<Device> inputs) {
+        return choose(communicationDevices, inputs, java.util.Collections.<Device>emptyList());
+    }
+
+    /**
+     * As {@link #choose(List, List)}, but the microphone of the device media
+     * plays to comes first: with a car's hands-free and headphones both
+     * connected (Android Auto with audio left on the phone), the user listens
+     * on the headphones and expects their microphone, not the car's, and
+     * Android lists the communication devices in no useful order.
+     * {@code mediaOutputs} are the devices
+     * {@code AudioManager.getAudioDevicesForAttributes(USAGE_MEDIA)} reports.
+     */
+    static int choose(List<Device> communicationDevices, List<Device> inputs, List<Device> mediaOutputs) {
+        for (int index = 0; index < communicationDevices.size(); index++) {
+            Device candidate = communicationDevices.get(index);
+            if (!isBluetoothMicType(candidate.type) || !hasMatchingInput(candidate, inputs)) continue;
+            if (candidate.address.isEmpty()) continue;
+            for (Device media : mediaOutputs) {
+                if (candidate.address.equalsIgnoreCase(media.address)) return index;
+            }
+        }
         int sco = -1;
         for (int index = 0; index < communicationDevices.size(); index++) {
             Device candidate = communicationDevices.get(index);

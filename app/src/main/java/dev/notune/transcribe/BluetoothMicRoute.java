@@ -473,7 +473,7 @@ final class BluetoothMicRoute {
         if (manager == null) return null;
         List<AudioDeviceInfo> candidates = manager.getAvailableCommunicationDevices();
         AudioDeviceInfo[] inputs = manager.getDevices(AudioManager.GET_DEVICES_INPUTS);
-        int chosen = BluetoothMicPolicy.choose(describe(candidates), describe(inputs));
+        int chosen = BluetoothMicPolicy.choose(describe(candidates), describe(inputs), describe(mediaOutputs(manager)));
         return chosen < 0 ? null : candidates.get(chosen);
     }
 
@@ -579,6 +579,17 @@ final class BluetoothMicRoute {
             out.append(describe(device));
         }
         return out.append(']').toString();
+    }
+
+    /** Where media plays now (Android 13+), to prefer that headset's microphone. */
+    private static List<AudioDeviceInfo> mediaOutputs(AudioManager manager) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return new ArrayList<>();
+        try {
+            return manager.getAudioDevicesForAttributes(new android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA).build());
+        } catch (RuntimeException e) {
+            return new ArrayList<>();
+        }
     }
 
     private static List<BluetoothMicPolicy.Device> describe(List<AudioDeviceInfo> devices) {

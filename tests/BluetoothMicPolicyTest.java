@@ -74,7 +74,29 @@ public final class BluetoothMicPolicyTest {
         // Null addresses are treated as empty and compared exactly.
         check(BluetoothMicPolicy.choose(list(device(BluetoothMicPolicy.TYPE_BLUETOOTH_SCO, null)),
                 list(device(BluetoothMicPolicy.TYPE_BLUETOOTH_SCO, ""))) == 0, "null address mismatch");
+        mediaRoute();
         System.out.println("BluetoothMicPolicyTest passed");
+    }
+
+    private static void mediaRoute() {
+        BluetoothMicPolicy.Device car = device(BluetoothMicPolicy.TYPE_BLUETOOTH_SCO, "XX:XX:XX:XX:CA:01");
+        BluetoothMicPolicy.Device carIn = device(BluetoothMicPolicy.TYPE_BLUETOOTH_SCO, "XX:XX:XX:XX:CA:01");
+        BluetoothMicPolicy.Device phones = device(BluetoothMicPolicy.TYPE_BLUETOOTH_SCO, "XX:XX:XX:XX:EE:02");
+        BluetoothMicPolicy.Device phonesIn = device(BluetoothMicPolicy.TYPE_BLUETOOTH_SCO, "XX:XX:XX:XX:EE:02");
+        BluetoothMicPolicy.Device phonesA2dp = device(A2DP, "xx:xx:xx:xx:ee:02");
+        BluetoothMicPolicy.Device aid = device(BluetoothMicPolicy.TYPE_BLE_HEADSET, "XX:XX:XX:XX:0A:03");
+        BluetoothMicPolicy.Device aidIn = device(BluetoothMicPolicy.TYPE_BLE_HEADSET, "XX:XX:XX:XX:0A:03");
+        // Android Auto connected with audio left on the phone, headphones playing: their mic, not the car's.
+        check(BluetoothMicPolicy.choose(list(car, phones), list(carIn, phonesIn), list(phonesA2dp)) == 1,
+                "car mic chosen while media plays on the headphones");
+        // Media on the headphones beats LE Audio aids that are merely connected.
+        check(BluetoothMicPolicy.choose(list(aid, phones), list(aidIn, phonesIn), list(phonesA2dp)) == 1,
+                "idle LE device chosen over the media headset");
+        // Media on a device without a microphone: the usual order (LE first).
+        check(BluetoothMicPolicy.choose(list(car, aid), list(carIn, aidIn), list(device(A2DP, "XX:XX:XX:XX:99:99"))) == 1,
+                "fallback order broken");
+        // No media information (Android 12): unchanged behaviour.
+        check(BluetoothMicPolicy.choose(list(car, phones), list(carIn, phonesIn), list()) == 0, "empty media changed order");
     }
 
     private static BluetoothMicPolicy.Device device(int type, String address) {
