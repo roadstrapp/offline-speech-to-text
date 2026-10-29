@@ -76,8 +76,10 @@ mod tests {
     fn closed_caller_stream_is_drained_across_multiple_reads() {
         let (mut writer, mut reader) = UnixStream::pair().unwrap();
         let pcm: Vec<u8> = (0..24_000).map(|n| (n % 251) as u8).collect();
-        writer.write_all(&pcm).unwrap();
-        drop(writer);
+        let feeder = {
+            let pcm = pcm.clone();
+            std::thread::spawn(move || writer.write_all(&pcm).unwrap())
+        };
         let mut received = Vec::new();
         let reads = AtomicUsize::new(0);
         let end = drain(
@@ -90,6 +92,7 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(end, InputEnd::Finished));
+        feeder.join().unwrap();
         assert_eq!(received, pcm);
         assert!(reads.load(Ordering::Relaxed) >= 4);
     }
@@ -98,7 +101,13 @@ mod tests {
     fn open_writer_stop_drains_readable_bytes_then_finishes() {
         let (mut writer, mut reader) = UnixStream::pair().unwrap();
         let pcm = vec![42u8; 20_000];
-        writer.write_all(&pcm).unwrap();
+        let feeder = {
+            let pcm = pcm.clone();
+            std::thread::spawn(move || {
+                writer.write_all(&pcm).unwrap();
+                writer
+            })
+        };
         let remaining = AtomicUsize::new(pcm.len());
         let mut received = Vec::new();
         let end = drain(
@@ -116,6 +125,7 @@ mod tests {
             },
         )
         .unwrap();
+        let writer = feeder.join().unwrap();
         assert!(matches!(end, InputEnd::Finished));
         assert_eq!(received, pcm);
         // Writer deliberately remains open: stop does not depend on future EOF.
