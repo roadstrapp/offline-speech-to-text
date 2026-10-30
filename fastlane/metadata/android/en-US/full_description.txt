@@ -1,6 +1,6 @@
 Offline Speech to Text turns speech into text on your Android phone. After downloading or importing a speech model, recognition works without a network connection or account. Audio is processed on the device.
 
-Use the built-in voice keyboard to dictate into text fields. You can also select the app as your speech recognition provider in keyboards and apps that support Android's provider interface. Some keyboards use their own service and do not offer this choice.
+Use the built-in voice keyboard to dictate into text fields. Keyboard dictation can keep recording when the keyboard hides or the screen turns off, with an ongoing notification and Stop control. If its original app is unavailable, the result stays in private recovery. Background continuation requires enabled notifications; recording limits still apply. You can also select the app as your speech recognition provider in keyboards and apps that support Android's provider interface. Some keyboards use their own service and do not offer this choice.
 
 Share an audio file or supported video note with the app to transcribe its audio. Copy, share or save the transcript. Files decode in blocks to limit audio-buffer memory. Other apps can request file transcription through documented Android contracts. Live subtitles can transcribe audio from other apps when Android allows audio capture.
 

@@ -83,7 +83,7 @@ public class RustInputMethodService extends InputMethodService {
      * dictation: the keyboard hiding (screen lock, app switch, editor gone)
      * then no longer ends the recording; only the user's stop does.
      */
-    private boolean keepAlive;
+    private final ImeKeepAliveState keepAlive = new ImeKeepAliveState();
     private boolean recordingPaused = false;
     private boolean processingResult = false;
     private boolean pendingSwitchBack = false;
@@ -427,7 +427,7 @@ public class RustInputMethodService extends InputMethodService {
         super.onWindowHidden();
         windowVisible = false;
         unbindLongRecordingState();
-        if (isRecording && isStopOnHideEnabled()) {
+        if (isRecording && (isStopOnHideEnabled() || !keepAlive.ready())) {
             // Stop the microphone, but preserve recognized speech for private
             // recovery instead of treating an Android lifecycle transition as
             // the user's Cancel action.
@@ -451,7 +451,8 @@ public class RustInputMethodService extends InputMethodService {
                 && !ImeTextEdit.isSensitiveEditor(attribute.inputType, attribute.imeOptions);
         if (!editorSafeForDictation) unbindLongRecordingState();
         if (isRecording && (!sameEditorRestart || !editorSafeForDictation)) {
-            if (keepAlive) {
+            recordingSession.markEditorMoved();
+            if (keepAlive.ready()) {
                 // the lock screen or another app took input; keep recording,
                 // delivery decides where the text may go
                 Log.i(ImeDictationService.TAG, "input moved during dictation; still recording");
@@ -471,7 +472,7 @@ public class RustInputMethodService extends InputMethodService {
         if (isRecording && !recordingSession.canCommitTo(
                 getCurrentInputConnection(), editorGeneration,
                 editorSafeForDictation, inputActive)) {
-            if (!keepAlive) stopForRecovery();
+            if (!keepAlive.ready()) stopForRecovery();
         }
         // Rebuild the keyboard if the theme preference changed while this
         // (long-lived) IME process stayed alive, so it matches the app setting.
@@ -532,7 +533,8 @@ public class RustInputMethodService extends InputMethodService {
         cancelDeletePreview();
         unbindLongRecordingState();
         if (isRecording) {
-            if (keepAlive) {
+            recordingSession.markEditorMoved();
+            if (keepAlive.ready()) {
                 Log.i(ImeDictationService.TAG, "input finished during dictation (screen off or app left); still recording");
             } else {
                 stopForRecovery();
@@ -879,7 +881,7 @@ public class RustInputMethodService extends InputMethodService {
         refreshTroubleshootingBanner();
         boolean wasRecording = isRecording;
         isRecording = recording;
-        if (!recording && !processingResult) endKeepAlive();
+        if (!recording) endKeepAlive();
         if (!recording) recordingPaused = false;
         if (recording && !wasRecording) {
             finishTroubleshooting("cancel");
@@ -1373,33 +1375,56 @@ public class RustInputMethodService extends InputMethodService {
         return new File(getFilesDir(), "auto_stop").exists();
     }
 
-    /** "Record in background" is default ON; the marker file is the opt-out. */
     private String editorPackage() {
         EditorInfo info = getCurrentInputEditorInfo();
         return info == null ? null : info.packageName;
     }
 
     private void beginKeepAlive() {
-        if (!isRecording || keepAlive) return;
-        keepAlive = ImeDictationService.start(this);
+        if (!isRecording || keepAlive.pending() || isStopOnHideEnabled()) return;
+        long token = keepAlive.begin();
+        if (!ImeDictationService.start(this, token)) keepAlive.finish();
     }
 
     private void endKeepAlive() {
-        if (!keepAlive) return;
-        keepAlive = false;
-        ImeDictationService.stop(this);
+        if (!keepAlive.pending()) return;
+        long token = keepAlive.token();
+        keepAlive.finish();
+        ImeDictationService.stop(this, token);
     }
 
     /** The dictation notification's Stop: ends it like the stop key, text kept. */
-    static void stopDictationFromNotification() {
+    static boolean ownsDictation(long token) {
         RustInputMethodService ime = current.get();
-        if (ime == null) return;
-        ime.mainHandler.post(() -> {
-            if (ime.isRecording) ime.stopTranscribe(false);
-            else if (!ime.processingResult) ime.endKeepAlive();
-        });
+        return ime != null && ime.isRecording && ime.keepAlive.matches(token);
     }
 
+    /** Called on the main thread only after Android accepted foreground promotion. */
+    static boolean dictationForegroundReady(long token) {
+        RustInputMethodService ime = current.get();
+        return ownsDictation(token) && ime.keepAlive.acknowledge(token);
+    }
+
+    static void dictationForegroundUnavailable(long token) {
+        RustInputMethodService ime = current.get();
+        if (ime == null || !ime.keepAlive.matches(token)) return;
+        ime.keepAlive.finish();
+        if (ime.isRecording && (!ime.windowVisible || !ime.inputActive)) ime.stopForRecovery();
+    }
+
+    static void stopDictationFromNotification(long token) {
+        RustInputMethodService ime = current.get();
+        if (ime == null) return;
+        Runnable stop = () -> {
+            if (!ime.keepAlive.matches(token)) return;
+            if (ime.isRecording) ime.stopTranscribe(false);
+            else if (!ime.processingResult) ime.endKeepAlive();
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) stop.run();
+        else ime.mainHandler.post(stop);
+    }
+
+    /** "Record in background" is default ON; the marker file is the opt-out. */
     private boolean isStopOnHideEnabled() {
         return new File(getFilesDir(), "stop_on_hide").exists();
     }

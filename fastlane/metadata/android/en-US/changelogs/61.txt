@@ -1,0 +1,1 @@
+Keep keyboard dictation recording when the keyboard hides, with a foreground notification and Stop control. Preserve text privately when its original app is unavailable. Prefer the microphone of the headset selected for media, and allow more time for LE Audio microphone routing to become ready.

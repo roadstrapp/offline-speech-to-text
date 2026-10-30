@@ -33,6 +33,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
     private boolean callerAudioOnly;
     private boolean fileApi;
     private boolean fileAdmission;
+    private boolean imeContinuity;
     private int fileApiMinutes;
     private int callerAudioMinutes;
     private int callerAudioPace;
@@ -58,6 +59,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         qualificationModel = arguments == null ? null : arguments.getString("qualify_model");
         fileApi = arguments != null && "true".equals(arguments.getString("file_api"));
         fileAdmission = arguments != null && "true".equals(arguments.getString("file_admission"));
+        imeContinuity = arguments != null && "true".equals(arguments.getString("ime_continuity"));
         fileApiMinutes = 25;
         if (arguments != null && arguments.getString("file_api_minutes") != null) {
             fileApiMinutes = Integer.parseInt(arguments.getString("file_api_minutes"));
@@ -75,6 +77,12 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
 
     @Override
     public void onStart() {
+        if (imeContinuity) {
+            Bundle result = new Bundle(); int code = Activity.RESULT_OK;
+            try { ImeContinuityDeviceTest.run(this); result.putBoolean("ime_continuity", true); }
+            catch (Throwable error) { code = Activity.RESULT_CANCELED; result.putString("failure", error.toString()); }
+            finish(code, result); return;
+        }
         if (fileAdmission) {
             Bundle result = new Bundle(); int code = Activity.RESULT_OK;
             try { FileAdmissionDeviceTest.run(this); result.putBoolean("file_admission", true); }

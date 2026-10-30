@@ -12,12 +12,14 @@ final class ImeRecordingSession {
     /** The app the dictation was started in; its text never goes to another app. */
     private String originPackage;
     private boolean discard;
+    private boolean movedDuringCapture;
 
     void begin(Object origin, long editorGeneration, String editorPackage) {
         this.origin = origin;
         originGeneration = editorGeneration;
         originPackage = editorPackage;
         discard = false;
+        movedDuringCapture = false;
     }
 
     Object origin() {
@@ -31,6 +33,8 @@ final class ImeRecordingSession {
     void onError() {
         discard = true;
     }
+
+    void markEditorMoved() { movedDuringCapture = true; }
 
     boolean canCommitTo(Object current, long editorGeneration,
                         boolean editorSafe, boolean inputActive) {
@@ -46,8 +50,9 @@ final class ImeRecordingSession {
      */
     boolean canDeliverToCurrent(Object current, boolean editorSafe, boolean inputActive,
                                 String currentPackage) {
-        return !discard && origin != null && current != null && editorSafe && inputActive
-                && (originPackage == null || originPackage.equals(currentPackage));
+        return !discard && !movedDuringCapture && origin != null && current != null && editorSafe && inputActive
+                && originPackage != null && !originPackage.isEmpty()
+                && originPackage.equals(currentPackage);
     }
 
     boolean isDiscarded() {
@@ -59,5 +64,6 @@ final class ImeRecordingSession {
         originGeneration = -1L;
         originPackage = null;
         discard = false;
+        movedDuringCapture = false;
     }
 }

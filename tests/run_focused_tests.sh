@@ -12,6 +12,7 @@ PYTHON=${PYTHON_BIN:-python3}
     tests.test_release_configuration \
     tests.test_documentation_contract \
     tests.test_audio_lifecycle_regressions -v
+  "$PYTHON" -m unittest tests.test_ime_service_lifecycle -v
 )
 javac -d "$OUT" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/HomeNavigation.java" \
@@ -42,6 +43,8 @@ javac -d "$OUT" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/SetupState.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/ImeTextEdit.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/ImeRecordingSession.java" \
+  "$ROOT/app/src/main/java/dev/notune/transcribe/ImeKeepAliveState.java" \
+  "$ROOT/tests/ImeKeepAliveStateTest.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/PendingTranscriptRecord.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/PendingTranscriptFiles.java" \
   "$ROOT/app/src/main/java/dev/notune/transcribe/EmergencyTranscriptBuffer.java" \
@@ -65,6 +68,7 @@ javac -d "$OUT" \
 java -ea -cp "$OUT" dev.notune.transcribe.HomeNavigationTest
 java -ea -cp "$OUT" dev.notune.transcribe.ModelPresentationTest
 java -ea -cp "$OUT" dev.notune.transcribe.BehaviorTest
+java -ea -cp "$OUT" dev.notune.transcribe.ImeKeepAliveStateTest
 java -ea -cp "$OUT" dev.notune.transcribe.TroubleshootingLeaseTest
 java -ea -cp "$OUT" dev.notune.transcribe.DiagnosticRegressionTest
 java -ea -cp "$OUT" dev.notune.transcribe.AutoStopDelayTest

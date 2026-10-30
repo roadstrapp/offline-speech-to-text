@@ -230,7 +230,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         window_hidden = source[
             source.index("public void onWindowHidden()") : source.index("public void onStartInput(")
         ]
-        self.assertIn("if (isRecording && isStopOnHideEnabled())", window_hidden)
+        self.assertIn("if (isRecording && (isStopOnHideEnabled() || !keepAlive.ready()))", window_hidden)
         self.assertIn("stopForRecovery();", window_hidden)
         self.assertIn("isStopOnHideEnabled()", window_hidden)
         finish_input = source[
