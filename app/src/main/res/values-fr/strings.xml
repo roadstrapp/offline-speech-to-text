@@ -143,4 +143,8 @@
     <string name="mic_switch_keep_phone">Changer et garder le téléphone</string>
     <string name="mic_fallback_status">Le micro Bluetooth n\'envoie plus de son. L\'enregistrement continue avec le micro du téléphone.</string>
     <string name="mic_bt_waiting">En attente du micro Bluetooth…</string>
+    <string name="ime_dictation_channel">Dictée du clavier</string>
+    <string name="ime_dictation_title">Dictée en cours</string>
+    <string name="ime_dictation_text">L\'enregistrement continue écran éteint. Arrêtez pour insérer le texte.</string>
+    <string name="ime_dictation_stop">Arrêter</string>
 </resources>

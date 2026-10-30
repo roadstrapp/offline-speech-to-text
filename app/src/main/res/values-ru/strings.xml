@@ -143,4 +143,8 @@
     <string name="mic_switch_keep_phone">Переключить и оставить телефон</string>
     <string name="mic_fallback_status">Bluetooth-микрофон перестал передавать звук. Запись продолжается через микрофон телефона.</string>
     <string name="mic_bt_waiting">Ожидание Bluetooth-микрофона…</string>
+    <string name="ime_dictation_channel">Диктовка с клавиатуры</string>
+    <string name="ime_dictation_title">Идёт диктовка</string>
+    <string name="ime_dictation_text">Запись продолжается при выключенном экране. Остановите, чтобы вставить текст.</string>
+    <string name="ime_dictation_stop">Стоп</string>
 </resources>

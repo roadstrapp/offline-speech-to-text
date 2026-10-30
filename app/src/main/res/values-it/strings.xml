@@ -143,4 +143,8 @@
     <string name="mic_switch_keep_phone">Cambia e mantieni il telefono</string>
     <string name="mic_fallback_status">Il microfono Bluetooth ha smesso di inviare audio. La registrazione continua con il microfono del telefono.</string>
     <string name="mic_bt_waiting">In attesa del microfono Bluetooth…</string>
+    <string name="ime_dictation_channel">Dettatura da tastiera</string>
+    <string name="ime_dictation_title">Dettatura in corso</string>
+    <string name="ime_dictation_text">La registrazione continua a schermo spento. Ferma per inserire il testo.</string>
+    <string name="ime_dictation_stop">Ferma</string>
 </resources>

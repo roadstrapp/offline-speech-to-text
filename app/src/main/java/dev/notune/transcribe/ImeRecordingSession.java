@@ -9,11 +9,14 @@ package dev.notune.transcribe;
 final class ImeRecordingSession {
     private Object origin;
     private long originGeneration = -1L;
+    /** The app the dictation was started in; its text never goes to another app. */
+    private String originPackage;
     private boolean discard;
 
-    void begin(Object origin, long editorGeneration) {
+    void begin(Object origin, long editorGeneration, String editorPackage) {
         this.origin = origin;
         originGeneration = editorGeneration;
+        originPackage = editorPackage;
         discard = false;
     }
 
@@ -41,8 +44,10 @@ final class ImeRecordingSession {
      * delivery; requiring the original generation would reject that valid
      * replacement even though it is the only composer the IME can address.
      */
-    boolean canDeliverToCurrent(Object current, boolean editorSafe, boolean inputActive) {
-        return !discard && origin != null && current != null && editorSafe && inputActive;
+    boolean canDeliverToCurrent(Object current, boolean editorSafe, boolean inputActive,
+                                String currentPackage) {
+        return !discard && origin != null && current != null && editorSafe && inputActive
+                && (originPackage == null || originPackage.equals(currentPackage));
     }
 
     boolean isDiscarded() {
@@ -52,6 +57,7 @@ final class ImeRecordingSession {
     void finish() {
         origin = null;
         originGeneration = -1L;
+        originPackage = null;
         discard = false;
     }
 }

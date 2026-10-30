@@ -75,6 +75,15 @@ public class RustInputMethodService extends InputMethodService {
     private boolean viewIsNight = false;
     private Handler mainHandler;
     private boolean isRecording = false;
+    /** The running keyboard, for the dictation notification's Stop. */
+    private static java.lang.ref.WeakReference<RustInputMethodService> current =
+            new java.lang.ref.WeakReference<>(null);
+    /**
+     * True while {@link ImeDictationService} holds the microphone for this
+     * dictation: the keyboard hiding (screen lock, app switch, editor gone)
+     * then no longer ends the recording; only the user's stop does.
+     */
+    private boolean keepAlive;
     private boolean recordingPaused = false;
     private boolean processingResult = false;
     private boolean pendingSwitchBack = false;
@@ -175,6 +184,7 @@ public class RustInputMethodService extends InputMethodService {
     public void onCreate() {
         super.onCreate();
         mainHandler = new Handler(Looper.getMainLooper());
+        current = new java.lang.ref.WeakReference<>(this);
         DiagnosticLog.event(getFilesDir(), "ime_start",
                 "process=ime,version_code=" + BuildConfig.VERSION_CODE);
         try {
@@ -356,12 +366,13 @@ public class RustInputMethodService extends InputMethodService {
                     audioPauser.request(this);
                     pauseAudioActive = true;
                 }
-                recordingSession.begin(getCurrentInputConnection(), editorGeneration);
+                recordingSession.begin(getCurrentInputConnection(), editorGeneration, editorPackage());
                 recordingPaused = false;
                 processingResult = false;
                 updateRecordButtonUI(true);
                 startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
                 refreshMicSource();
+                beginKeepAlive();
             });
 
             recordContainer.setOnLongClickListener(v -> {
@@ -440,7 +451,13 @@ public class RustInputMethodService extends InputMethodService {
                 && !ImeTextEdit.isSensitiveEditor(attribute.inputType, attribute.imeOptions);
         if (!editorSafeForDictation) unbindLongRecordingState();
         if (isRecording && (!sameEditorRestart || !editorSafeForDictation)) {
-            stopForRecovery();
+            if (keepAlive) {
+                // the lock screen or another app took input; keep recording,
+                // delivery decides where the text may go
+                Log.i(ImeDictationService.TAG, "input moved during dictation; still recording");
+            } else {
+                stopForRecovery();
+            }
         }
     }
 
@@ -454,7 +471,7 @@ public class RustInputMethodService extends InputMethodService {
         if (isRecording && !recordingSession.canCommitTo(
                 getCurrentInputConnection(), editorGeneration,
                 editorSafeForDictation, inputActive)) {
-            stopForRecovery();
+            if (!keepAlive) stopForRecovery();
         }
         // Rebuild the keyboard if the theme preference changed while this
         // (long-lived) IME process stayed alive, so it matches the app setting.
@@ -499,11 +516,12 @@ public class RustInputMethodService extends InputMethodService {
                 audioPauser.request(this);
                 pauseAudioActive = true;
             }
-            recordingSession.begin(getCurrentInputConnection(), editorGeneration);
+            recordingSession.begin(getCurrentInputConnection(), editorGeneration, editorPackage());
             recordingPaused = false;
             updateRecordButtonUI(true);
             startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
             refreshMicSource();
+            beginKeepAlive();
         } finally {
             automaticStartInFlight = false;
         }
@@ -514,7 +532,11 @@ public class RustInputMethodService extends InputMethodService {
         cancelDeletePreview();
         unbindLongRecordingState();
         if (isRecording) {
-            stopForRecovery();
+            if (keepAlive) {
+                Log.i(ImeDictationService.TAG, "input finished during dictation (screen off or app left); still recording");
+            } else {
+                stopForRecovery();
+            }
         }
         super.onFinishInput();
         inputActive = false;
@@ -857,6 +879,7 @@ public class RustInputMethodService extends InputMethodService {
         refreshTroubleshootingBanner();
         boolean wasRecording = isRecording;
         isRecording = recording;
+        if (!recording && !processingResult) endKeepAlive();
         if (!recording) recordingPaused = false;
         if (recording && !wasRecording) {
             finishTroubleshooting("cancel");
@@ -960,11 +983,12 @@ public class RustInputMethodService extends InputMethodService {
             pauseAudioActive = true;
         }
         BluetoothMicRoute.overrideNextStart(bluetooth);
-        recordingSession.begin(editor, editorGeneration);
+        recordingSession.begin(editor, editorGeneration, editorPackage());
         recordingPaused = false;
         updateRecordButtonUI(true);
         startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
         refreshMicSource();
+        beginKeepAlive();
     }
 
     private void updateRecordingActionsUi() {
@@ -1001,6 +1025,8 @@ public class RustInputMethodService extends InputMethodService {
         unbindLongRecordingState();
         cancelDeletePreview();
         DiagnosticLog.event(getFilesDir(), "ime_stop", "process=ime");
+        if (isRecording) stopForRecovery();
+        endKeepAlive();
         super.onDestroy();
         cleanupNative();
         if (pauseAudioActive) {
@@ -1030,6 +1056,7 @@ public class RustInputMethodService extends InputMethodService {
                 processingResult = false;
                 recordingSession.onError();
                 if (isRecording) updateRecordButtonUI(false);
+                endKeepAlive();
             }
             updateUiState();
             if (pendingSwitchBack && error) {
@@ -1186,7 +1213,7 @@ public class RustInputMethodService extends InputMethodService {
     private void deliverStagedTranscription(String text, boolean staged, int attempt) {
         InputConnection current = getCurrentInputConnection();
         boolean safeTarget = recordingSession.canDeliverToCurrent(
-                current, editorSafeForDictation, inputActive);
+                current, editorSafeForDictation, inputActive, editorPackage());
         String committed = text + " ";
         boolean inserted = safeTarget && commitTranscribedText(current, committed);
 
@@ -1208,6 +1235,7 @@ public class RustInputMethodService extends InputMethodService {
         processingResult = false;
         lastStatus = "Ready";
         recordingSession.finish();
+        endKeepAlive();
         finishTroubleshooting(inserted ? "delivered" : "retained");
         releasePauseAudio();
         if (inserted && staged) {
@@ -1346,6 +1374,32 @@ public class RustInputMethodService extends InputMethodService {
     }
 
     /** "Record in background" is default ON; the marker file is the opt-out. */
+    private String editorPackage() {
+        EditorInfo info = getCurrentInputEditorInfo();
+        return info == null ? null : info.packageName;
+    }
+
+    private void beginKeepAlive() {
+        if (!isRecording || keepAlive) return;
+        keepAlive = ImeDictationService.start(this);
+    }
+
+    private void endKeepAlive() {
+        if (!keepAlive) return;
+        keepAlive = false;
+        ImeDictationService.stop(this);
+    }
+
+    /** The dictation notification's Stop: ends it like the stop key, text kept. */
+    static void stopDictationFromNotification() {
+        RustInputMethodService ime = current.get();
+        if (ime == null) return;
+        ime.mainHandler.post(() -> {
+            if (ime.isRecording) ime.stopTranscribe(false);
+            else if (!ime.processingResult) ime.endKeepAlive();
+        });
+    }
+
     private boolean isStopOnHideEnabled() {
         return new File(getFilesDir(), "stop_on_hide").exists();
     }
