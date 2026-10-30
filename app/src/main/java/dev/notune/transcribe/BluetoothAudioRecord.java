@@ -188,9 +188,22 @@ final class BluetoothAudioRecord {
         } catch (RuntimeException ignored) { }
     }
 
+    /**
+     * How long to wait for Android to report the routed input after start. An
+     * LE Audio input (hearing aids, LE headsets) is set up only when recording
+     * starts: the stack reconfigures the link to the conversational context
+     * and builds the isochronous data path, and getRoutedDevice() stays null
+     * until the audio HAL has started the stream. On a Pixel with LE Audio
+     * hearing aids that took about 1 s routinely and up to 3.5 s; with a 500 ms
+     * wait every such start was classified "not on Bluetooth" and fell back to
+     * the phone microphone although the stream was about to deliver the aids'
+     * audio. Returns as soon as the device is known (SCO: tens of ms).
+     */
+    private static final long ROUTED_DEVICE_WAIT_MS = 5_000L;
+
     /** The routed input; right after start Android may not report it yet. */
     int routedDeviceId() {
-        long deadline = android.os.SystemClock.elapsedRealtime() + 500L;
+        long deadline = android.os.SystemClock.elapsedRealtime() + ROUTED_DEVICE_WAIT_MS;
         do {
             AudioDeviceInfo routed = record.getRoutedDevice();
             if (routed != null) return routed.getId();
