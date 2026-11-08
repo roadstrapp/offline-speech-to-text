@@ -36,7 +36,46 @@ jobs:
           git fetch --tags upstream main
           git merge-base --is-ancestor origin/main upstream/main
           git merge --ff-only upstream/main
-          git push origin main --follow-tags
+          # Push the branch on its own. `--follow-tags` sends the branch and
+          # every missing tag in one push, and GitHub rejects the whole step
+          # when any of those tags edits `.github/workflows`: GITHUB_TOKEN
+          # has no workflows permission. A rejected tag must not throw away
+          # the fast-forward or skip the engine sync below.
+          git push origin HEAD:main
+          remote_tags=$(mktemp)
+          local_tags=$(mktemp)
+          trap 'rm -f "$remote_tags" "$local_tags"' EXIT
+          git ls-remote --tags origin | awk '{
+            ref = $2
+            sub(/^refs\/tags\//, "", ref)
+            sub(/\^\{\}$/, "", ref)
+            print ref
+          }' | sort -u > "$remote_tags"
+          git for-each-ref --format='%(objecttype) %(refname:strip=2)' --merged=HEAD refs/tags > "$local_tags"
+          push_missing_tag() {
+            kind=$1
+            tag=$2
+            if [ "$kind" != "tag" ]; then
+              return 0
+            fi
+            if grep -Fxq "$tag" "$remote_tags"; then
+              return 0
+            fi
+            echo "pushing tag $tag"
+            if output=$(git push origin "refs/tags/${tag}" 2>&1); then
+              printf '%s\n' "$output"
+              return 0
+            fi
+            printf '%s\n' "$output"
+            if printf '%s\n' "$output" | grep -F -q 'without `workflows` permission'; then
+              echo "::warning title=Upstream tag not mirrored::${tag} changes .github/workflows, and the Actions token cannot publish that ref."
+              return 0
+            fi
+            return 1
+          }
+          while read -r kind tag; do
+            push_missing_tag "$kind" "$tag"
+          done < "$local_tags"
 
       - name: Merge upstream into the embeddable-engine branch
         id: merge
