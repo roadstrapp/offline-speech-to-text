@@ -224,6 +224,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn raw_window_threshold_is_independent_of_final_decoder_silence() {
+        let limit = 59 * SAMPLE_RATE + SAMPLE_RATE / 2;
+        for length in [limit - SAMPLE_RATE / 2, limit - 1, limit, limit + 1] {
+            let samples = vec![0.25; length];
+            let plan = windows(&samples, limit);
+            assert_eq!(plan.len(), if length <= limit { 1 } else { 2 });
+            assert_eq!(plan.first().unwrap().start, 0);
+            assert_eq!(plan.last().unwrap().end, length);
+            for span in plan { assert!(span.len() <= limit); }
+        }
+    }
+
+    #[test]
     fn background_windows_equal_final_windows_for_every_stop_and_capture_schedule() {
         let limit = 12 * SAMPLE_RATE;
         let audio: Vec<f32> = (0..75 * SAMPLE_RATE)

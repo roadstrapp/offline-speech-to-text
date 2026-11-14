@@ -9,7 +9,7 @@
 
 use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use jni::objects::{GlobalRef, JObject};
@@ -23,6 +23,13 @@ const ACTIVE_MODEL_FILE: &str = "active_model";
 /// File in filesDir with an optional language hint — a locale like `en-US`
 /// or `auto`. Absent or empty = let the model autodetect.
 const MODEL_LANGUAGE_FILE: &str = "model_language";
+/// File in filesDir listing the languages the user speaks (`en,de`). With two or more and the
+/// language-ID model installed, each recognition run detects among exactly those languages and
+/// uses the winner as its hint. Otherwise only `model_language` applies.
+const MODEL_LANGUAGES_FILE: &str = "model_languages";
+/// Where the downloaded language-ID model lives, relative to filesDir. Kept out of `models/`
+/// so it can never be selected as the speech model.
+pub(crate) const LANGUAGE_ID_MODEL_PATH: &str = "aux-models/lang-id-voxlingua107-ecapa-Q8_0.gguf";
 /// Marker file in filesDir: when present, models that support translation
 /// (e.g. Whisper) translate speech to English instead of transcribing it.
 /// Ignored by models without translation support.
@@ -30,15 +37,19 @@ const MODEL_TRANSLATE_FILE: &str = "model_translate";
 /// Optional file in filesDir with the CPU thread count for inference.
 /// Absent/invalid/0 = default (all cores).
 const MODEL_THREADS_FILE: &str = "model_threads";
+pub(crate) static INFERENCE_GATE: Lazy<crate::inference_gate::Gate> =
+    Lazy::new(crate::inference_gate::Gate::default);
+static NEXT_ENGINE_GENERATION: AtomicU64 = AtomicU64::new(1);
 static ACTIVE_THREADS: AtomicI32 = AtomicI32::new(0);
 
 /// Settings captured once for a complete user transcription.
+#[derive(Clone)]
 pub(crate) struct TranscriptionJob {
     run_ext: Option<transcribe_cpp::RunExtension>,
     preferred_terms: Option<Vec<String>>,
     corrections: Option<Vec<crate::personal_corrections::Rule>>,
     text: String,
-    english_output: bool,
+    output_language: crate::transcript_cleanup::OutputLanguage,
     /// Private hypotheses for immutable existing long-input windows. Never
     /// delivered piecemeal or joined at a silence-only boundary.
     prepared_windows: usize,
@@ -47,31 +58,77 @@ pub(crate) struct TranscriptionJob {
 
 impl TranscriptionJob {
     pub(crate) fn finish(self) -> String {
-        let raw_text = if self.english_output {
-            crate::english_fillers::remove_uh_owned(self.text)
-        } else {
-            self.text
-        };
-        // Explicit user corrections take precedence over a close-spelling
-        // guess: apply them to the raw model result before preferred words.
-        let (text, protected) = if let Some(rules) = self.corrections.as_deref() {
-            crate::personal_corrections::apply_with_ranges(&raw_text, rules)
-        } else {
-            (raw_text, Vec::new())
-        };
-        if let Some(terms) = self.preferred_terms.as_deref() {
-            crate::preferred_terms::apply_with_protected(&text, terms, &protected)
-        } else {
-            text
+        crate::transcript_cleanup::finish(
+            self.text,
+            self.output_language,
+            self.preferred_terms.as_deref(),
+            self.corrections.as_deref(),
+        )
+    }
+}
+
+/// Picks the spoken language among the user's own languages, which plain automatic detection
+/// cannot be told (closely related languages are easily mistaken for each other).
+struct LanguageDetector {
+    session: transcribe_cpp::LangIdSession,
+    /// Detector labels for the user's languages.
+    allowed: Vec<String>,
+    /// Last allowed recognition code; the first selected language is used before any result.
+    previous: String,
+    min_samples: usize,
+}
+
+impl LanguageDetector {
+    fn open(path: &Path, languages: &[String], threads: i32) -> Result<LanguageDetector, String> {
+        let model = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            transcribe_cpp::Model::load(path)
+        }))
+        .map_err(|_| "language model loader rejected this file".to_string())?
+        .map_err(|e| e.to_string())?;
+        let info = model.langid_info().map_err(|e| e.to_string())?;
+        let session = model
+            .langid_session_with(&transcribe_cpp::LangIdSessionOptions { n_threads: threads })
+            .map_err(|e| e.to_string())?;
+        Ok(LanguageDetector {
+            session,
+            allowed: languages
+                .iter()
+                .map(|code| crate::language_selection::detector_label(code).to_string())
+                .collect(),
+            previous: crate::language_selection::recognition_code(&languages[0]).to_string(),
+            min_samples: (info.min_audio_ms.max(0) as usize).saturating_mul(16),
+        })
+    }
+
+    /// The most likely of the user's languages for this clip, as a recognition hint.
+    fn detect(&mut self, samples: &[f32]) -> String {
+        if samples.len() >= self.min_samples {
+            let options = transcribe_cpp::LangIdOptions {
+                allowed: Some(self.allowed.clone()),
+            };
+            match self.session.run(samples, &options) {
+                Ok(result) => {
+                    if let Some(code) = result.code().filter(|code| self.allowed.iter().any(|allowed| allowed == code)) {
+                        self.previous = crate::language_selection::recognition_code(code).to_string();
+                    }
+                }
+                Err(e) => log::warn!("language detection failed ({e}); keeping {}", self.previous),
+            }
         }
+        self.previous.clone()
     }
 }
 
 /// A loaded transcribe.cpp session plus the options applied to every run.
 pub struct Engine {
+    model_path: PathBuf,
+    generation: u64,
+    threads: i32,
     diagnostic_family: i32,
     session: transcribe_cpp::Session,
     language: Option<String>,
+    /// Present when the user speaks several languages and the language-ID model is installed.
+    detector: Option<LanguageDetector>,
     task: transcribe_cpp::Task,
     english_only_model: bool,
     translates_to_english: bool,
@@ -94,6 +151,7 @@ impl Engine {
     fn load(
         model_path: &Path,
         language: Option<String>,
+        allowed_languages: &[String],
         translate: bool,
         threads: i32,
         files_dir: PathBuf,
@@ -109,8 +167,8 @@ impl Engine {
         // Translation is gated on the model's capabilities: models without it
         // (e.g. Parakeet) silently keep transcribing, so the setting can stay
         // on while switching models.
-        let capabilities = model.capabilities();
-        let task = if translate && capabilities.supports_translate {
+        let capabilities = model.capabilities().ok();
+        let task = if translate && capabilities.as_ref().is_some_and(|c| c.supports_translate) {
             transcribe_cpp::Task::Translate
         } else {
             if translate {
@@ -123,13 +181,24 @@ impl Engine {
         // status. Whisper Turbo is special-cased: it advertises translation
         // but was distilled without translation data — verified on-device to
         // keep transcribing German as German with task=Translate.
-        let ready_status = if translate && task == transcribe_cpp::Task::Transcribe {
+        let english_only_model = capabilities.as_ref()
+            .is_some_and(|c| crate::language_selection::english_only(&c.languages));
+        use crate::language_selection::ModelLanguagePolicy;
+        let language_policy = crate::language_selection::model_policy(
+            &model.arch(), capabilities.as_ref().map(|c| c.languages.as_slice()), allowed_languages
+        )?;
+        let language = if language_policy == ModelLanguagePolicy::EnglishOnly {
+            Some("en".to_string())
+        } else { language };
+        let ready_status = if language_policy == ModelLanguagePolicy::IgnoresList {
+            "Ready (this model ignores Languages I speak)"
+        } else if language_policy == ModelLanguagePolicy::EnglishOnly {
+            "Ready (this model supports English only)"
+        } else if translate && task == transcribe_cpp::Task::Transcribe {
             "Ready (this model can't translate)"
         } else if translate && model.variant().contains("turbo") {
             "Ready (note: Whisper Turbo translates poorly; use another Whisper)"
-        } else {
-            "Ready"
-        };
+        } else { "Ready" };
         // Whisper's stock recipe re-decodes a chunk at up to five higher
         // temperatures when its quality gates fail, so one noisy chunk can
         // cost several full decodes. For an interactive app a single greedy
@@ -142,8 +211,6 @@ impl Engine {
         );
         let supports_initial_prompt =
             is_whisper && model.supports(transcribe_cpp::Feature::InitialPrompt);
-        let english_only_model = capabilities.languages.len() == 1
-            && crate::english_fillers::is_english_tag(&capabilities.languages[0]);
         // Whisper Turbo advertises translation despite being unreliable at
         // producing English output; don't apply English-only cleanup there.
         let translates_to_english =
@@ -190,8 +257,14 @@ impl Engine {
             }
             Some(safe_limit - final_silence)
         };
+        let detector = if language_policy == ModelLanguagePolicy::Detect {
+            open_detector(&files_dir, allowed_languages, threads)?
+        } else { None };
         ACTIVE_THREADS.store(threads, Ordering::Relaxed);
         Ok(Engine {
+            model_path: model_path.to_path_buf(),
+            generation: NEXT_ENGINE_GENERATION.fetch_add(1, Ordering::Relaxed),
+            threads,
             diagnostic_family: match model.arch().as_str() {
                 "whisper" => 1,
                 "parakeet" => 2,
@@ -202,6 +275,7 @@ impl Engine {
             },
             session,
             language,
+            detector,
             task,
             english_only_model,
             translates_to_english,
@@ -220,7 +294,7 @@ impl Engine {
     /// their safe compute bound.
     pub fn transcribe(&mut self, samples: Vec<f32>) -> Result<String, String> {
         let mut job = self.begin_transcription();
-        self.transcribe_into(&mut job, &samples)?;
+        self.transcribe_into(&mut job, &samples, false)?;
         Ok(job.finish())
     }
 
@@ -244,17 +318,19 @@ impl Engine {
             preferred_terms,
             run_ext: self.run_extension(prompt),
             text: String::new(),
-            english_output: true,
+            output_language: crate::transcript_cleanup::OutputLanguage::English,
             prepared_windows: 0,
             prepared_text: String::new(),
         }
     }
 
-    /// Adds one complete utterance to a message job.
+    /// Plans windows over raw audio; final-only silence never creates a boundary.
+    /// Partial subtitle decoding passes false to preserve its existing latency contract.
     pub(crate) fn transcribe_into(
         &mut self,
         job: &mut TranscriptionJob,
         samples: &[f32],
+        pad_final: bool,
     ) -> Result<(), String> {
         if let Some(max_window_samples) = self.bounded_window_samples {
             let windows = crate::long_audio::windows(samples, max_window_samples);
@@ -263,7 +339,7 @@ impl Engine {
                 // never turn a recoverable recording into an error or loss.
                 job.prepared_windows = 0;
                 job.prepared_text.clear();
-                job.english_output = true;
+                job.output_language = crate::transcript_cleanup::OutputLanguage::English;
             }
             let prepared_windows = std::mem::take(&mut job.prepared_windows);
             let mut assembled = std::mem::take(&mut job.prepared_text);
@@ -274,15 +350,23 @@ impl Engine {
                 self.decode_window(
                     job,
                     &samples[window.clone()],
-                    index + 1 < windows.len(),
+                    index + 1 < windows.len() || pad_final,
                     &mut assembled,
                 )?;
             }
             append_piece(&mut job.text, &assembled);
         } else {
+            let mut audio;
+            let samples = if pad_final {
+                audio = samples.to_vec();
+                crate::audio_finalization::append_final_decode_silence(&mut audio);
+                audio.as_slice()
+            } else {
+                samples
+            };
             let transcript = self.run(samples, &job.run_ext)?;
             if !transcript.text.trim().is_empty() {
-                job.english_output &= self.output_is_english(transcript.language.as_deref());
+                job.output_language = job.output_language.combine(self.output_language(transcript.language.as_deref()));
             }
             append_piece(&mut job.text, transcript.text.trim());
         }
@@ -291,6 +375,16 @@ impl Engine {
 
     pub(crate) fn background_window_limit(&self) -> Option<usize> {
         self.bounded_window_samples
+    }
+
+    pub(crate) fn file_window_limit(&self) -> usize {
+        self.bounded_window_samples
+            .unwrap_or(crate::long_audio::DEFAULT_MAX_WINDOW_SAMPLES)
+    }
+
+    pub(crate) fn finish_file_job(mut job: TranscriptionJob, text: String) -> String {
+        job.text = text;
+        job.finish()
     }
 
     pub(crate) fn diagnostic_family(&self) -> i32 {
@@ -304,10 +398,14 @@ impl Engine {
     pub(crate) fn prepare_complete_window(
         &mut self,
         job: &mut TranscriptionJob,
-        audio: Vec<f32>,
+        mut audio: Vec<f32>,
     ) -> Result<(), String> {
+        // Preparation owns this window: pad it in place rather than copying the
+        // entire audio buffer again in decode_window. Stop-time borrowed windows
+        // still take the ordinary copy-and-pad path.
+        crate::audio_finalization::append_final_decode_silence(&mut audio);
         let mut assembled = job.prepared_text.clone();
-        let result = self.decode_window(job, &audio, true, &mut assembled);
+        let result = self.decode_window(job, &audio, false, &mut assembled);
         result?;
         job.prepared_text = assembled;
         job.prepared_windows += 1;
@@ -333,7 +431,7 @@ impl Engine {
     }
 
     /// Both early preparation and deferred windows use this exact path.
-    fn decode_window(
+    pub(crate) fn decode_window(
         &mut self,
         job: &mut TranscriptionJob,
         audio: &[f32],
@@ -350,7 +448,7 @@ impl Engine {
         };
         let transcript = self.run(audio, &job.run_ext)?;
         if !transcript.text.trim().is_empty() {
-            job.english_output &= self.output_is_english(transcript.language.as_deref());
+            job.output_language = job.output_language.combine(self.output_language(transcript.language.as_deref()));
         }
         *assembled = crate::long_audio::stitch(assembled, transcript.text.trim());
         Ok(())
@@ -368,6 +466,13 @@ fn append_piece(target: &mut String, piece: &str) {
 }
 
 impl Engine {
+    fn output_language(&self, detected: Option<&str>) -> crate::transcript_cleanup::OutputLanguage {
+        use crate::transcript_cleanup::OutputLanguage;
+        if self.output_is_english(detected) { OutputLanguage::English }
+        else if detected.is_some() || self.language.is_some() { OutputLanguage::Other }
+        else { OutputLanguage::Unknown }
+    }
+
     fn output_is_english(&self, detected: Option<&str>) -> bool {
         crate::english_fillers::known_english_output(
             detected,
@@ -399,15 +504,45 @@ impl Engine {
         samples: &[f32],
         run_ext: &Option<transcribe_cpp::RunExtension>,
     ) -> Result<transcribe_cpp::Transcript, String> {
+        let range = crate::endpoint::speech_range(samples);
+        let samples = &samples[range];
+        if samples.is_empty() {
+            return Ok(transcribe_cpp::Transcript::default());
+        }
+        // The detected language is per run: it never replaces the user's fixed hint, and a model
+        // that rejects it must fail rather than silently leave the allowed set.
+        let mut detected = self.detector.as_mut().map(|detector| detector.detect(samples));
         loop {
             let opts = transcribe_cpp::RunOptions {
-                language: self.language.clone(),
+                language: detected.clone().or_else(|| self.language.clone()),
                 task: self.task,
                 family: run_ext.clone(),
                 ..Default::default()
             };
             match self.session.run(samples, &opts) {
-                Ok(transcript) => return Ok(transcript),
+                Ok(mut transcript) => {
+                    // Most models do not report a language when given one; the cleanup stage
+                    // needs to know which language this was.
+                    if transcript.language.is_none() {
+                        transcript.language = detected.take();
+                    }
+                    return Ok(transcript);
+                }
+                Err(transcribe_cpp::Error::OutputTruncated {
+                    partial: Some(transcript),
+                    ..
+                })
+                | Err(transcribe_cpp::Error::OutputRepetition {
+                    partial: Some(transcript),
+                    ..
+                }) => {
+                    let mut transcript = *transcript;
+                    if transcript.language.is_none() { transcript.language = detected.take(); }
+                    return Ok(transcript);
+                }
+                Err(transcribe_cpp::Error::Unsupported(msg)) if detected.is_some() => {
+                    return Err(format!("The speech model rejected the chosen language: {msg}"));
+                }
                 Err(transcribe_cpp::Error::Unsupported(msg)) if self.language.is_some() => {
                     let lang = self.language.take().unwrap();
                     self.language = lang.split_once('-').map(|(primary, _)| primary.to_string());
@@ -458,6 +593,7 @@ fn install_engine(engine: Engine) {
 /// normal error, and a lock poisoned by an earlier panic is recovered instead
 /// of propagating the poison forever.
 pub fn transcribe_shared(engine: &Arc<Mutex<Engine>>, samples: Vec<f32>) -> Result<String, String> {
+    let _permit = INFERENCE_GATE.acquire(false);
     let audio_secs = samples.len() as f64 / 16_000.0;
     let started = std::time::Instant::now();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -476,6 +612,24 @@ pub fn transcribe_shared(engine: &Arc<Mutex<Engine>>, samples: Vec<f32>) -> Resu
         started.elapsed().as_secs_f64()
     );
     result
+}
+
+/// Exact source of the loaded engine, for bounded local qualification.
+/// Never waits behind inference and is never included in public diagnostics.
+pub fn loaded_model_path() -> Option<PathBuf> {
+    let engine = get_engine()?;
+    let guard = engine.try_lock().ok()?;
+    Some(guard.model_path.clone())
+}
+
+/// Content-free, read-only qualification identity; never blocks inference or logs settings.
+pub fn loaded_model_configuration() -> Option<String> {
+    let engine = get_engine()?;
+    let guard = engine.try_lock().ok()?;
+    let languages = guard.detector.as_ref().map(|detector| detector.allowed.iter()
+        .map(|code| crate::language_selection::recognition_code(code)).collect::<Vec<_>>().join(","))
+        .unwrap_or_default();
+    Some(format!("generation={};threads={};detector={}", guard.generation, guard.threads, languages))
 }
 
 pub fn is_engine_loaded() -> bool {
@@ -661,6 +815,21 @@ fn read_config(path: &Path) -> Option<String> {
     }
 }
 
+/// A multi-language choice requires a usable detector; failure must not silently enable
+/// unrestricted recognition.
+fn open_detector(files_dir: &Path, languages: &[String], threads: i32) -> Result<Option<LanguageDetector>, String> {
+    if languages.len() < 2 {
+        return Ok(None);
+    }
+    let path = files_dir.join(LANGUAGE_ID_MODEL_PATH);
+    if !path.is_file() {
+        return Err("Download the language detector or choose a single language".to_string());
+    }
+    LanguageDetector::open(&path, languages, threads)
+        .map(Some)
+        .map_err(|_| "Language detector unavailable; download it again or choose one language".to_string())
+}
+
 /// Performs the model load: the selected imported GGUF if any (falling back
 /// to the bundled model on failure), otherwise the bundled model.
 fn do_load(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
@@ -673,6 +842,9 @@ fn do_load(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
     // the model doesn't know is degraded per run — see Engine::run.
     let language = read_config(&files_dir.join(MODEL_LANGUAGE_FILE))
         .filter(|l| !l.eq_ignore_ascii_case("auto"));
+    let allowed_languages = read_config(&files_dir.join(MODEL_LANGUAGES_FILE))
+        .map(|list| crate::language_selection::parse_allowed(&list))
+        .unwrap_or_default();
     let translate = files_dir.join(MODEL_TRANSLATE_FILE).exists();
     let threads = read_config(&files_dir.join(MODEL_THREADS_FILE))
         .and_then(|s| s.parse::<i32>().ok())
@@ -685,6 +857,7 @@ fn do_load(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
         match Engine::load(
             &path,
             language.clone(),
+            &allowed_languages,
             translate,
             threads,
             files_dir.clone(),
@@ -697,6 +870,10 @@ fn do_load(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
             }
             Err(e) => {
                 log::error!("Imported model {} failed to load: {}", path.display(), e);
+                if allowed_languages.len() >= 2 {
+                    notify_status(env, context, &format!("Error: {}", e));
+                    return Err(e);
+                }
                 notify_status(
                     env,
                     context,
@@ -723,7 +900,7 @@ fn do_load(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
 
     notify_status(env, context, "Loading model...");
 
-    match Engine::load(&path, language, translate, threads, files_dir) {
+    match Engine::load(&path, language, &allowed_languages, translate, threads, files_dir) {
         Ok(engine) => {
             let status = engine.ready_status;
             install_engine(engine);
@@ -761,7 +938,8 @@ mod tests {
             preferred_terms: None,
             corrections: None,
             text: "I uh think so".to_string(),
-            english_output,
+            output_language: if english_output { crate::transcript_cleanup::OutputLanguage::English }
+                else { crate::transcript_cleanup::OutputLanguage::Other },
             prepared_windows: 0,
             prepared_text: String::new(),
         };

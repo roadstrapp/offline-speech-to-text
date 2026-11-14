@@ -1,0 +1,8 @@
+<resources>
+    <string name="donate">Donate</string>
+    <string name="donation_lightning_address" translatable="false">npub1jg2qmt3rxjksq65v3nk7dq6yaz2c4uf3qt9epdhxwms2xwd47j2s38a228@npub.cash</string>
+    <string name="donation_no_wallet">No Lightning wallet is available. Copy the address to use it in a wallet.</string>
+    <string name="donation_copy_address">Copy address</string>
+    <string name="donation_address_label">Lightning address</string>
+    <string name="donation_address_copied">Lightning address copied</string>
+</resources>

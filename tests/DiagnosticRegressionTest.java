@@ -22,6 +22,10 @@ public final class DiagnosticRegressionTest {
                 : "Explicit day consent must remain valid after one hour";
         assert !DiagnosticLog.validTroubleshootingLease(start, end, end);
         assert !DiagnosticLog.validTroubleshootingLease(start, end, start - 1);
+        assert DiagnosticLog.validTroubleshootingLease(start, Long.MAX_VALUE, start + 48 * hour);
+        assert !DiagnosticLog.validTroubleshootingLease(start, Long.MAX_VALUE, start - 1);
+        assert !DiagnosticLog.validTroubleshootingLease(start, start + 2 * hour, start + hour);
+
     }
 
     private static void eventTimestamp() throws Exception {

@@ -4,32 +4,34 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
-import android.media.MediaCodec;
-import android.media.MediaExtractor;
-import android.media.MediaFormat;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.ParcelFileDescriptor;
+import android.speech.RecognizerIntent;
 import android.util.Log;
 import android.view.View;
-import android.widget.Button;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.nio.ShortBuffer;
 import java.util.ArrayList;
-import java.util.List;
 
+/**
+ * Transcribes one audio file the user shared or opened with this app, and is the base of
+ * {@link TranscribeAudioActivity}, which returns the transcript to the calling app instead.
+ *
+ * <p>The transcript stays on this screen until the user copies, shares or saves it. Only the
+ * share/open flow keeps the established automatic clipboard copy; the result contract
+ * delivers its text to the caller alone.
+ */
 public class TranscribeFileActivity extends AppCompatActivity {
 
     private static final String TAG = "OfflineVoiceInput";
-    private static final int TARGET_SAMPLE_RATE = 16000;
 
     static {
         try {
@@ -44,7 +46,21 @@ public class TranscribeFileActivity extends AppCompatActivity {
     private View progressArea;
     private ScrollView resultArea;
     private TextView resultText;
-    private Button copyButton;
+    private View actionRow;
+    private View[] actions;
+    private boolean finished = false;
+    /** UI thread. The job ended without a transcript; its message stays on screen. */
+    private boolean failed = false;
+    private volatile boolean cancelled = false;
+    private FileTranscription job;
+    private JobListener jobListener;
+    private volatile String audioDisplayName;
+    private ActivityResultLauncher<String> saveDocument;
+
+    /** True for the activity-result contract; the share/open flow returns nothing. */
+    protected boolean returnsResult() {
+        return false;
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -56,270 +72,362 @@ public class TranscribeFileActivity extends AppCompatActivity {
         progressArea = findViewById(R.id.progress_area);
         resultArea = findViewById(R.id.result_area);
         resultText = findViewById(R.id.txt_result);
-        copyButton = findViewById(R.id.btn_copy);
+        actionRow = findViewById(R.id.result_actions);
+        actions = new View[] {
+                findViewById(R.id.btn_copy), findViewById(R.id.btn_share), findViewById(R.id.btn_save)};
+
+        saveDocument = registerForActivityResult(
+                new ActivityResultContracts.CreateDocument("text/plain"), this::saveTo);
 
         findViewById(R.id.btn_close).setOnClickListener(v -> finish());
-
-        copyButton.setOnClickListener(v -> {
+        findViewById(R.id.btn_copy).setOnClickListener(v -> {
             String text = resultText.getText().toString();
             if (!text.isEmpty()) {
-                ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-                ClipData clip = ClipData.newPlainText("Transcription", text);
-                clipboard.setPrimaryClip(clip);
-                Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show();
+                copyToClipboard(text);
+                Toast.makeText(this, R.string.file_copied, Toast.LENGTH_SHORT).show();
+            }
+        });
+        findViewById(R.id.btn_share).setOnClickListener(v -> shareText());
+        findViewById(R.id.btn_save).setOnClickListener(v -> {
+            if (resultText.length() == 0) return;
+            try {
+                saveDocument.launch(FileTranscriptionContract.transcriptFileName(audioDisplayName));
+            } catch (RuntimeException e) {
+                Toast.makeText(this, R.string.file_save_failed, Toast.LENGTH_SHORT).show();
             }
         });
 
+        if (returnsResult()) setResult(Activity.RESULT_CANCELED);
+
         Uri audioUri = getAudioUri();
         if (audioUri == null) {
-            statusText.setText("Error: No audio file received");
-            progressBar.setVisibility(View.GONE);
+            fail(FileTranscriptionContract.Failure.CLIENT, getString(R.string.file_no_audio));
             return;
         }
 
-        statusText.setText("Loading model...");
-        initNative(this);
+        if (!SpeechModelInventory.hasUsableModel(getFilesDir(), BuildConfig.HAS_BUNDLED_MODEL)) {
+            fail(FileTranscriptionContract.Failure.NO_MODEL, getString(R.string.no_model_short));
+            return;
+        }
+
+        if (!returnsResult() && !FileTranscriptionContract.acceptUri(
+                FileTranscriptionAccess.scheme(audioUri), FileTranscriptionAccess.isOwnProvider(this, audioUri), false)) {
+            fail(FileTranscriptionContract.Failure.CLIENT, getString(R.string.file_no_audio));
+            return;
+        }
+        Uri outputUri = returnsResult() ? outputUri() : null;
+        if (returnsResult() && !acceptResultRequest(audioUri, outputUri)) {
+            fail(FileTranscriptionContract.Failure.CLIENT, getString(R.string.file_no_audio));
+            return;
+        }
+
+        statusText.setText(R.string.models_loading);
+        String sharedType = getIntent().getType();
+        Thread opener = new Thread(() -> open(audioUri, sharedType, outputUri), "transcribe-file-open");
+        opener.start();
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        // Another file was shared while this screen is open (singleTask):
+        // start over with it instead of silently ignoring it.
+        setIntent(intent);
+        recreate();
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        try { cleanupNative(); } catch (Throwable t) { /* ignore */ }
+        // Stops the decoder thread at the next block and the native side
+        // before its next model run.
+        cancelled = true;
+        FileTranscription running = job;
+        job = null;
+        if (running != null) running.cancel();
+        JobListener listener = jobListener;
+        jobListener = null;
+        if (listener != null) closeQuietly(listener.takeOutput());
     }
 
+    @SuppressWarnings("deprecation")
     private Uri getAudioUri() {
         Intent intent = getIntent();
         if (intent == null) return null;
 
         String action = intent.getAction();
-        if (Intent.ACTION_SEND.equals(action)) {
-            return intent.getParcelableExtra(Intent.EXTRA_STREAM);
-        } else if (Intent.ACTION_VIEW.equals(action)) {
-            return intent.getData();
+        try {
+            if (Intent.ACTION_SEND.equals(action)) {
+                Object stream = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+                return stream instanceof Uri ? (Uri) stream : null;
+            } else if (Intent.ACTION_VIEW.equals(action)
+                    || FileTranscriptionContract.ACTION_TRANSCRIBE_AUDIO.equals(action)) {
+                return intent.getData();
+            }
+        } catch (RuntimeException malformedExtras) {
+            return null;
         }
         return null;
     }
 
-    // Called from Rust when model is ready
+    @SuppressWarnings("deprecation")
+    private Uri outputUri() {
+        try {
+            Object value = getIntent().getParcelableExtra(FileTranscriptionContract.EXTRA_OUTPUT_URI);
+            return value instanceof Uri ? (Uri) value : null;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** The result contract reads and writes only Uris another app granted to it. */
+    private boolean acceptResultRequest(Uri audio, Uri output) {
+        boolean outputRequested;
+        try {
+            outputRequested = getIntent().hasExtra(FileTranscriptionContract.EXTRA_OUTPUT_URI);
+        } catch (RuntimeException e) {
+            return false;
+        }
+        int uid;
+        try {
+            String caller = getCallingPackage();
+            if (caller == null) return false;
+            uid = getPackageManager().getApplicationInfo(caller, 0).uid;
+        } catch (android.content.pm.PackageManager.NameNotFoundException | RuntimeException e) { return false; }
+        if (!FileTranscriptionAccess.callerCanAccess(this, audio, uid, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                || (outputRequested && !FileTranscriptionAccess.callerCanAccess(
+                        this, output, uid, Intent.FLAG_GRANT_WRITE_URI_PERMISSION))) return false;
+        boolean callerIsSelf = getPackageName().equals(getCallingPackage());
+        return FileTranscriptionContract.acceptRequest(
+                FileTranscriptionAccess.scheme(audio), FileTranscriptionAccess.isOwnProvider(this, audio),
+                FileTranscriptionAccess.scheme(output), FileTranscriptionAccess.isOwnProvider(this, output),
+                outputRequested && output == null, false, callerIsSelf);
+    }
+
+    /** Worker thread: provider calls may block on another process. */
+    private void open(Uri audio, String sharedType, Uri outputUri) {
+        String name = FileTranscriptionAccess.displayName(this, audio);
+        audioDisplayName = name;
+        if (!returnsResult()) {
+            String type = sharedType != null ? sharedType : FileTranscriptionAccess.type(this, audio);
+            if (!FileTranscriptionContract.acceptSharedType(type, name)) {
+                runOnUiThread(() -> fail(FileTranscriptionContract.Failure.UNDECODABLE,
+                        getString(R.string.file_not_audio)));
+                return;
+            }
+        }
+        if (!FileTranscriptionAccess.canRead(this, audio)) {
+            runOnUiThread(() -> fail(FileTranscriptionContract.Failure.CLIENT,
+                    getString(R.string.file_decode_error)));
+            return;
+        }
+        ParcelFileDescriptor output = null;
+        if (outputUri != null) {
+            // Fail before a long decode when the destination cannot be written.
+            output = FileTranscriptionAccess.openForWrite(this, outputUri);
+            if (output == null) {
+                runOnUiThread(() -> fail(FileTranscriptionContract.Failure.CLIENT,
+                        getString(R.string.file_save_failed)));
+                return;
+            }
+        }
+        ParcelFileDescriptor destination = output;
+        runOnUiThread(() -> {
+            if (cancelled || finished || failed || isFinishing()) {
+                closeQuietly(destination);
+                return;
+            }
+            jobListener = new JobListener(destination);
+            job = new FileTranscription(this, audio, true, jobListener);
+            job.start();
+        });
+    }
+
+    private final class JobListener implements FileTranscription.Listener {
+        private ParcelFileDescriptor output;
+
+        JobListener(ParcelFileDescriptor output) {
+            this.output = output;
+        }
+
+        private synchronized ParcelFileDescriptor takeOutput() {
+            ParcelFileDescriptor taken = output;
+            output = null;
+            return taken;
+        }
+
+        @Override public void onStatus(String status) {
+            onStatusUpdate(status);
+        }
+        @Override public void onReady() {
+            runOnUiThread(() -> {
+                if (!cancelled && !finished && !failed) statusText.setText(R.string.file_decoding);
+            });
+        }
+        @Override public void onPartial(String text) {
+            onPartialText(text);
+        }
+        @Override public void onProgress(long decodedSamples, long durationUs) {
+            postProgress(decodedSamples, durationUs);
+        }
+        @Override public void onDecodeComplete() {
+            runOnUiThread(() -> {
+                if (!cancelled && !finished && !failed) statusText.setText(R.string.file_transcribing);
+            });
+        }
+        @Override public void onResult(String text, long audioMs, long computeMs) {
+            ParcelFileDescriptor destination = takeOutput();
+            if (cancelled) {
+                closeQuietly(destination);
+                return;
+            }
+            if (destination != null && !FileTranscriptionAccess.write(destination, text)) {
+                runOnUiThread(() -> fail(FileTranscriptionContract.Failure.CLIENT,
+                        getString(R.string.file_save_failed)));
+                return;
+            }
+            onTextTranscribed(text);
+        }
+        @Override public void onFailure(FileTranscriptionContract.Failure failure) {
+            closeQuietly(takeOutput());
+            String message;
+            switch (failure) {
+                case NO_SPEECH: message = getString(R.string.file_no_speech); break;
+                case NO_MODEL: message = getString(R.string.no_model_short); break;
+                case BUSY: message = getString(R.string.file_busy); break;
+                case ENGINE: message = "Error: file transcription failed"; break;
+                default: message = getString(R.string.file_decode_error); break;
+            }
+            runOnUiThread(() -> fail(failure, message));
+        }
+    }
+
+    // Transcript of the windows completed so far (also driven by the device smoke test).
+    public void onPartialText(String text) {
+        runOnUiThread(() -> {
+            if (cancelled) return;
+            if (finished) return;
+            resultArea.setVisibility(View.VISIBLE);
+            resultText.setText(text);
+        });
+    }
+
+    /** Displays a native status; an error status ends this screen's job. */
     public void onStatusUpdate(String status) {
         runOnUiThread(() -> {
-            if ("Ready".equals(status)) {
-                statusText.setText("Decoding audio...");
-                startDecodeAndTranscribe();
-            } else {
+            if (cancelled) return;
+            if (NativeStatus.isError(status)) {
+                fail(FileTranscriptionContract.Failure.ENGINE, status);
+            } else if (!finished && !failed && status != null) {
                 statusText.setText(status);
-                if (status != null && status.startsWith("Error")) {
-                    progressBar.setVisibility(View.GONE);
-                }
             }
         });
     }
 
-    // Called from Rust with transcription result
-    public void onTextTranscribed(String text) {
+    private void onTextTranscribed(String text) {
         runOnUiThread(() -> {
+            if (cancelled || finished || failed) return;
+            finished = true;
+            if (returnsResult()) {
+                // The calling app receives the text; nothing is copied to the shared clipboard.
+                ArrayList<String> results = new ArrayList<>();
+                results.add(text);
+                Intent data = new Intent()
+                        .putStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS, results)
+                        .putExtra(RecognizerIntent.EXTRA_CONFIDENCE_SCORES, new float[] {-1.0f});
+                setResult(Activity.RESULT_OK, data);
+                finish();
+                return;
+            }
             // Hide progress, show result
             progressArea.setVisibility(View.GONE);
             resultArea.setVisibility(View.VISIBLE);
-            copyButton.setVisibility(View.VISIBLE);
+            showActions();
 
             resultText.setText(text);
 
             // Auto-copy to clipboard
-            ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-            ClipData clip = ClipData.newPlainText("Transcription", text);
-            clipboard.setPrimaryClip(clip);
-
-            Toast.makeText(this, "Transcription copied to clipboard", Toast.LENGTH_LONG).show();
+            copyToClipboard(text);
+            Toast.makeText(this, R.string.file_copied_auto, Toast.LENGTH_LONG).show();
         });
     }
 
-    private void startDecodeAndTranscribe() {
-        Uri audioUri = getAudioUri();
-        if (audioUri == null) {
-            statusText.setText("Error: No audio file");
+    /** Shows how far transcription got, against the file duration when known. */
+    private void postProgress(long decodedSamples, long durationUs) {
+        long doneSec = decodedSamples / AudioFileDecoder.TARGET_RATE;
+        String msg = durationUs > 0
+                ? getString(R.string.file_transcribing_progress,
+                        formatTime(doneSec), formatTime(durationUs / 1_000_000))
+                : getString(R.string.file_transcribing_at, formatTime(doneSec));
+        runOnUiThread(() -> {
+            if (cancelled) return;
+            if (!finished && !failed) statusText.setText(msg);
+        });
+    }
+
+    private static String formatTime(long seconds) {
+        return String.format(java.util.Locale.ROOT, "%d:%02d", seconds / 60, seconds % 60);
+    }
+
+    /** UI thread. Ends this screen's job; recovered partial text stays available. */
+    private void fail(FileTranscriptionContract.Failure failure, String message) {
+        if (cancelled) return;
+        failed = true;
+        FileTranscription running = job;
+        job = null;
+        if (running != null) running.cancel();
+        JobListener listener = jobListener;
+        jobListener = null;
+        if (listener != null) closeQuietly(listener.takeOutput());
+        if (returnsResult()) setResult(FileTranscriptionContract.activityResult(failure));
+        statusText.setText(message);
+        progressBar.setVisibility(View.GONE);
+        if (resultText.length() > 0) showActions();
+    }
+
+    private void showActions() {
+        actionRow.setVisibility(View.VISIBLE);
+        for (View action : actions) action.setVisibility(View.VISIBLE);
+    }
+
+    private void copyToClipboard(String text) {
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        ClipData clip = ClipData.newPlainText("Transcription", text);
+        clipboard.setPrimaryClip(clip);
+    }
+
+    /** Explicit user action: hands the transcript to the app the user picks. */
+    private void shareText() {
+        String text = resultText.getText().toString();
+        if (text.isEmpty()) return;
+        Intent send = new Intent(Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_TEXT, text);
+        try {
+            startActivity(Intent.createChooser(send, getString(R.string.file_share_title)));
+        } catch (RuntimeException e) {
+            Toast.makeText(this, R.string.file_share_failed, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /** Writes the visible transcript to the document the user created. */
+    private void saveTo(Uri document) {
+        if (document == null) return;
+        String text = resultText.getText().toString();
+        if (text.isEmpty()) {
+            Toast.makeText(this, R.string.file_save_failed, Toast.LENGTH_SHORT).show();
             return;
         }
-
         new Thread(() -> {
-            try {
-                float[] samples = decodeAudioToSamples(audioUri);
-                if (samples == null || samples.length == 0) {
-                    showError("Error: Could not decode audio file");
-                    return;
-                }
-
-                runOnUiThread(() -> statusText.setText("Transcribing..."));
-                transcribeAudio(samples, samples.length);
-
-            } catch (Exception e) {
-                Log.e(TAG, "Error decoding audio", e);
-                showError("Error: " + e.getMessage());
-            }
-        }).start();
+            boolean saved = FileTranscriptionAccess.write(this, document, text);
+            runOnUiThread(() -> Toast.makeText(this,
+                    saved ? R.string.file_saved : R.string.file_save_failed,
+                    Toast.LENGTH_SHORT).show());
+        }, "transcribe-file-save").start();
     }
 
-    private void showError(String message) {
-        runOnUiThread(() -> {
-            statusText.setText(message);
-            progressBar.setVisibility(View.GONE);
-        });
+    private static void closeQuietly(ParcelFileDescriptor descriptor) {
+        if (descriptor == null) return;
+        try { descriptor.close(); } catch (java.io.IOException ignored) { }
     }
-
-    /**
-     * Decode audio from a Uri to 16kHz mono float samples using MediaExtractor/MediaCodec.
-     */
-    private float[] decodeAudioToSamples(Uri uri) throws IOException {
-        MediaExtractor extractor = new MediaExtractor();
-        extractor.setDataSource(this, uri, null);
-
-        // Find audio track
-        int audioTrackIndex = -1;
-        MediaFormat inputFormat = null;
-        for (int i = 0; i < extractor.getTrackCount(); i++) {
-            MediaFormat format = extractor.getTrackFormat(i);
-            String mime = format.getString(MediaFormat.KEY_MIME);
-            if (mime != null && mime.startsWith("audio/")) {
-                audioTrackIndex = i;
-                inputFormat = format;
-                break;
-            }
-        }
-
-        if (audioTrackIndex < 0 || inputFormat == null) {
-            Log.e(TAG, "No audio track found");
-            return null;
-        }
-
-        extractor.selectTrack(audioTrackIndex);
-        String mime = inputFormat.getString(MediaFormat.KEY_MIME);
-        int sampleRate = inputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE);
-        int channelCount = inputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT);
-
-        Log.i(TAG, "Audio: mime=" + mime + " rate=" + sampleRate + " channels=" + channelCount);
-
-        MediaCodec codec = MediaCodec.createDecoderByType(mime);
-        codec.configure(inputFormat, null, null, 0);
-        codec.start();
-
-        List<float[]> allChunks = new ArrayList<>();
-        int totalSamples = 0;
-
-        MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
-        boolean inputDone = false;
-        boolean outputDone = false;
-        long timeoutUs = 10000;
-
-        while (!outputDone) {
-            // Feed input
-            if (!inputDone) {
-                int inputBufferIndex = codec.dequeueInputBuffer(timeoutUs);
-                if (inputBufferIndex >= 0) {
-                    ByteBuffer inputBuffer = codec.getInputBuffer(inputBufferIndex);
-                    int bytesRead = extractor.readSampleData(inputBuffer, 0);
-                    if (bytesRead < 0) {
-                        codec.queueInputBuffer(inputBufferIndex, 0, 0, 0,
-                                MediaCodec.BUFFER_FLAG_END_OF_STREAM);
-                        inputDone = true;
-                    } else {
-                        long presentationTimeUs = extractor.getSampleTime();
-                        codec.queueInputBuffer(inputBufferIndex, 0, bytesRead,
-                                presentationTimeUs, 0);
-                        extractor.advance();
-                    }
-                }
-            }
-
-            // Drain output
-            int outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, timeoutUs);
-            if (outputBufferIndex >= 0) {
-                if ((bufferInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                    outputDone = true;
-                }
-
-                ByteBuffer outputBuffer = codec.getOutputBuffer(outputBufferIndex);
-                if (outputBuffer != null && bufferInfo.size > 0) {
-                    outputBuffer.position(bufferInfo.offset);
-                    outputBuffer.limit(bufferInfo.offset + bufferInfo.size);
-
-                    // Decoded PCM is 16-bit signed. Convert to mono float.
-                    ShortBuffer shortBuf = outputBuffer.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer();
-                    int shortCount = shortBuf.remaining();
-                    int monoCount = shortCount / channelCount;
-
-                    float[] chunk = new float[monoCount];
-                    for (int i = 0; i < monoCount; i++) {
-                        if (channelCount == 1) {
-                            chunk[i] = shortBuf.get() / 32768.0f;
-                        } else {
-                            // Mix channels to mono
-                            float sum = 0;
-                            for (int c = 0; c < channelCount; c++) {
-                                sum += shortBuf.get() / 32768.0f;
-                            }
-                            chunk[i] = sum / channelCount;
-                        }
-                    }
-
-                    allChunks.add(chunk);
-                    totalSamples += monoCount;
-                }
-
-                codec.releaseOutputBuffer(outputBufferIndex, false);
-            }
-        }
-
-        codec.stop();
-        codec.release();
-        extractor.release();
-
-        // Resample to 16kHz if needed
-        float[] monoSamples = mergeChunks(allChunks, totalSamples);
-
-        if (sampleRate != TARGET_SAMPLE_RATE) {
-            Log.i(TAG, "Resampling from " + sampleRate + " to " + TARGET_SAMPLE_RATE);
-            monoSamples = resample(monoSamples, sampleRate, TARGET_SAMPLE_RATE);
-        }
-
-        Log.i(TAG, "Decoded " + monoSamples.length + " samples at 16kHz");
-        return monoSamples;
-    }
-
-    private float[] mergeChunks(List<float[]> chunks, int totalSamples) {
-        float[] result = new float[totalSamples];
-        int offset = 0;
-        for (float[] chunk : chunks) {
-            System.arraycopy(chunk, 0, result, offset, chunk.length);
-            offset += chunk.length;
-        }
-        return result;
-    }
-
-    /**
-     * Simple linear interpolation resampling.
-     */
-    private float[] resample(float[] input, int fromRate, int toRate) {
-        double ratio = (double) fromRate / toRate;
-        int outputLength = (int) (input.length / ratio);
-        float[] output = new float[outputLength];
-
-        for (int i = 0; i < outputLength; i++) {
-            double srcIndex = i * ratio;
-            int idx = (int) srcIndex;
-            double frac = srcIndex - idx;
-
-            if (idx + 1 < input.length) {
-                output[i] = (float) (input[idx] * (1.0 - frac) + input[idx + 1] * frac);
-            } else if (idx < input.length) {
-                output[i] = input[idx];
-            }
-        }
-
-        return output;
-    }
-
-    // Native methods
-    private native void initNative(TranscribeFileActivity activity);
-    private native void cleanupNative();
-    private native void transcribeAudio(float[] samples, int length);
 }

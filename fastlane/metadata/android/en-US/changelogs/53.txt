@@ -1,0 +1,1 @@
+Detailed troubleshooting now offers Enable for 1 hour, Enable for 24 hours, Enable forever, then Cancel in a fixed order. Forever keeps detailed logging enabled until you switch it off; disabling basic logging also revokes it. The warning, private metadata-only collection and bounded log remain. Updated privacy documentation and verified consent, expiry and cancellation behavior.

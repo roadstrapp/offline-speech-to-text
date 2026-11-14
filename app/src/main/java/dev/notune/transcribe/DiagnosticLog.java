@@ -49,7 +49,7 @@ public final class DiagnosticLog {
             "app_start", "app_stop", "app_lifecycle", "service_state",
             "ime_start", "ime_stop", "ime_state",
             "model_state", "model_provenance", "timing", "resource",
-            "notification_state", "error_code", "recognition_outcome", "callback_delivery", "session", "pipeline"));
+            "notification_state", "error_code", "recognition_outcome", "callback_delivery", "session", "pipeline", "window_plan"));
     private static final Pattern UNSIGNED_METADATA = Pattern.compile("[0-9]{1,12}");
     private static final Pattern BATTERY_METADATA = Pattern.compile("[0-9]{1,3}");
     private static final Pattern THERMAL_METADATA = Pattern.compile("[0-6]");
@@ -107,6 +107,9 @@ public final class DiagnosticLog {
         });
     }
 
+    /** Explicit indefinite consent, stored as a maximum expiry in the existing marker format. */
+    public static final long TROUBLESHOOTING_FOREVER_MS = -1L;
+
     /** Separate opt-in lease; malformed, expired or clock-reversed values fail closed. */
     public static boolean isTroubleshootingEnabled(File filesDir) {
         if (!isEnabled(filesDir)) return false;
@@ -138,12 +141,14 @@ public final class DiagnosticLog {
     }
 
     static boolean validTroubleshootingLease(long started, long expires, long now) {
-        return started > 0 && expires > started && validTroubleshootingDuration(expires - started)
-                && now >= started && now < expires;
+        return started > 0 && now >= started
+                && (expires == Long.MAX_VALUE || (expires > started
+                && validTroubleshootingDuration(expires - started) && now < expires));
     }
 
     private static boolean validTroubleshootingDuration(long durationMs) {
-        return durationMs == TROUBLESHOOTING_DURATION_MS || durationMs == TROUBLESHOOTING_DAY_MS;
+        return durationMs == TROUBLESHOOTING_DURATION_MS || durationMs == TROUBLESHOOTING_DAY_MS
+                || durationMs == TROUBLESHOOTING_FOREVER_MS;
     }
 
     public static void setTroubleshootingEnabled(File filesDir, boolean enabled) throws IOException {
@@ -152,7 +157,7 @@ public final class DiagnosticLog {
 
     public static void setTroubleshootingEnabled(File filesDir, boolean enabled, long durationMs) throws IOException {
         if (enabled && !validTroubleshootingDuration(durationMs)) {
-            throw new IllegalArgumentException("Choose one hour or 24 hours");
+            throw new IllegalArgumentException("Choose one hour, 24 hours or forever");
         }
         filesDir.mkdirs();
         withLock(filesDir, () -> {
@@ -162,7 +167,7 @@ public final class DiagnosticLog {
             long now = System.currentTimeMillis();
             File temporary = new File(filesDir, ENHANCED_FILE + ".tmp");
             Files.write(temporary.toPath(), ByteBuffer.allocate(16).putLong(now)
-                    .putLong(now + durationMs).array());
+                    .putLong(durationMs == TROUBLESHOOTING_FOREVER_MS ? Long.MAX_VALUE : now + durationMs).array());
             replaceMarker(temporary, target);
         });
     }
@@ -327,6 +332,8 @@ public final class DiagnosticLog {
                 case "decode_ms":
                 case "postprocess_ms":
                 case "prepared_windows":
+                case "planned_windows":
+                case "raw_window_limit_ms":
                 case "model_warm":
                     safe = UNSIGNED_METADATA.matcher(value).matches();
                     break;
