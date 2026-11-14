@@ -48,7 +48,8 @@ public final class ModelRecommendation {
         }
 
         public Request(String languageTag, boolean translation, Goal goal) {
-            this.languageTag = languageTag == null ? "" : languageTag;
+            this.languageTag = languageTag == null || languageTag.trim().equalsIgnoreCase("auto")
+                    ? "" : languageTag.trim();
             this.translation = translation;
             this.goal = goal == null ? Goal.BALANCED : goal;
         }

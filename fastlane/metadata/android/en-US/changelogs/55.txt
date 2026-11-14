@@ -1,0 +1,1 @@
+Fix dictionary corrections and preferred phrases failing to match uppercase Greek text. Preserve quoted text, paths and existing Unicode lowercase expansion handling.

@@ -42,6 +42,7 @@ public final class BehaviorTest {
         verifiedModelLabelsRequirePersistedProvenance();
         setupStatesAreExplicit();
         imeEditorSafetyIsFailClosed();
+        imeInsertionHandlesPlaceholdersSpacingAndExtractedOffsets();
         recordingSessionTracksTheSafeEditorLifecycleNotWrapperIdentity();
         deletePreviewMovesByWholeGraphemeClusters();
         deletePreviewExtendsAnExistingSelectionByCluster();
@@ -135,7 +136,28 @@ public final class BehaviorTest {
         assertEquals(true, model.abis.contains("arm64-v8a")
                         && !model.requiresDotProduct && !model.requiresFp16,
                 "the baseline backend keeps every arm64 model installable");
-        assertEquals(53, ModelCatalog.verifiedDownloads().size(),
+        assertEquals(11, ModelCatalog.curatedDownloads().size(), "picker only offers qualified choices");
+        Set<String> curated = new HashSet<>();
+        for (ModelDescriptor choice : ModelCatalog.curatedDownloads()) curated.add(choice.fileName);
+        assertEquals(true, curated.contains("parakeet-tdt-0.6b-v3-Q8_0.gguf"), "owner reference has a verified download");
+        assertEquals(true, curated.contains("canary-1b-v2-Q4_K_M.gguf"), "Canary v2 is a default choice");
+        ModelDescriptor canary = ModelCatalog.findByFileName("canary-1b-v2-Q4_K_M.gguf");
+        assertEquals(true, canary.supportsLanguage("de-DE") && canary.supportsLanguage("en"),
+                "Canary v2 lists its 25 European languages");
+        assertEquals(false, canary.supportsLanguage(""),
+                "Canary v2 cannot choose a language itself");
+        for (String tag : new String[]{"", "auto", "en", "de", "fr", "ja", "yue"}) {
+            for (ModelRecommendation.Goal goal : ModelRecommendation.Goal.values()) {
+                for (boolean translate : new boolean[]{false, true}) {
+                    ModelRecommendation.Result result = ModelRecommendation.recommend(
+                            new ModelRecommendation.DeviceProfile(true, true, true, 12L << 30, 16L << 30, null),
+                            new ModelRecommendation.Request(tag, translate, goal));
+                    if (result.status == ModelRecommendation.Status.RECOMMENDED)
+                        assertEquals(true, curated.contains(result.model.fileName), "recommendation must remain within curated downloads");
+                }
+            }
+        }
+        assertEquals(54, ModelCatalog.verifiedDownloads().size(),
                 "every model variant supported by the pinned runtime is downloadable");
         assertEquals(true, ModelCatalog.verifiedDownloads().stream().allMatch(
                         ModelDescriptor::isVerifiedDownload),
@@ -143,6 +165,8 @@ public final class BehaviorTest {
         Set<String> modelIds = new HashSet<>();
         Set<String> modelFiles = new HashSet<>();
         for (ModelDescriptor candidate : ModelCatalog.verifiedDownloads()) {
+            assertEquals(true, candidate.downloadUrl.matches("https://huggingface\\.co/[^/]+/[^/]+/resolve/[0-9a-f]{40}/.+"),
+                    "every verified model uses an immutable repository revision");
             assertEquals(true, modelIds.add(candidate.id), "catalog model IDs are unique");
             assertEquals(true, modelFiles.add(candidate.fileName),
                     "catalog model filenames are unique");
@@ -176,7 +200,7 @@ public final class BehaviorTest {
                 "primeLine downloads use the reviewed immutable model revision");
         assertEquals(true, primeLine.supportsLanguage("de-DE"),
                 "primeLine advertises its retained Parakeet v3 language coverage");
-        assertEquals("transcribe.cpp 0.2.3", primeLine.backend,
+        assertEquals("transcribe.cpp 0.4.0", primeLine.backend,
                 "new catalog entries name the active runtime version");
         assertEquals(true, ModelCatalog.localePreferredBalanced("fr-FR") == null,
                 "a language-tuned model does not override the general default elsewhere");
@@ -448,9 +472,13 @@ public final class BehaviorTest {
         assertEquals(ModelGuidance.DeviceFit.NOT_ENOUGH_RAM,
                 ModelGuidance.fit(huge, ordinaryPhone),
                 "large models are rejected before download when estimated RAM is insufficient");
+        assertEquals(ModelCatalog.verifiedDefault().fileName,
+                ModelRecommendation.recommend(ordinaryPhone,
+                        new ModelRecommendation.Request("auto", false)).model.fileName,
+                "legacy automatic language selects the same supported default as an empty hint");
         ModelDescriptor ordinaryParakeet = ModelGuidance.largestComfortableInFamily(
                 ModelCatalog.verifiedDownloads(), "Parakeet", ordinaryPhone);
-        assertEquals(DefaultModelContract.FILE_NAME, ordinaryParakeet.fileName,
+        assertEquals("parakeet-tdt-0.6b-v3-Q8_0.gguf", ordinaryParakeet.fileName,
                 "a 4 GiB phone highlights the largest conservative Parakeet fit");
         ModelRecommendation.DeviceProfile highMemoryPhone =
                 new ModelRecommendation.DeviceProfile(
@@ -607,23 +635,40 @@ public final class BehaviorTest {
                 "private no-learning fields allow content-free local dictation");
     }
 
+    private static void imeInsertionHandlesPlaceholdersSpacingAndExtractedOffsets() {
+        assertEquals(false, ImeTextEdit.isTextEditor(0, -1, 0), "placeholder is not an editor");
+        assertEquals(true, ImeTextEdit.isTextEditor(0, -1, 42), "terminal view retains dictation");
+        assertEquals(true, ImeTextEdit.isTextEditor(1, -1, 0), "text editor may omit selection");
+        assertEquals(" Weather ", ImeTextEdit.separateDictation("r", "Weather "), "separate adjacent words");
+        assertEquals("Weather ", ImeTextEdit.separateDictation(" ", "Weather "), "existing separator");
+        assertEquals(" Weather ", ImeTextEdit.separateDictation("r", " Weather "), "preserve leading whitespace");
+        assertEquals("Weather ", ImeTextEdit.separateDictation(null, "Weather "), "missing cursor context");
+        assertEquals(new ImeTextEdit.Range(1010, 1020), ImeTextEdit.insertedSelection(1000, 20, 10),
+                "selection uses absolute extracted offset");
+        assertEquals(true, ImeTextEdit.insertedSelection(0, -1, 10) == null, "unknown selection is skipped");
+        assertEquals(true, ImeTextEdit.insertedSelection(0, 2, 10) == null, "negative range is skipped");
+        assertEquals(true, ImeTextEdit.insertedSelection(Integer.MAX_VALUE, 2, 1) == null, "overflow is skipped");
+    }
+
     private static void recordingSessionTracksTheSafeEditorLifecycleNotWrapperIdentity() {
         Object originalEditor = new Object();
         Object replacementEditor = new Object();
         ImeRecordingSession session = new ImeRecordingSession();
 
-        session.begin(originalEditor, 7L);
+        session.begin(originalEditor, 7L, "com.example.chat");
         assertEquals(true, session.canCommitTo(originalEditor, 7L, true, true),
                 "a transcription may commit to its original active safe editor");
         assertEquals(true, session.canCommitTo(replacementEditor, 7L, true, true),
                 "a replacement IPC wrapper remains valid in the same editor lifecycle");
         assertEquals(false, session.canCommitTo(originalEditor, 8L, true, true),
                 "a transcription never commits after Android starts another editor");
-        assertEquals(true, session.canDeliverToCurrent(replacementEditor, true, true),
+        assertEquals(true, session.canDeliverToCurrent(replacementEditor, true, true, "com.example.chat"),
                 "a completed result follows Android's current safe composer");
-        assertEquals(false, session.canDeliverToCurrent(null, true, true),
+        assertEquals(false, session.canDeliverToCurrent(replacementEditor, true, true, "com.example.other"),
+                "a dictation that outlived its editor (screen lock, app switch) never goes to another app");
+        assertEquals(false, session.canDeliverToCurrent(null, true, true, "com.example.chat"),
                 "delivery waits while a recreated composer has no connection");
-        assertEquals(false, session.canDeliverToCurrent(replacementEditor, false, true),
+        assertEquals(false, session.canDeliverToCurrent(replacementEditor, false, true, "com.example.chat"),
                 "delivery never targets a sensitive replacement composer");
         assertEquals(false, session.canCommitTo(originalEditor, 7L, false, true),
                 "a transcription never commits to a sensitive editor");
@@ -631,11 +676,11 @@ public final class BehaviorTest {
                 "a transcription never commits without active input");
 
         ImeRecordingSession failedSession = new ImeRecordingSession();
-        failedSession.begin(originalEditor, 7L);
+        failedSession.begin(originalEditor, 7L, "com.example.chat");
         failedSession.onError();
         assertEquals(false, failedSession.canCommitTo(originalEditor, 7L, true, true),
                 "an error fail-closes an otherwise active recording");
-        assertEquals(false, failedSession.canDeliverToCurrent(replacementEditor, true, true),
+        assertEquals(false, failedSession.canDeliverToCurrent(replacementEditor, true, true, "com.example.chat"),
                 "an error also blocks delivery to a replacement composer");
 
         session.discard();
@@ -643,7 +688,7 @@ public final class BehaviorTest {
         assertEquals(false, session.canCommitTo(originalEditor, 7L, true, true),
                 "an error cannot clear the discard latch for a late transcription");
 
-        session.begin(originalEditor, 9L);
+        session.begin(originalEditor, 9L, "com.example.chat");
         assertEquals(true, session.canCommitTo(originalEditor, 9L, true, true),
                 "only a new recording clears the discard latch");
         session.finish();

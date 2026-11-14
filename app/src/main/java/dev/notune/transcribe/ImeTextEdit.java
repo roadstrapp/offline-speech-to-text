@@ -18,6 +18,23 @@ final class ImeTextEdit {
 
     private ImeTextEdit() { }
 
+    static boolean isTextEditor(int inputType, int initialSelection, int fieldId) {
+        return !(inputType == 0 && initialSelection < 0 && fieldId == 0);
+    }
+
+    static String separateDictation(CharSequence before, String text) {
+        if (text == null || text.isEmpty() || Character.isWhitespace(text.charAt(0))) return text;
+        return before != null && before.length() > 0
+                && !Character.isWhitespace(before.charAt(before.length() - 1)) ? " " + text : text;
+    }
+
+    static Range insertedSelection(int extractedOffset, int relativeCursor, int length) {
+        if (extractedOffset < 0 || relativeCursor < 0 || length < 0) return null;
+        long end = (long) extractedOffset + relativeCursor;
+        long start = end - length;
+        return start < 0 || end > Integer.MAX_VALUE ? null : new Range((int) start, (int) end);
+    }
+
     static boolean isSensitiveEditor(int inputType, int imeOptions) {
         // IME_FLAG_NO_PERSONALIZED_LEARNING is a request not to retain or learn
         // editor content. This keyboard never does either, so privacy-conscious

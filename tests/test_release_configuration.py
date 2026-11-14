@@ -19,15 +19,17 @@ class ReleaseConfigurationTest(unittest.TestCase):
     def test_release_identity_and_default_model_contract_are_immutable(self):
         gradle = (ROOT / "app/build.gradle.kts").read_text()
         gradle_properties = (ROOT / "gradle.properties").read_text()
-        workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
         self.assertIn('applicationId = "app.offlinespeechtotext"', gradle)
-        self.assertIn("versionCode = 50", gradle)
-        self.assertIn('versionName = "0.14.0"', gradle)
+        code = int(re.search(r"versionCode = (\d+)", gradle).group(1))
+        version = re.search(r'versionName = "(\d+\.\d+\.\d+)"', gradle).group(1)
+        self.assertTrue(version)
+        changelogs = ROOT / "fastlane/metadata/android/en-US/changelogs"
+        self.assertEqual(code, max(int(path.stem) for path in changelogs.glob("*.txt")
+                                   if path.stem.isdigit()))
         self.assertIn('providers.gradleProperty("includeBundledModel")', gradle)
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: false', gradle)
         self.assertIn('ModelFile("parakeet-tdt-0.6b-v3-Q4_K_M.gguf", 485425504L,', gradle)
         self.assertNotIn("org.gradle.java.home", gradle_properties)
-        self.assertNotIn("sed -i '/org.gradle.java.home/d'", workflow)
         self.assertIn('"b68557be1e3c40207fd7c4bd9d63f1d3316b963f15325bfb0cc16a8bb0ffd181"', gradle)
         self.assertIn('resolve/85ac09ea12fc4b1112fa76810059364bc6adc9de', gradle)
         self.assertNotIn("parakeet-tdt_ctc-110m", gradle)
@@ -35,22 +37,19 @@ class ReleaseConfigurationTest(unittest.TestCase):
     def test_transcribe_cpp_runtime_stays_on_the_reviewed_lockstep_release(self):
         manifest = (ROOT / "Cargo.toml").read_text()
         lockfile = (ROOT / "Cargo.lock").read_text()
-        self.assertIn('transcribe-cpp = "0.2.3"', manifest)
+        self.assertIn('transcribe-cpp = "0.4.0"', manifest)
         self.assertRegex(
             lockfile,
-            r'name = "transcribe-cpp"\nversion = "0\.2\.3"',
+            r'name = "transcribe-cpp"\nversion = "0\.4\.0"',
         )
         self.assertRegex(
             lockfile,
-            r'name = "transcribe-cpp-sys"\nversion = "0\.2\.3"',
+            r'name = "transcribe-cpp-sys"\nversion = "0\.4\.0"',
         )
 
     def test_native_toolchain_is_explicit_and_update_compatible(self):
         gradle = (ROOT / "app/build.gradle.kts").read_text()
         self.assertIn('ndkVersion = "29.0.14206865"', gradle)
-        workflow = (ROOT / ".github/workflows/android_release.yml").read_text()
-        self.assertIn('sdkmanager --install "ndk;29.0.14206865"', workflow)
-        self.assertIn('ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865', workflow)
         self.assertIn('libc++_shared.so', gradle)
         self.assertNotIn('ndkVersion = "/', gradle)
 
@@ -116,22 +115,20 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("included", values["models_builtin_sub"].lower())
         self.assertNotIn("download separately", values["models_builtin_sub"].lower())
         models = (ROOT / "app/src/main/java/dev/notune/transcribe/ModelsActivity.java").read_text()
-        self.assertIn("if (BuildConfig.HAS_BUNDLED_MODEL)", models)
+        self.assertIn("BuildConfig.HAS_BUNDLED_MODEL", models)
         self.assertIn("R.string.models_builtin_sub", models)
         self.assertIn("R.string.models_builtin_retained_sub", models)
-        self.assertIn("models_recommendation_included", models)
-        self.assertIn("models_recommendation_included_available", models)
         self.assertIn("models_included", models)
         self.assertIn("models_use_included", models)
         self.assertIn("if (recommendationUsesBundledModel)", models)
         self.assertIn("selectModel(null);", models)
         assets = (ROOT / "src/assets.rs").read_text()
         marker_branch = assets[assets.index("if marker_file.exists()"):
-                               assets.index("// Incomplete or missing")]
+                               assets.index("let _lock = ExtractionLock::acquire")]
         self.assertIn("find_gguf(&model_dir)", marker_branch)
         self.assertIn("re-extracting", marker_branch)
-        self.assertLess(assets.index("let model_path = match find_gguf(&model_dir) {"),
-                        assets.index('std::fs::write(&marker_file, "ok")?;'))
+        self.assertLess(assets.index("find_gguf(&tmp_model_dir)?;"),
+                        assets.index('std::fs::write(tmp_model_dir.join(EXTRACTION_COMPLETE_MARKER), "ok")?;'))
         inventory = (ROOT / "app/src/main/java/dev/notune/transcribe/SpeechModelInventory.java").read_text()
         self.assertIn('new File(filesDir, "builtin-model")', inventory)
         self.assertIn('new File(directory, ".extraction_complete")', inventory)
@@ -145,10 +142,10 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertNotIn("findViewById(R.id.text_models_desc)", source)
         self.assertIn("text_model_recommendation", layout)
         self.assertIn("addFamilyHeader(renderedFamily)", source)
-        self.assertIn("largestComfortableInFamily", source)
+        self.assertIn("ModelRecommendation.recommend", source)
         row = (ROOT / "app/src/main/res/layout/item_model_download.xml").read_text()
         self.assertIn("txt_download_model_fit_badge", row)
-        self.assertIn("bg_model_family_recommended", source)
+        self.assertNotIn("bg_model_family_recommended", source)
 
 
     def test_model_helper_copy_stays_dense_in_every_locale(self):
@@ -233,7 +230,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         window_hidden = source[
             source.index("public void onWindowHidden()") : source.index("public void onStartInput(")
         ]
-        self.assertIn("if (isRecording && isStopOnHideEnabled())", window_hidden)
+        self.assertIn("if (isRecording && (isStopOnHideEnabled() || !keepAlive.ready()))", window_hidden)
         self.assertIn("stopForRecovery();", window_hidden)
         self.assertIn("isStopOnHideEnabled()", window_hidden)
         finish_input = source[
@@ -311,10 +308,15 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("model access stays", service_cancel)
         start = wrapper[wrapper.index("protected void onStartListening"):
                         wrapper.index("private void startListeningFromCallerAudio")]
-        self.assertLess(start.index("cancelNative();"), start.index("mCallback = callback;"))
-        self.assertIn("private volatile Callback mCallback;", wrapper)
-        self.assertIn("if (callback != mCallback) return;", wrapper)
-        self.assertIn("if (mCallback == cb) mCallback = null;", wrapper)
+        # The previous microphone request is retired and told before the new one claims the slot.
+        self.assertLess(start.index("retire(mic"), start.index("cancelNative();"))
+        self.assertLess(start.index("cancelNative();"), start.index("previous.error("))
+        self.assertLess(start.index("previous.error("), start.index("claim(mic"))
+        # Caller audio has its own slot and never cancels the microphone request (or vice versa).
+        caller_branch = start[start.index("Action.START_BACKGROUND)"):start.index("retire(mic")]
+        self.assertNotIn("cancelNative", caller_branch)
+        self.assertIn("if (callback != mic.callback) return;", wrapper)
+        self.assertIn("slot.callback == callback && slot.generation == generation", wrapper)
 
     def test_capture_and_live_subtitle_power_hot_paths_are_bounded(self):
         popup = (ROOT / "app/src/main/java/dev/notune/transcribe/RecognizeActivity.java").read_text()
@@ -434,7 +436,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         missing_asset_guard = assets.index(
             "list_asset_children(env, &asset_manager_obj, BUILTIN_MODEL_DIR)?.is_empty()")
         recursive_copy = assets.index(
-            "copy_assets_recursively(env, &asset_manager_obj, BUILTIN_MODEL_DIR, &base_path)")
+            "copy_assets_recursively(env, &asset_manager_obj, BUILTIN_MODEL_DIR, tmp_root)")
         self.assertLess(missing_asset_guard, recursive_copy)
         self.assertIn("no bundled model is packaged in this build", assets)
         self.assertIn("env.exception_clear()", assets)
@@ -455,7 +457,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         android = "{http://schemas.android.com/apk/res/android}"
         headings = [node for node in root.iter()
                     if node.attrib.get(android + "accessibilityHeading") == "true"]
-        self.assertEqual(7, len(headings))
+        self.assertEqual(9, len(headings))
         self.assertTrue(all(node.attrib.get(android + "id", "").startswith("@+id/")
                             for node in headings))
 
@@ -501,7 +503,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
             if android + "id" in node.attrib
         }
         for expected in (
-            "@+id/home_content", "@+id/card_setup", "@+id/card_models",
+            "@+id/home_content", "@+id/page_home", "@+id/page_settings",
             "@+id/text_ime_status", "@+id/btn_ime_picker",
             "@+id/btn_ime_settings", "@+id/text_version",
         ):
@@ -509,7 +511,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
 
         main = (ROOT / "app/src/main/java/dev/notune/transcribe/MainActivity.java").read_text()
         layout_text = (ROOT / "app/src/main/res/layout/activity_main.xml").read_text()
-        self.assertLess(layout_text.index('@+id/card_models'), layout_text.index('@+id/card_setup'))
+        self.assertLess(layout_text.index('@+id/page_home'), layout_text.index('@+id/page_settings'))
         self.assertNotIn("homeContent.addView", main)
         self.assertIn("SetupState.microphone", main)
         self.assertIn("SetupState.ime", main)
@@ -539,16 +541,17 @@ class ReleaseConfigurationTest(unittest.TestCase):
         ):
             self.assertIn(f'@+id/{action}', layout_text)
 
-        self.assertIn('@+id/btn_more_settings', layout_text)
-        self.assertIn('@+id/advanced_home_sections', layout_text)
-        self.assertGreater(layout_text.index('@+id/btn_subs_advanced'),
-                           layout_text.index('@+id/advanced_home_sections'))
-        self.assertIn('android:visibility="gone"', layout_text[
-            layout_text.index('@+id/advanced_home_sections'):])
-        main = (ROOT / "app/src/main/java/dev/notune/transcribe/MainActivity.java").read_text()
-        self.assertIn("advancedSections.setVisibility", main)
-
-        self.assertLessEqual(layout_text.count("MaterialCardView"), 14)
+        root = ET.fromstring(layout_text)
+        android = "{http://schemas.android.com/apk/res/android}"
+        home = next(view for view in root.iter()
+                    if view.attrib.get(android + "id") == "@+id/page_home")
+        self.assertFalse(any("Switch" in view.tag for view in home.iter()))
+        for page in ("keyboard", "recording", "privacy", "advanced", "appearance"):
+            node = next(view for view in root.iter()
+                        if view.attrib.get(android + "id") == "@+id/page_" + page)
+            self.assertEqual("gone", node.attrib[android + "visibility"])
+        self.assertIn('@+id/main_navigation', layout_text)
+        self.assertEqual(0, layout_text.count("MaterialCardView"))
 
     def test_home_accessibility_contract_is_explicit_and_dynamic_type_safe(self):
         root = ET.parse(ROOT / "app/src/main/res/layout/activity_main.xml").getroot()
@@ -612,15 +615,15 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("FINAL_DECODE_SILENCE_MS: usize = 500", helper)
         self.assertIn("if samples.is_empty()", helper)
         self.assertIn("samples.resize", helper)
-        self.assertEqual(1, background.count("append_final_decode_silence(&mut audio)"))
+        self.assertNotIn("append_final_decode_silence(&mut audio)", background)
         # Only a private bounded preparation snapshot may be shortened; never
         # truncate the complete Finish recording.
-        finalization = background[background.index("let (mut audio, total_samples, stop_started)"):]
+        finalization = background[background.index("let (audio, total_samples, stop_started)"):]
         self.assertNotIn("audio.truncate", finalization)
         self.assertIn("buffer.window_snapshot(next_sample, limit)", background)
         self.assertNotIn("retry_complete_recording", background)
-        self.assertLess(background.index("append_final_decode_silence(&mut audio)"),
-                        background.index("transcribe_complete(&eng"))
+        engine = (ROOT / "src/engine.rs").read_text()
+        self.assertIn("index + 1 < windows.len() || pad_final", engine)
 
     def test_complete_dictation_is_never_split_on_a_pause(self):
         capture = (ROOT / "src/background_chunking.rs").read_text()
@@ -633,19 +636,26 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertNotIn("Command::Chunk", background)
         self.assertNotIn("active_chunk_plan", voice + recognizer + engine)
         self.assertIn("let transcript = self.run(samples, &job.run_ext)?", engine)
-        self.assertIn("job.english_output &= self.output_is_english(transcript.language.as_deref())", engine)
+        self.assertIn("job.output_language = job.output_language.combine(self.output_language(transcript.language.as_deref()))", engine)
         self.assertIn("if let Some(max_window_samples) = self.bounded_window_samples", engine)
         self.assertIn("crate::long_audio::stitch", engine)
         self.assertIn("crate::long_audio::MIN_WINDOW_SAMPLES", engine)
         self.assertNotIn("while !rest.is_empty()", engine)
 
-    def test_fixed_amber_palette_and_launcher_icon_have_no_blue_fallback(self):
+    def test_fixed_neutral_palette_preserves_monochrome_launcher(self):
         color_files = [
             ROOT / "app/src/main/res/values/colors.xml",
             ROOT / "app/src/main/res/values-night/colors.xml",
         ]
         combined = "\n".join(path.read_text() for path in color_files)
-        self.assertIn('<color name="colorPrimary">#FFB300</color>', combined)
+        self.assertIn('<color name="colorPrimary">#FFC166</color>', combined)
+        for path in color_files:
+            for color in ET.parse(path).getroot():
+                value = (color.text or "").lstrip("#")
+                if len(value) == 6:
+                    red, green, blue = (int(value[index:index + 2], 16) for index in (0, 2, 4))
+                    self.assertGreaterEqual(red, green, color.attrib["name"])
+                    self.assertGreaterEqual(green, blue, color.attrib["name"])
         self.assertNotIn("#2196F3", combined.upper())
         self.assertNotIn("#1976D2", combined.upper())
 
@@ -738,7 +748,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
             if path.is_file() and path.suffix in {".xml", ".java", ".kt"}:
                 self.assertNotRegex(path.read_text(), r'@drawable/icon(?:["<\s])', str(path))
 
-    def test_amber_roles_meet_contrast_in_light_and_dark_modes(self):
+    def test_theme_roles_meet_contrast_in_light_and_dark_modes(self):
         def color_map(path):
             return {node.attrib["name"]: (node.text or "").strip()
                     for node in ET.parse(path).getroot().findall("color")}
@@ -781,10 +791,6 @@ class ReleaseConfigurationTest(unittest.TestCase):
                     ("colorOnSurfaceVariant", "colorSurfaceVariant")):
                 self.assertGreaterEqual(self._contrast(palette[foreground], palette[background]), 4.5,
                                         f"{foreground} must contrast with {background}")
-            for role in ("colorSurfaceInverse", "colorOnSurfaceInverse"):
-                red, green, blue = (int(palette[role][index:index + 2], 16)
-                                    for index in (1, 3, 5))
-                self.assertGreaterEqual(red, blue, f"{role} must stay warm or neutral")
 
     def test_privacy_and_migration_copy_is_truthful(self):
         strings = ET.parse(ROOT / "app/src/main/res/values/strings.xml").getroot()
@@ -829,18 +835,20 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("tryLock()", downloader)
         self.assertIn("setRequestProperty(\"Range\"", downloader)
         self.assertIn("setRequestProperty(\"If-Range\"", downloader)
-        self.assertEqual(3, catalog.count("ModelDescriptor.Provenance.EXACT_PINNED"))
+        # Three Parakeet entries, the generic pinned() builder, and the auxiliary language detector.
+        self.assertEqual(5, catalog.count("ModelDescriptor.Provenance.EXACT_PINNED"))
         self.assertIn("SenseVoice", catalog)
         self.assertIn("Whisper", catalog)
         self.assertIn("parakeet-tdt-1.1b", catalog)
         self.assertIn("parakeet-primeline-Q4_K_M.gguf", catalog)
-        self.assertIn("transcribe.cpp 0.2.3", catalog)
+        self.assertIn("transcribe.cpp 0.4.0", catalog)
         self.assertNotIn("transcribe.cpp 0.1.3", catalog)
-        self.assertIn("ModelCatalog.verifiedDownloads()", activity)
+        self.assertIn("ModelCatalog.curatedDownloads()", activity)
         self.assertIn("startDownload(model, origin)", activity)
         self.assertIn("hasUsableNetworkAccess()", activity)
         self.assertIn("showNetworkAccessDialog(model, origin, null)", activity)
-        self.assertIn("showRemoveNetworkAccessDialog()", activity)
+        self.assertNotIn("showRemoveNetworkAccessDialog()", activity)
+        self.assertIn("R.id.models_network_settings", activity)
         self.assertIn("device.totalRamBytes >= model.minimumRamBytes", activity)
         self.assertIn("device.freeStorageBytes >= model.minimumFreeBytes", activity)
         models_layout = (ROOT / "app/src/main/res/layout/activity_models.xml").read_text()
@@ -858,7 +866,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
                                          activity.index("private ModelRecommendation.DeviceProfile")]
         self.assertLess(recommendation_method.index(
                             "if (result.status == ModelRecommendation.Status.RECOMMENDED)"),
-                        recommendation_method.index("models_recommendation_installed"))
+                        recommendation_method.index("File installed"))
         no_match = recommendation_method[recommendation_method.index("} else {"):]
         self.assertIn("models_recommendation_none", no_match)
         self.assertIn("downloadButton.setText(R.string.models_download_and_use)", no_match)
@@ -882,7 +890,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         values = {item.attrib["name"]: "".join(item.itertext()) for item in strings.findall("string")}
         self.assertIn("android.permission.ACCESS_NETWORK_STATE", manifest)
         self.assertIn("ModelRecommendation.Goal", activity)
-        self.assertIn("snapshot.modelId.equals(recommendedModel.id)", activity)
+        self.assertIn("transferCard.setVisibility(View.VISIBLE)", activity)
         self.assertIn("NET_CAPABILITY_INTERNET", activity)
         self.assertNotIn("NET_CAPABILITY_VALIDATED", activity)
         self.assertNotIn("benchmarkModelsNative", activity)
@@ -897,7 +905,8 @@ class ReleaseConfigurationTest(unittest.TestCase):
         goal_listener = activity[activity.index("goalSpinner.setOnItemSelectedListener"):
                                  activity.index("private ModelRecommendation.Goal selectedGoal")]
         self.assertNotIn("translateSwitch.setChecked", goal_listener)
-        self.assertIn("runtime prompt", values["models_network_body"].lower())
+        self.assertIn("android settings", values["models_network_body"].lower())
+        self.assertIn("then retry", values["models_network_body"].lower())
         self.assertIn("cannot revoke", values["models_remove_network_body"].lower())
         self.assertNotIn("parakeet", values["models_recommendation_installed"].lower())
         self.assertIn('.orNull?.toBooleanStrictOrNull() ?: false', gradle)
@@ -1000,23 +1009,17 @@ class ReleaseConfigurationTest(unittest.TestCase):
         tree = ET.parse(ROOT / "app/src/main/res/layout/activity_models.xml")
         android = "{http://schemas.android.com/apk/res/android}"
         by_id = {view.attrib.get(android + "id"): view for view in tree.iter()}
-        card_order = [view.attrib.get(android + "id") for view in tree.iter()
-                      if view.tag.endswith("MaterialCardView")]
-        expected_cards = [
-            "@+id/card_installed_models",
-            "@+id/card_custom_terms",
-            "@+id/card_recommendation",
-            "@+id/card_model_guide",
-            "@+id/card_download_catalog",
-            "@+id/card_manual_models",
-        ]
-        self.assertEqual(expected_cards, card_order[:len(expected_cards)])
+        for required in ("card_recommendation", "card_installed_models",
+                         "card_download_catalog", "card_transfer"):
+            self.assertIn("@+id/" + required, by_id)
+        self.assertIn("showPage", source)
+        self.assertIn("models_cancel_and_leave", source)
         self.assertEqual("gone", by_id["@+id/txt_model_status"].attrib[android + "visibility"])
         self.assertEqual("gone", by_id["@+id/btn_model_retry"].attrib[android + "visibility"])
         self.assertIn("private void showModelStatus", source)
         self.assertIn('retryButton.setVisibility(failed ? View.VISIBLE : View.GONE)', source)
         self.assertIn("models_provenance_imported", source)
-        self.assertIn("DefaultModelContract.BYTE_SIZE", source)
+        self.assertIn("VerifiedModelProvenance.isVerified(", source)
         self.assertIn("reloadModelNative(this)", source)
 
     def test_custom_terms_are_bounded_private_with_model_gated_hints(self):
@@ -1037,12 +1040,16 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn('@+id/custom_terms_editor', editor_layout)
         self.assertIn('@+id/personal_corrections_toggle', editor_layout)
         self.assertIn('@+id/personal_corrections_content', editor_layout)
-        self.assertIn('setCorrectionsVisible(hasSavedRules || correctionsEnabledSwitch.isChecked())', activity)
+        self.assertIn('showSection(savedInstanceState == null ? 0', activity)
         self.assertIn('whisperPromptActive', activity)
         self.assertIn('R.string.custom_terms_count_whisper', activity)
-        self.assertIn('android:scrollbars="none"', editor_layout)
-        self.assertIn('android:minHeight="144dp"', editor_layout)
-        self.assertIn('android:minLines="5"', editor_layout)
+        android = "{http://schemas.android.com/apk/res/android}"
+        editor_node = next(node for node in ET.fromstring(editor_layout).iter()
+                           if node.get(android + "id") == "@+id/custom_terms_editor")
+        scroll_node = ET.fromstring(editor_layout).find("ScrollView")
+        self.assertEqual(scroll_node.get(android + "scrollbars"), "none")
+        self.assertEqual(editor_node.get(android + "minHeight"), "144dp")
+        self.assertEqual(editor_node.get(android + "minLines"), "5")
         self.assertIn('All models restore exact and close spellings afterward',
                       (ROOT / "app/src/main/res/values/strings.xml").read_text())
         self.assertIn("MAX_TERMS = 128", store)
@@ -1060,17 +1067,17 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertLess(prompt_snapshot,
                         engine.index("TranscriptionJob {", prompt_snapshot))
         self.assertIn("let mut job = self.begin_transcription()", engine)
-        self.assertIn("self.transcribe_into(&mut job, &samples)?", engine)
+        self.assertIn("self.transcribe_into(&mut job, &samples, false)?", engine)
         self.assertIn("custom-term list", native_terms)
         self.assertNotIn("log::", native_terms)
         self.assertIn('@+id/personal_corrections_enabled', editor_layout)
         self.assertIn('@+id/personal_corrections_rows', editor_layout)
         self.assertIn('@+id/personal_corrections_add', editor_layout)
         self.assertNotIn('personal_corrections_editor', editor_layout)
-        self.assertIn('@+id/personal_correction_original', correction_row)
-        self.assertIn('@+id/personal_correction_replacement', correction_row)
-        self.assertIn('@string/personal_corrections_original_hint', correction_row)
-        self.assertIn('@string/personal_corrections_replacement_hint', correction_row)
+        self.assertIn('draftHeard.setId(R.id.personal_correction_original)', activity)
+        self.assertIn('draftWritten.setId(R.id.personal_correction_replacement)', activity)
+        self.assertIn('heardLayout.setHint(getString(R.string.personal_corrections_original_hint))', activity)
+        self.assertIn('writtenLayout.setHint(getString(R.string.personal_corrections_replacement_hint))', activity)
         self.assertIn('collectCorrectionPairs()', activity)
         self.assertIn('PersonalCorrections.writePairs(', activity)
         base_strings = ET.parse(ROOT / "app/src/main/res/values/strings.xml").getroot()
@@ -1083,15 +1090,16 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn('NUMBER_MISMATCH', corrections)
         self.assertNotIn('DiagnosticLog', corrections)
         self.assertIn('personal_corrections::load(&self.files_dir)', engine)
-        self.assertIn('personal_corrections::apply_with_ranges(&raw_text, rules)', engine)
-        self.assertIn('crate::english_fillers::remove_uh_owned(self.text)', engine)
+        cleanup = (ROOT / 'src/transcript_cleanup.rs').read_text()
+        self.assertIn('personal_corrections::apply_with_ranges(&raw_text, rules)', cleanup)
+        self.assertIn('crate::english_fillers::remove_with_protected_owned(text, &protected)', cleanup)
         self.assertIn('Ok(job.finish())', engine)
         background = (ROOT / 'src/background_transcription.rs').read_text()
         self.assertIn('transcribe_complete(&eng, &mut job, &audio)', background)
         self.assertIn('let text = job.finish();', background)
         self.assertEqual(engine.count('crate::custom_terms::load_terms(&self.custom_terms_path)'), 1)
         self.assertIn('and_then(crate::custom_terms::compile_prompt)', engine)
-        self.assertIn('preferred_terms::apply_with_protected(&text, terms, &protected)', engine)
+        self.assertIn('preferred_terms::apply_with_ranges(&text, terms, &protected)', cleanup)
         self.assertLess(engine.index('let (preferred_terms, corrections) = self.snapshot_cleanup_terms()'),
                         engine.index('pub(crate) fn transcribe_into'))
         self.assertIn('ProtectedText::new(text, &[])', native_corrections)

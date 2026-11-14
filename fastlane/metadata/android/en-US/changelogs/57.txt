@@ -1,0 +1,6 @@
+Warm amber controls on black in the dark theme.
+Installed speech models appear before download recommendations.
+A simpler model screen keeps import and preferences in the menu.
+The download picker offers ten tested models, including Parakeet v3 Q8.
+Download progress shows the model name.
+Removed duplicate setup text and fixed Automatic language warnings.

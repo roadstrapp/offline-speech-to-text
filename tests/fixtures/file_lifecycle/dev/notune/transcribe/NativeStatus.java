@@ -1,0 +1,1 @@
+package dev.notune.transcribe; class NativeStatus {static boolean isError(String s){return s!=null&&s.startsWith("Error");}}

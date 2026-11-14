@@ -15,7 +15,6 @@ use std::time::Instant;
 use crossbeam_channel::{Receiver, Sender};
 use jni::objects::GlobalRef;
 
-use crate::audio_finalization::append_final_decode_silence;
 use crate::background_chunking::CaptureBuffer;
 use crate::engine;
 
@@ -45,6 +44,8 @@ pub(crate) struct PipelineMetrics {
     pub postprocess_ms: u64,
     pub stop_wait_ms: u64,
     pub prepared_windows: usize,
+    pub planned_windows: usize,
+    pub raw_window_limit_ms: u64,
     pub model_family: i32,
     pub model_warm: i32,
 }
@@ -77,6 +78,14 @@ pub(crate) fn notify_pipeline(
         )
         .is_err()
     {
+        let _ = env.exception_clear();
+    }
+    // Separate optional callback preserves compatibility with older Java targets.
+    if env.call_method(target, "onWindowPlan", "(JJI)V", &[
+        jni::objects::JValue::Long(metrics.session_id),
+        jni::objects::JValue::Long(metrics.raw_window_limit_ms as i64),
+        jni::objects::JValue::Int(metrics.planned_windows as i32),
+    ]).is_err() {
         let _ = env.exception_clear();
     }
 }
@@ -327,6 +336,7 @@ fn worker_loop(
                 }
                 let (eng, job) = prepared.as_mut().expect("prepared above");
                 let started = Instant::now();
+                let _permit = engine::INFERENCE_GATE.acquire(false);
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     eng.lock()
                         .unwrap_or_else(|p| p.into_inner())
@@ -355,7 +365,7 @@ fn worker_loop(
             return;
         }
 
-        let (mut audio, total_samples, stop_started) = match command {
+        let (audio, total_samples, stop_started) = match command {
             Command::Finish(audio, total_samples, started) => (audio, total_samples, started),
             Command::Cancel => unreachable!(),
             Command::Prepare => unreachable!(),
@@ -370,7 +380,6 @@ fn worker_loop(
             });
             return;
         }
-        append_final_decode_silence(&mut audio);
 
         let created_during_capture = prepared.is_some();
         let result = prepared
@@ -389,6 +398,15 @@ fn worker_loop(
                     pipeline.model_family = guard.diagnostic_family();
                     if created_during_capture {
                         guard.refresh_final_terms(&mut job);
+                    }
+                    if pipeline.session_id != 0 {
+                        if let Some(limit) = guard.background_window_limit() {
+                            pipeline.raw_window_limit_ms = limit as u64 * 1000 / SAMPLE_RATE;
+                            pipeline.planned_windows = crate::long_audio::windows(&audio, limit).len();
+                        } else {
+                            // App-level plan only: Whisper may window internally.
+                            pipeline.planned_windows = usize::from(!audio.is_empty());
+                        }
                     }
                 }))
                 .map_err(|_| "transcription setup failed unexpectedly".to_string());
@@ -455,11 +473,12 @@ fn transcribe_complete(
     job: &mut engine::TranscriptionJob,
     audio: &[f32],
 ) -> Result<(), String> {
+    let _permit = engine::INFERENCE_GATE.acquire(true);
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         engine
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .transcribe_into(job, audio)
+            .transcribe_into(job, audio, true)
     }))
     .unwrap_or_else(|_| Err("transcription failed unexpectedly, please try again".to_string()))
 }

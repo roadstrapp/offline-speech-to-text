@@ -1,0 +1,8 @@
+Google FLEURS — Slovak test audio
+
+CC BY 4.0: https://creativecommons.org/licenses/by/4.0/
+Google FLEURS; Conneau et al. (2022), https://arxiv.org/abs/2205.12446
+Source: https://huggingface.co/datasets/google/fleurs/resolve/70bb2e84b976b7e960aa89f1c648e09c59f894dd/data/sk_sk/audio/test.tar.gz
+Archive member: 10051555811813730705.wav
+Audio SHA-256: 87bb277cd46efdae0747510be7c6c63cd2a0bc37fcd31645fc09113887d45a9b
+Unmodified source recording. Used only by the isolated instrumentation fixture.

@@ -11,7 +11,10 @@ import android.widget.FrameLayout;
 import android.widget.TextView;
 import android.content.pm.PackageManager;
 
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+
+import com.google.android.material.button.MaterialButton;
 
 import java.util.ArrayList;
 
@@ -32,6 +35,9 @@ public class RecognizeActivity extends AppCompatActivity {
     private boolean awaitingResult = false;
     private MicLevelView micLevel;
     private View processingRing;
+    private MaterialButton micSource;
+    private AlertDialog micSwitchDialog;
+    private final Runnable micSourceListener = this::onMicSourceChanged;
     private final AudioFocusPauser audioPauser = new AudioFocusPauser();
     private boolean pauseAudioActive = false;
 
@@ -55,6 +61,14 @@ public class RecognizeActivity extends AppCompatActivity {
         micLevel = findViewById(R.id.mic_level);
         processingRing = findViewById(R.id.mic_processing_ring);
         status = findViewById(R.id.txt_status);
+        micSource = findViewById(R.id.btn_mic_source);
+        if (micSource != null) {
+            micSource.setOnClickListener(v -> {
+                if (!isRecording) return;
+                micSwitchDialog = MicSourceToggle.confirm(this, null, this::restartOnMicrophone);
+            });
+        }
+        BluetoothMicRoute.addListener(micSourceListener);
 
         findViewById(R.id.btn_close).setOnClickListener(v -> {
             // discard current recording
@@ -77,26 +91,58 @@ public class RecognizeActivity extends AppCompatActivity {
         // Permission check
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
-            status.setText("Microphone permission required.\nGrant it in the main app.");
+            status.setText(R.string.voice_need_mic);
             return;
         }
 
         initNative(this);
         isRecording = true;
-        status.setText("Listening... (Tap to stop)");
+        status.setText(R.string.voice_listening);
         if (isPauseAudioEnabled()) {
             audioPauser.request(this);
             pauseAudioActive = true;
         }
         startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
+        // Route listeners refresh this while asynchronous microphone setup completes.
+        refreshMicSource();
+    }
+
+    private void onMicSourceChanged() {
+        dismissMicSwitch();
+        refreshMicSource();
+        if (!isRecording || awaitingResult) return;
+        if (BluetoothMicRoute.takeFallbackNotice()) {
+            status.setText(R.string.mic_fallback_status);
+        } else if (BluetoothMicRoute.isWaitingForSound()) {
+            status.setText(R.string.mic_bt_waiting);
+        } else if (android.text.TextUtils.equals(status.getText(), getString(R.string.mic_bt_waiting))) {
+            status.setText(R.string.voice_listening);
+        }
+    }
+
+    /** Shows the microphone that really carries the recording (Bluetooth or phone). */
+    private void refreshMicSource() {
+        MicSourceToggle.refresh(micSource, this, isRecording && !awaitingResult);
+    }
+
+    /** The switch's confirmed choice: discard this recording and record again on the other mic. */
+    private void restartOnMicrophone(boolean bluetooth) {
+        if (!isRecording || isFinishing()) return;
+        try { cancelRecording(); } catch (Throwable t) { /* ignore */ }
+        BluetoothMicRoute.overrideNextStart(bluetooth);
+        status.setText(R.string.voice_listening);
+        if (micLevel != null) micLevel.setLevel(0f);
+        startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
+        refreshMicSource();
     }
 
     /** Stop capture and transcribe — used by both tap-to-stop and auto-stop. */
     private void finishRecording() {
         if (!isRecording) return;
         isRecording = false;
+        dismissMicSwitch();
         awaitingResult = true;
-        status.setText("Processing...");
+        status.setText(R.string.voice_processing);
         showProcessing(true);
         stopRecording();
         if (pauseAudioActive) {
@@ -130,8 +176,15 @@ public class RecognizeActivity extends AppCompatActivity {
         }
     }
 
+    private void dismissMicSwitch() {
+        if (micSwitchDialog != null && micSwitchDialog.isShowing()) micSwitchDialog.dismiss();
+        micSwitchDialog = null;
+    }
+
     @Override
     protected void onDestroy() {
+        BluetoothMicRoute.removeListener(micSourceListener);
+        dismissMicSwitch();
         super.onDestroy();
         if (pauseAudioActive) {
             audioPauser.abandon(this);
@@ -182,7 +235,8 @@ public class RecognizeActivity extends AppCompatActivity {
             awaitingResult = false;
             showProcessing(false);
             if (text == null || text.trim().isEmpty()) {
-                // Nothing was recognized (e.g. auto-stop after silence only).
+                // Give visible feedback while returning Android's empty-result contract.
+                android.widget.Toast.makeText(this, getString(R.string.voice_no_speech), android.widget.Toast.LENGTH_SHORT).show();
                 setResult(Activity.RESULT_CANCELED);
                 finish();
                 return;
@@ -193,6 +247,7 @@ public class RecognizeActivity extends AppCompatActivity {
 
             Intent data = new Intent();
             data.putStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS, results);
+            data.putExtra(RecognizerIntent.EXTRA_CONFIDENCE_SCORES, new float[] { -1.0f });
 
             setResult(Activity.RESULT_OK, data);
             finish();
@@ -204,6 +259,7 @@ public class RecognizeActivity extends AppCompatActivity {
             processingRing.setVisibility(processing ? View.VISIBLE : View.GONE);
         }
         if (processing && micLevel != null) micLevel.setLevel(0f);
+        if (processing && micSource != null) micSource.setVisibility(View.GONE);
     }
 
     private static boolean isProcessingStatus(String status) {
