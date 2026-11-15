@@ -38,6 +38,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
     private int callerAudioMinutes;
     private int callerAudioPace;
     private boolean bluetoothMic;
+    private boolean lengthSweep;
     private static final class InjectedFixtureFailure extends Exception {}
 
     @Override
@@ -72,6 +73,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         callerAudioOnly = arguments != null && "true".equals(arguments.getString("caller_audio_only"));
         qualifySetup = arguments != null && "true".equals(arguments.getString("qualify_setup"));
         captureCapability = arguments != null && "true".equals(arguments.getString("capture_capability"));
+        lengthSweep = arguments != null && "true".equals(arguments.getString("length_sweep"));
         start();
     }
 
@@ -86,6 +88,15 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         if (fileAdmission) {
             Bundle result = new Bundle(); int code = Activity.RESULT_OK;
             try { FileAdmissionDeviceTest.run(this); result.putBoolean("file_admission", true); }
+            catch (Throwable error) { code = Activity.RESULT_CANCELED; result.putString("failure", error.toString()); }
+            finish(code, result); return;
+        }
+        if (lengthSweep) {
+            Bundle result = new Bundle(); int code = Activity.RESULT_OK;
+            try { result.putAll(CallerAudioProviderDeviceTest.runLengthSweep(this)); result.putBoolean("length_sweep", true); }
+            catch (CallerAudioProviderDeviceTest.LengthSweepFailure failure) {
+                code = Activity.RESULT_CANCELED; result.putAll(failure.evidence); result.putString("failure", failure.toString());
+            }
             catch (Throwable error) { code = Activity.RESULT_CANCELED; result.putString("failure", error.toString()); }
             finish(code, result); return;
         }

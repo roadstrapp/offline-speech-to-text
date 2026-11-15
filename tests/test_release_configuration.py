@@ -37,14 +37,14 @@ class ReleaseConfigurationTest(unittest.TestCase):
     def test_transcribe_cpp_runtime_stays_on_the_reviewed_lockstep_release(self):
         manifest = (ROOT / "Cargo.toml").read_text()
         lockfile = (ROOT / "Cargo.lock").read_text()
-        self.assertIn('transcribe-cpp = "0.4.0"', manifest)
+        self.assertIn('transcribe-cpp = "0.4.2"', manifest)
         self.assertRegex(
             lockfile,
-            r'name = "transcribe-cpp"\nversion = "0\.4\.0"',
+            r'name = "transcribe-cpp"\nversion = "0\.4\.2"',
         )
         self.assertRegex(
             lockfile,
-            r'name = "transcribe-cpp-sys"\nversion = "0\.4\.0"',
+            r'name = "transcribe-cpp-sys"\nversion = "0\.4\.2"',
         )
 
     def test_native_toolchain_is_explicit_and_update_compatible(self):
@@ -618,8 +618,13 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertNotIn("append_final_decode_silence(&mut audio)", background)
         # Only a private bounded preparation snapshot may be shortened; never
         # truncate the complete Finish recording.
-        finalization = background[background.index("let (audio, total_samples, stop_started)"):]
+        start = background.index("let (audio, total_samples, stop_started)")
+        finalization = background[start:background.index("impl WorkerState", start)]
         self.assertNotIn("audio.truncate", finalization)
+        self.assertEqual(background.count("audio.truncate"), 1)
+        preparation = background[background.index("fn prepare_next_window"):]
+        preparation = preparation[:preparation.index("\n    fn ")]
+        self.assertIn("audio.truncate(window.end)", preparation)
         self.assertIn("buffer.window_snapshot(next_sample, limit)", background)
         self.assertNotIn("retry_complete_recording", background)
         engine = (ROOT / "src/engine.rs").read_text()
@@ -841,7 +846,7 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn("Whisper", catalog)
         self.assertIn("parakeet-tdt-1.1b", catalog)
         self.assertIn("parakeet-primeline-Q4_K_M.gguf", catalog)
-        self.assertIn("transcribe.cpp 0.4.0", catalog)
+        self.assertIn("transcribe.cpp 0.4.2", catalog)
         self.assertNotIn("transcribe.cpp 0.1.3", catalog)
         self.assertIn("ModelCatalog.curatedDownloads()", activity)
         self.assertIn("startDownload(model, origin)", activity)

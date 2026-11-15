@@ -12,7 +12,6 @@
 
 use std::collections::VecDeque;
 
-const SAMPLE_RATE: u64 = 16_000;
 /// 20 ms frames.
 const FRAME: usize = 320;
 /// Noise floor window: the last 2 s of frames.
@@ -101,8 +100,6 @@ pub struct Endpointer {
     smoothed: Option<f32>,
     voiced_run: u32,
     speech_started: bool,
-    frames: u64,
-    last_voice_frame: u64,
 }
 
 impl Default for Endpointer {
@@ -119,8 +116,6 @@ impl Endpointer {
             smoothed: None,
             voiced_run: 0,
             speech_started: false,
-            frames: 0,
-            last_voice_frame: 0,
         }
     }
 
@@ -143,7 +138,6 @@ impl Endpointer {
     }
 
     fn frame(&mut self, db: f32) {
-        self.frames += 1;
         if db < DIGITAL_SILENCE_DB {
             self.voiced_run = 0;
             self.smoothed = None;
@@ -163,7 +157,6 @@ impl Endpointer {
         self.voiced_run = if voiced { self.voiced_run + 1 } else { 0 };
         if self.voiced_run >= MIN_VOICED_RUN {
             self.speech_started = true;
-            self.last_voice_frame = self.frames;
         }
 
         // Never let a sustained utterance replace the noise history: otherwise
@@ -188,14 +181,5 @@ impl Endpointer {
 
     pub fn is_voiced(&self) -> bool {
         self.speech_started && self.voiced_run >= MIN_VOICED_RUN
-    }
-
-    pub fn speech_started(&self) -> bool {
-        self.speech_started
-    }
-
-    /// Milliseconds of audio since the last speech (since the start if none).
-    pub fn silence_ms(&self) -> u64 {
-        (self.frames - self.last_voice_frame) * FRAME as u64 * 1000 / SAMPLE_RATE
     }
 }

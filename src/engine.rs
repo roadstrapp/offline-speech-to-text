@@ -81,7 +81,7 @@ struct LanguageDetector {
 impl LanguageDetector {
     fn open(path: &Path, languages: &[String], threads: i32) -> Result<LanguageDetector, String> {
         let model = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            transcribe_cpp::Model::load(path)
+            transcribe_cpp::Model::load_with(path, &model_load_options())
         }))
         .map_err(|_| "language model loader rejected this file".to_string())?
         .map_err(|e| e.to_string())?;
@@ -160,7 +160,7 @@ impl Engine {
             return Err(format!("model file not found: {}", model_path.display()));
         }
         let model = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            transcribe_cpp::Model::load(model_path)
+            transcribe_cpp::Model::load_with(model_path, &model_load_options())
         }))
         .map_err(|_| "model loader rejected this file".to_string())?
         .map_err(|e| e.to_string())?;
@@ -754,6 +754,15 @@ pub fn ensure_loaded_from_thread(
             result
         }
     }
+}
+
+/// Weights are copied into memory, as before transcribe-cpp 0.4.1 made
+/// memory mapping the default. A mapped file must never be rewritten in
+/// place (SIGBUS), and reclaimed pages would turn the first dictation after
+/// memory pressure into a disk read. Keep the measured behavior until mapping
+/// has its own device qualification.
+fn model_load_options() -> transcribe_cpp::ModelOptions {
+    transcribe_cpp::ModelOptions { no_mmap: true, ..Default::default() }
 }
 
 /// Energy-conscious inference thread count: performance cores, capped at 2.

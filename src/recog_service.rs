@@ -544,7 +544,8 @@ fn begin_session(
         target,
     });
 
-    let mut env = match jvm.attach_current_thread() {
+    // Keep this thread attached for the session setup below.
+    let _attached = match jvm.attach_current_thread() {
         Ok(env) => env,
         Err(_) => {
             release_session_owner(OWNER_RECOGNITION_SERVICE);

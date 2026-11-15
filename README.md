@@ -50,7 +50,7 @@ Diagnostics are disabled by default. They contain fixed numeric timing and resou
 
 ## Build and contribute
 
-Use JDK 17 or later with Android SDK 36 and NDK 29.0.14206865. Install Rust's `aarch64-linux-android` target and `cargo-ndk`. The lockfile binds the Rust wrapper to the matching transcribe.cpp 0.4.0 runtime. Configure the SDK path in a local `local.properties` file, then run `./gradlew assembleDebug`. Run `tests/run_focused_tests.sh` for the focused host regressions.
+Use JDK 17 or later with Android SDK 36 and NDK 29.0.14206865. Install Rust's `aarch64-linux-android` target and `cargo-ndk`. The lockfile binds the Rust wrapper to the matching transcribe.cpp 0.4.2 runtime. Configure the SDK path in a local `local.properties` file, then run `./gradlew assembleDebug`. Run `tests/run_focused_tests.sh` for the focused host regressions.
 
 Normal APKs download models after setup. The optional `-PincludeBundledModel=true` build is intended for controlled offline testing. Release updates retain the established package and signing identity. A side-by-side validation build uses `-PisolatedDebugPackage=true`.
 
