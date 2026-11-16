@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 
 use cpal::traits::HostTrait;
 use jni::objects::{GlobalRef, JClass, JObject, JValue};
-use jni::sys::jint;
+use jni::sys::{jboolean, jint, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 use once_cell::sync::Lazy;
 
@@ -122,6 +122,8 @@ struct CallerJob {
     speech_started: AtomicBool,
     /// Caller stop drains already-readable bytes; it must not finalize on the Java thread.
     stop_after_ms: AtomicU64,
+    /// `started_at`-relative time of the last bytes read; drives the no-data timeout.
+    last_data_ms: AtomicU64,
     started_at: Instant,
     jvm: Arc<jni::JavaVM>,
     target: GlobalRef,
@@ -321,16 +323,25 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
     sample_rate: jint,
     channel_count: jint,
     encoding: jint,
-) {
-    if fd < 0 { return; }
+) -> jboolean {
+    // JNI_FALSE: nothing was or will be delivered, so Java must end the request itself.
+    if fd < 0 {
+        return JNI_FALSE;
+    }
     let source = File::from_raw_fd(fd);
     let jvm = match env.get_java_vm() {
         Ok(vm) => Arc::new(vm),
-        Err(_) => return,
+        Err(_) => {
+            log::error!("caller audio: no Java VM handle");
+            return JNI_FALSE;
+        }
     };
     let target = match env.new_global_ref(&service) {
         Ok(r) => r,
-        Err(_) => return,
+        Err(_) => {
+            log::error!("caller audio: no callback reference");
+            return JNI_FALSE;
+        }
     };
 
     let format = match SourceFormat::new(sample_rate, channel_count, encoding) {
@@ -342,10 +353,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
                 channel_count,
                 encoding
             );
-            if let Ok(mut env2) = jvm.attach_current_thread() {
-                call_error(&mut env2, target.as_obj(), ERROR_AUDIO);
-            }
-            return;
+            return deliver_start_error(&jvm, &target, ERROR_AUDIO);
         }
     };
 
@@ -353,10 +361,8 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
         let mut slot = CALLER_JOB.lock().unwrap();
         if slot.is_some() {
             drop(slot);
-            if let Ok(mut env2) = jvm.attach_current_thread() {
-                call_error(&mut env2, target.as_obj(), ERROR_RECOGNIZER_BUSY);
-            }
-            return;
+            log::info!("caller audio: native job still running, refusing");
+            return deliver_start_error(&jvm, &target, ERROR_RECOGNIZER_BUSY);
         }
         let job = Arc::new(CallerJob {
             queue: crate::caller_audio_job::Queue::default(),
@@ -365,6 +371,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
             terminal: AtomicBool::new(false),
             speech_started: AtomicBool::new(false),
             stop_after_ms: AtomicU64::new(u64::MAX),
+            last_data_ms: AtomicU64::new(0),
             started_at: Instant::now(),
             jvm: jvm.clone(),
             target,
@@ -381,6 +388,31 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
     let decoder = job.clone();
     std::thread::spawn(move || decode_caller_audio(decoder));
     std::thread::spawn(move || caller_cap_monitor(job));
+    JNI_TRUE
+}
+
+/// An error for a request refused before its job existed; JNI_FALSE if it could not be sent.
+fn deliver_start_error(jvm: &jni::JavaVM, target: &GlobalRef, code: i32) -> jboolean {
+    match jvm.attach_current_thread() {
+        Ok(mut env) => {
+            call_error(&mut env, target.as_obj(), code);
+            JNI_TRUE
+        }
+        Err(_) => JNI_FALSE,
+    }
+}
+
+/// Caller job state for the Java slot: 0 none, 1 receiving audio, 2 input closed (decoding).
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService_callerJobState(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jint {
+    match CALLER_JOB.lock().unwrap().as_ref() {
+        None => 0,
+        Some(job) if job.input_closed.load(Ordering::SeqCst) => 2,
+        Some(_) => 1,
+    }
 }
 
 /// `onStopListening` for caller audio: drain what is readable (bounded to 500 ms
@@ -615,6 +647,8 @@ fn read_caller_audio(job: Arc<CallerJob>, source: File, format: SourceFormat) {
         source,
         || wait_readable(fd, &job),
         |bytes| {
+            job.last_data_ms
+                .store(job.started_at.elapsed().as_millis() as u64, Ordering::SeqCst);
             carry.extend_from_slice(bytes);
             mono.clear();
             drain_mono_frames(&mut carry, &format, &mut mono);
@@ -629,6 +663,11 @@ fn read_caller_audio(job: Arc<CallerJob>, source: File, format: SourceFormat) {
         // Cancelled, or the safety cap already ended the input.
         Ok(InputEnd::Cancelled) => {}
         Ok(InputEnd::Finished) if carry.is_empty() => {
+            if idle_ms(&job) >= caller_audio_input::IDLE_INPUT_MS
+                && job.stop_after_ms.load(Ordering::SeqCst) == u64::MAX
+            {
+                log::info!("caller audio: no data for {} ms, ending input", caller_audio_input::IDLE_INPUT_MS);
+            }
             job.input_closed.store(true, Ordering::SeqCst);
             job.queue.end();
         }
@@ -709,7 +748,10 @@ fn decode_caller_audio(job: Arc<CallerJob>) {
         clear_caller(&job);
         return;
     }
-    let Ok(mut env) = job.jvm.attach_current_thread() else {
+    // A result that cannot reach Java must not hold the slot: the service's liveness
+    // check sees the job gone and ends the request with an error.
+    let Some(mut env) = attach_with_retry(&job.jvm) else {
+        log::error!("caller audio: cannot attach to deliver the result");
         clear_caller(&job);
         return;
     };
@@ -742,6 +784,18 @@ fn decode_caller_audio(job: Arc<CallerJob>) {
         }
     }
     clear_caller(&job);
+}
+
+fn attach_with_retry(jvm: &jni::JavaVM) -> Option<jni::AttachGuard<'_>> {
+    for attempt in 0..3 {
+        if let Ok(env) = jvm.attach_current_thread() {
+            return Some(env);
+        }
+        if attempt < 2 {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    None
 }
 
 enum CallerDecode {
@@ -860,6 +914,11 @@ fn clear_caller(job: &Arc<CallerJob>) {
     }
 }
 
+fn idle_ms(job: &CallerJob) -> u64 {
+    (job.started_at.elapsed().as_millis() as u64)
+        .saturating_sub(job.last_data_ms.load(Ordering::SeqCst))
+}
+
 /// Stop drains currently readable data without waiting for an unclosed writer.
 /// Cancellation, safety limits, and poll errors have distinct outcomes.
 fn wait_readable(fd: i32, job: &Arc<CallerJob>) -> io::Result<Readiness> {
@@ -869,6 +928,7 @@ fn wait_readable(fd: i32, job: &Arc<CallerJob>) -> io::Result<Readiness> {
             finalized: job.input_closed.load(Ordering::SeqCst),
             elapsed_ms: job.started_at.elapsed().as_millis() as u64,
             stop_after_ms: job.stop_after_ms.load(Ordering::SeqCst),
+            idle_ms: idle_ms(job),
         },
         |timeout| {
             let mut poll_fd = libc::pollfd {

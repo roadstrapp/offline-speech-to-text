@@ -42,6 +42,14 @@ final class RecognitionSessionPolicy {
         return microphoneBusy ? Action.REPLACE_MICROPHONE : Action.START_MICROPHONE;
     }
 
+    /**
+     * A caller-audio job whose input already ended may hand its slot to a request from a
+     * different, known app. The same app (or an unknown one) is refused as before.
+     */
+    static boolean mayPreempt(boolean holderInputClosed, int holderUid, int requesterUid) {
+        return holderInputClosed && holderUid >= 0 && requesterUid >= 0 && holderUid != requesterUid;
+    }
+
     /** Error for a live request when the service itself goes away. */
     static int destroyedError(int sdkInt) {
         return sdkInt >= API_SERVER_DISCONNECTED ? ERROR_SERVER_DISCONNECTED : ERROR_SERVER;

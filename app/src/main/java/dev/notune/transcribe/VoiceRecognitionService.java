@@ -58,6 +58,10 @@ public class VoiceRecognitionService extends RecognitionService {
     /** Concurrent sessions: one microphone request plus one caller-audio request. */
     private static final int MAX_SESSIONS = 2;
 
+    private static final int CALLER_JOB_NONE = 0;
+    private static final int CALLER_JOB_INPUT_CLOSED = 2;
+    private static final long CALLER_WATCH_MS = 2_000L;
+
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     /** One request slot. Fields are written on the main thread. */
@@ -65,6 +69,8 @@ public class VoiceRecognitionService extends RecognitionService {
         final String route;
         volatile Callback callback;
         long generation;
+        /** Calling app of the live request, or -1 when unknown (before API 28). */
+        int uid = -1;
         volatile TroubleshootingSession troubleshooting;
 
         Slot(String route) {
@@ -114,17 +120,21 @@ public class VoiceRecognitionService extends RecognitionService {
             return;
         }
         if (hasExtra(recognizerIntent, FileTranscriptionContract.EXTRA_AUDIO_URI)) {
+            boolean ambiguous = callerAudio != null;
+            closeQuietly(callerAudio);
+            // Check the request before it may take over a finished caller job,
+            // so a request that will fail anyway never costs that job its result.
+            int rejection = fileRequestRejection(recognizerIntent, callback, ambiguous);
+            if (rejection == 0) preemptFinishedCallerJob(callingUid(callback));
             if (file.callback != null || caller.callback != null) {
-                closeQuietly(callerAudio);
-                try { callback.error(SpeechRecognizer.ERROR_RECOGNIZER_BUSY); } catch (RemoteException ignored) {}
+                refuseBusy("file", file.callback != null ? file : caller, callback);
                 return;
             }
             NativeCallbacks target = claim(file, callback);
-            boolean ambiguous = callerAudio != null;
-            closeQuietly(callerAudio);
-            startListeningFromFile(recognizerIntent, callback, ambiguous, target);
+            startListeningFromFile(recognizerIntent, callback, rejection, target);
             return;
         }
+        if (callerAudio != null) preemptFinishedCallerJob(callingUid(callback));
         Callback previous = mic.callback;
         RecognitionSessionPolicy.Action action = RecognitionSessionPolicy.admit(
                 callerAudio != null, caller.callback != null || file.callback != null,
@@ -132,15 +142,16 @@ public class VoiceRecognitionService extends RecognitionService {
         if (action == RecognitionSessionPolicy.Action.REFUSE_BUSY) {
             // One caller-audio job at a time; never cancel the running one.
             closeQuietly(callerAudio);
-            Log.i(TAG, "service caller_audio: busy, refusing a second request");
-            try { callback.error(SpeechRecognizer.ERROR_RECOGNIZER_BUSY); } catch (RemoteException ignored) {}
-            DiagnosticLog.recognizerError(getFilesDir(), SpeechRecognizer.ERROR_RECOGNIZER_BUSY);
+            refuseBusy("caller_audio", caller.callback != null ? caller : file, callback);
             return;
         }
         if (action == RecognitionSessionPolicy.Action.START_BACKGROUND) {
             NativeCallbacks target = claim(caller, callback);
             Log.i(TAG, "service caller_audio: start");
             startListeningFromCallerAudio(recognizerIntent, callback, callerAudio, target);
+            if (caller.callback == callback && caller.generation == target.generation) {
+                watchCallerJob(callback, target.generation, false);
+            }
             return;
         }
 
@@ -187,10 +198,79 @@ public class VoiceRecognitionService extends RecognitionService {
         }
     }
 
+    /** Refuses a background request with busy; logcat names the holder, diagnostics stay content-free. */
+    private void refuseBusy(String route, Slot holder, Callback requester) {
+        int requesterUid = callingUid(requester);
+        Log.i(TAG, "service " + route + ": busy, refusing a second request; held by " + holder.route
+                + " for " + appLabel(holder.uid) + ", requested by " + appLabel(requesterUid));
+        try { requester.error(SpeechRecognizer.ERROR_RECOGNIZER_BUSY); } catch (RemoteException ignored) {}
+        DiagnosticLog.recognizerError(getFilesDir(), SpeechRecognizer.ERROR_RECOGNIZER_BUSY);
+    }
+
+    /**
+     * A caller-audio job whose input already ended only has decoding left. A request from a
+     * different app takes over its slot instead of being refused; the old caller hears busy.
+     */
+    private void preemptFinishedCallerJob(int requesterUid) {
+        Callback holder = caller.callback;
+        if (holder == null) return;
+        boolean inputClosed;
+        try {
+            inputClosed = callerJobState() == CALLER_JOB_INPUT_CLOSED;
+        } catch (Throwable t) {
+            return;
+        }
+        if (!RecognitionSessionPolicy.mayPreempt(inputClosed, caller.uid, requesterUid)) return;
+        Log.i(TAG, "service caller_audio: input ended, " + appLabel(requesterUid)
+                + " takes over from " + appLabel(caller.uid) + " (busy sent to it)");
+        deliverError(caller, holder, SpeechRecognizer.ERROR_RECOGNIZER_BUSY);
+        try {
+            cancelCallerAudio();
+        } catch (Throwable t) {
+            Log.e(TAG, "cancelCallerAudio failed", t);
+        }
+    }
+
+    /**
+     * Ends a caller-audio request whose native job is gone without a delivered callback, so a
+     * lost result can never hold the slot. Two misses in a row: native clears its job just
+     * before it posts the final callback, which then lands within milliseconds.
+     */
+    private void watchCallerJob(Callback callback, long generation, boolean missedOnce) {
+        mainHandler.postDelayed(() -> {
+            if (caller.callback != callback || caller.generation != generation) return;
+            boolean missing;
+            try {
+                missing = callerJobState() == CALLER_JOB_NONE;
+            } catch (Throwable t) {
+                missing = false;
+            }
+            if (missing && missedOnce) {
+                Log.w(TAG, "service caller_audio: native job ended without a callback");
+                deliverError(caller, callback, SpeechRecognizer.ERROR_SERVER);
+                return;
+            }
+            watchCallerJob(callback, generation, missing);
+        }, CALLER_WATCH_MS);
+    }
+
+    private static int callingUid(Callback callback) {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ? callback.getCallingUid() : -1;
+    }
+
+    /** Logcat-only identity of a calling app; never written to diagnostics. */
+    private String appLabel(int uid) {
+        if (uid < 0) return "unknown app";
+        String name = null;
+        try { name = getPackageManager().getNameForUid(uid); } catch (RuntimeException ignored) {}
+        return (name != null ? name : "unknown") + " (uid " + uid + ")";
+    }
+
     /** Installs {@code callback} in {@code slot} and returns the exact native target for it. */
     private NativeCallbacks claim(Slot slot, Callback callback) {
         ++slot.generation;
         slot.callback = callback;
+        slot.uid = callingUid(callback);
         slot.troubleshooting = TroubleshootingSession.start(this, "service", slot.route);
         return new NativeCallbacks(slot, callback);
     }
@@ -199,6 +279,7 @@ public class VoiceRecognitionService extends RecognitionService {
     private void retire(Slot slot, String reason) {
         ++slot.generation;
         slot.callback = null;
+        slot.uid = -1;
         finishTroubleshooting(slot, reason);
         if (slot == file) cancelFileRequest();
     }
@@ -244,7 +325,7 @@ public class VoiceRecognitionService extends RecognitionService {
         }
 
         try {
-            startListeningFromAudioSource(
+            boolean started = startListeningFromAudioSource(
                     target,
                     fd,
                     recognizerIntent.getIntExtra(
@@ -254,6 +335,10 @@ public class VoiceRecognitionService extends RecognitionService {
                     recognizerIntent.getIntExtra(
                             RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING,
                             AudioFormat.ENCODING_PCM_16BIT));
+            if (!started) {
+                Log.e(TAG, "service caller_audio: native start failed before any callback");
+                safeError(caller, SpeechRecognizer.ERROR_SERVER);
+            }
         } catch (Throwable t) {
             Log.e(TAG, "startListeningFromAudioSource failed", t);
             safeError(caller, SpeechRecognizer.ERROR_CLIENT);
@@ -275,9 +360,8 @@ public class VoiceRecognitionService extends RecognitionService {
      * present it is first written there as UTF-8, and a failed write fails the request.
      * {@code stopListening} does not end a file request early; {@code cancel} discards it.
      */
-    private void startListeningFromFile(Intent intent, Callback callback, boolean hasCallerAudio, NativeCallbacks target) {
-        attributeSessionToCaller(callback);
-
+    /** Returns the error a file request would fail with, or 0 when it can start. */
+    private int fileRequestRejection(Intent intent, Callback callback, boolean hasCallerAudio) {
         Uri audio = uriExtra(intent, FileTranscriptionContract.EXTRA_AUDIO_URI);
         boolean outputRequested = hasExtra(intent, FileTranscriptionContract.EXTRA_OUTPUT_URI);
         Uri output = outputRequested ? uriExtra(intent, FileTranscriptionContract.EXTRA_OUTPUT_URI) : null;
@@ -287,20 +371,29 @@ public class VoiceRecognitionService extends RecognitionService {
                 FileTranscriptionAccess.scheme(audio), FileTranscriptionAccess.isOwnProvider(this, audio),
                 FileTranscriptionAccess.scheme(output), FileTranscriptionAccess.isOwnProvider(this, output),
                 outputRequested && output == null, hasCallerAudio, callerIsSelf)) {
-            safeError(file, SpeechRecognizer.ERROR_CLIENT);
-            return;
+            return SpeechRecognizer.ERROR_CLIENT;
         }
-        int uid = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ? callback.getCallingUid() : -1;
+        int uid = callingUid(callback);
         if (!FileTranscriptionAccess.callerCanAccess(this, audio, uid, Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 || (outputRequested && !FileTranscriptionAccess.callerCanAccess(
                         this, output, uid, Intent.FLAG_GRANT_WRITE_URI_PERMISSION))) {
-            safeError(file, SpeechRecognizer.ERROR_CLIENT);
-            return;
+            return SpeechRecognizer.ERROR_CLIENT;
         }
         if (!SpeechModelInventory.hasUsableModel(getFilesDir(), BuildConfig.HAS_BUNDLED_MODEL)) {
-            safeError(file, FileTranscriptionContract.recognizerError(FileTranscriptionContract.Failure.NO_MODEL));
+            return FileTranscriptionContract.recognizerError(FileTranscriptionContract.Failure.NO_MODEL);
+        }
+        return 0;
+    }
+
+    private void startListeningFromFile(Intent intent, Callback callback, int rejection, NativeCallbacks target) {
+        attributeSessionToCaller(callback);
+        if (rejection != 0) {
+            safeError(file, rejection);
             return;
         }
+        Uri audio = uriExtra(intent, FileTranscriptionContract.EXTRA_AUDIO_URI);
+        boolean outputRequested = hasExtra(intent, FileTranscriptionContract.EXTRA_OUTPUT_URI);
+        Uri output = outputRequested ? uriExtra(intent, FileTranscriptionContract.EXTRA_OUTPUT_URI) : null;
 
         FileRequest request = new FileRequest(target);
         fileRequest = request;
@@ -676,7 +769,8 @@ public class VoiceRecognitionService extends RecognitionService {
 
     private native void initNative(VoiceRecognitionService service);
     private native void startListening(android.content.Context service);
-    private native void startListeningFromAudioSource(
+    /** False when native code could not start and will deliver nothing for this request. */
+    private native boolean startListeningFromAudioSource(
             android.content.Context service,
             int fd,
             int sampleRate,
@@ -688,5 +782,7 @@ public class VoiceRecognitionService extends RecognitionService {
     private native void cancelNative();
     private native void stopCallerAudio();
     private native void cancelCallerAudio();
+    /** {@link #CALLER_JOB_NONE}, 1 while receiving audio, or {@link #CALLER_JOB_INPUT_CLOSED}. */
+    private native int callerJobState();
     private native void destroyNative();
 }

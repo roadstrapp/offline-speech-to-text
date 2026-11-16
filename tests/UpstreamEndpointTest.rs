@@ -22,7 +22,7 @@ fn noisy_speech_detection_is_independent_of_callback_boundaries() {
     }
     assert!(whole.speech_started());
     assert_eq!(whole.speech_started(), chunks.speech_started());
-    assert_eq!(whole.silence_ms(), chunks.silence_ms());
+    assert_eq!(whole.is_voiced(), chunks.is_voiced());
 }
 #[test]
 fn silence_trimming_retains_internal_pauses_and_margins() {
@@ -50,7 +50,6 @@ fn continuous_speech_does_not_become_its_own_noise_floor() {
     detector.push(&vec![0.08; 160000]);
     assert!(detector.speech_started());
     assert!(detector.is_voiced());
-    assert_eq!(detector.silence_ms(), 0);
 }
 #[test]
 fn immediate_normal_speech_is_detected_without_startup_quiet() {

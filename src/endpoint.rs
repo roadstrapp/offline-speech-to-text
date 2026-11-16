@@ -182,4 +182,9 @@ impl Endpointer {
     pub fn is_voiced(&self) -> bool {
         self.speech_started && self.voiced_run >= MIN_VOICED_RUN
     }
+
+    #[cfg(test)]
+    pub fn speech_started(&self) -> bool {
+        self.speech_started
+    }
 }

@@ -40,7 +40,14 @@ pub(crate) struct SourceState {
     pub finalized: bool,
     pub elapsed_ms: u64,
     pub stop_after_ms: u64,
+    /// Time since the last byte arrived (or since the job started, before any did).
+    pub idle_ms: u64,
 }
+
+/// An open descriptor that delivers no bytes at all for this long ends the input, so a
+/// caller that stalls or forgets to close it frees the shared slot long before the cap.
+/// Silence is still PCM bytes, so a live recording never trips it.
+pub(crate) const IDLE_INPUT_MS: u64 = 10_000;
 
 pub(crate) fn wait_ready(
     mut state: impl FnMut() -> SourceState,
@@ -54,6 +61,9 @@ pub(crate) fn wait_ready(
         let stopping = state.stop_after_ms != u64::MAX;
         if stopping && state.elapsed_ms >= state.stop_after_ms {
             return Err(io::Error::from(ErrorKind::TimedOut));
+        }
+        if !stopping && state.idle_ms >= IDLE_INPUT_MS {
+            return Ok(Readiness::Finished);
         }
         match poll(if stopping { 0 } else { 100 }) {
             Ok(true) => return Ok(Readiness::Readable),
@@ -209,6 +219,7 @@ mod pipe_tests {
             finalized: false,
             elapsed_ms: 0,
             stop_after_ms: 500,
+            idle_ms: 0,
         }
     }
     #[test]
@@ -279,6 +290,7 @@ mod pipe_tests {
                         finalized: false,
                         elapsed_ms: started.elapsed().as_millis() as u64,
                         stop_after_ms: 30,
+                        idle_ms: 0,
                     },
                     |t| kernel_poll(fd, t),
                 )
@@ -306,6 +318,7 @@ mod pipe_tests {
                     finalized,
                     elapsed_ms: 1,
                     stop_after_ms: 500,
+                    idle_ms: 0,
                 },
                 |_| panic!("cancelled capture must not poll"),
             );
@@ -323,6 +336,38 @@ mod pipe_tests {
             .kind(),
             ErrorKind::TimedOut
         );
+    }
+    #[test]
+    fn silent_open_descriptor_finishes_after_idle_limit() {
+        let open = || SourceState {
+            cancelled: false,
+            finalized: false,
+            elapsed_ms: 20_000,
+            stop_after_ms: u64::MAX,
+            idle_ms: IDLE_INPUT_MS,
+        };
+        assert!(matches!(
+            wait_ready(open, |_| panic!("idle input must not poll")).unwrap(),
+            Readiness::Finished
+        ));
+        // Recent bytes keep the input open and polling.
+        let mut polls = 0;
+        let ready = wait_ready(
+            || SourceState { idle_ms: IDLE_INPUT_MS - 1, ..open() },
+            |_| {
+                polls += 1;
+                Ok(polls > 2)
+            },
+        );
+        assert!(matches!(ready.unwrap(), Readiness::Readable));
+        assert_eq!(polls, 3);
+    }
+    #[test]
+    fn caller_stop_drain_ignores_idle_limit() {
+        assert!(matches!(
+            wait_ready(|| SourceState { idle_ms: IDLE_INPUT_MS * 2, ..stopped() }, |_| Ok(true)).unwrap(),
+            Readiness::Readable
+        ));
     }
     #[test]
     fn invalid_actual_descriptor_is_an_input_error() {

@@ -21,6 +21,12 @@ public final class RecognitionSessionPolicyTest {
                 "previous microphone request dropped silently");
         check(RecognitionSessionPolicy.admit(false, true, true) == Action.REPLACE_MICROPHONE,
                 "microphone replacement depends on the background slot");
+        // A finished-input caller-audio job yields only to a different known app.
+        check(RecognitionSessionPolicy.mayPreempt(true, 10123, 10456), "finished job kept from another app");
+        check(!RecognitionSessionPolicy.mayPreempt(false, 10123, 10456), "receiving job preempted");
+        check(!RecognitionSessionPolicy.mayPreempt(true, 10123, 10123), "same app preempted its own job");
+        check(!RecognitionSessionPolicy.mayPreempt(true, -1, 10456), "unknown holder preempted");
+        check(!RecognitionSessionPolicy.mayPreempt(true, 10123, -1), "unknown requester preempted");
         // The replaced and the refused caller hear the same busy code (SpeechRecognizer values).
         check(RecognitionSessionPolicy.ERROR_RECOGNIZER_BUSY == 8, "busy code");
         check(RecognitionSessionPolicy.destroyedError(31) == 11, "API 31 destroy code");

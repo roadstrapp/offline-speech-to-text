@@ -230,10 +230,13 @@ class DocumentationContractTest(unittest.TestCase):
         for code in ("ERROR_CLIENT", "ERROR_AUDIO", "ERROR_NO_MATCH", "ERROR_LANGUAGE_UNAVAILABLE",
                      "ERROR_SERVER", "RESULT_AUDIO_ERROR", "RESULT_NO_MATCH"):
             self.assertIn(code, guide)
-        # The file session is attributed to the caller before anything else can fail.
+        # The file session is attributed to the caller before any failure is delivered.
         body = self._method_body(
-            service, "startListeningFromFile(Intent intent, Callback callback, boolean hasCallerAudio, NativeCallbacks target)")
-        self.assertLess(body.index("attributeSessionToCaller(callback)"), body.index("acceptRequest("))
+            service, "startListeningFromFile(Intent intent, Callback callback, int rejection, NativeCallbacks target)")
+        self.assertLess(body.index("attributeSessionToCaller(callback)"), body.index("safeError(file, rejection)"))
+        checks = self._method_body(
+            service, "fileRequestRejection(Intent intent, Callback callback, boolean hasCallerAudio)")
+        self.assertIn("acceptRequest(", checks)
         # Provider calls stay off the recognition service's main thread.
         self.assertIn('new Thread(() -> request.open(audio, output)', body)
         # No interactive limit may end a file job.
