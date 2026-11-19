@@ -691,6 +691,27 @@ public class VoiceRecognitionService extends RecognitionService {
                         + ",cpu_threads=" + Math.max(0, threads));
     }
 
+    /**
+     * Where a caller-audio request's time went, alongside the timing line above: first
+     * byte and end of input (since start), model warm-up, inference queueing, decode, and
+     * end of input to result. Negative means the stage never happened and is omitted.
+     */
+    public void onCallerAudioTiming(long firstInputMs, long inputMs, long warmupMs,
+            long gateWaitMs, long decodeMs, long stopWaitMs) {
+        StringBuilder detail = new StringBuilder("process=service,route=caller_audio");
+        appendTiming(detail, "first_input_ms", firstInputMs);
+        appendTiming(detail, "input_ms", inputMs);
+        appendTiming(detail, "warmup_ms", warmupMs);
+        appendTiming(detail, "gate_wait_ms", gateWaitMs);
+        appendTiming(detail, "decode_ms", decodeMs);
+        appendTiming(detail, "stop_wait_ms", stopWaitMs);
+        DiagnosticLog.event(getFilesDir(), "timing", detail.toString());
+    }
+
+    private static void appendTiming(StringBuilder detail, String key, long ms) {
+        if (ms >= 0) detail.append(',').append(key).append('=').append(ms);
+    }
+
     private static long troubleshootingId(Slot slot) {
         TroubleshootingSession session = slot.troubleshooting;
         return session == null ? 0L : session.id();
@@ -755,6 +776,9 @@ public class VoiceRecognitionService extends RecognitionService {
         public void onError(int code) { deliver(() -> deliverError(slot, callback, code)); }
         public void onStatusUpdate(String status) { deliver(() -> VoiceRecognitionService.this.onStatusUpdate(status)); }
         public void onTranscriptionMetrics(long audio, long compute, int threads) { deliver(() -> VoiceRecognitionService.this.onTranscriptionMetrics(audio, compute, threads)); }
+        public void onCallerAudioTiming(long first, long input, long warmup, long gate, long decode, long stopWait) {
+            deliver(() -> VoiceRecognitionService.this.onCallerAudioTiming(first, input, warmup, gate, decode, stopWait));
+        }
         public long getTroubleshootingSessionId() { return sessionId; }
         public void onRecognitionOutcome(int reason, long audio) { deliver(() -> VoiceRecognitionService.this.onRecognitionOutcome(slot, reason, audio)); }
         public void onWindowPlan(long id, long rawLimitMs, int plannedWindows) {

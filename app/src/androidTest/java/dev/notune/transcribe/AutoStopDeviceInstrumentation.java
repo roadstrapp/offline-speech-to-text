@@ -39,6 +39,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
     private int callerAudioPace;
     private boolean bluetoothMic;
     private boolean lengthSweep;
+    private boolean callerAudioLateStart;
     private static final class InjectedFixtureFailure extends Exception {}
 
     @Override
@@ -74,6 +75,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         qualifySetup = arguments != null && "true".equals(arguments.getString("qualify_setup"));
         captureCapability = arguments != null && "true".equals(arguments.getString("capture_capability"));
         lengthSweep = arguments != null && "true".equals(arguments.getString("length_sweep"));
+        callerAudioLateStart = arguments != null && "true".equals(arguments.getString("caller_audio_late_start"));
         start();
     }
 
@@ -97,6 +99,12 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             catch (CallerAudioProviderDeviceTest.LengthSweepFailure failure) {
                 code = Activity.RESULT_CANCELED; result.putAll(failure.evidence); result.putString("failure", failure.toString());
             }
+            catch (Throwable error) { code = Activity.RESULT_CANCELED; result.putString("failure", error.toString()); }
+            finish(code, result); return;
+        }
+        if (callerAudioLateStart) {
+            Bundle result = new Bundle(); int code = Activity.RESULT_OK;
+            try { result.putLong("first_input_ms", testCallerLateFirstWrite()); result.putBoolean("caller_audio_late_start", true); }
             catch (Throwable error) { code = Activity.RESULT_CANCELED; result.putString("failure", error.toString()); }
             finish(code, result); return;
         }
@@ -526,6 +534,36 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             if (savedLease != null) Files.write(lease.toPath(), savedLease);
             else Files.deleteIfExists(lease.toPath());
             runSafelyOnMainSync(controls::refresh);
+        }
+    }
+
+    /** Thirty silent seconds before the first write; returns the reported first_input_ms. */
+    private long testCallerLateFirstWrite() throws Exception {
+        File directory = getTargetContext().getFilesDir();
+        boolean basic = DiagnosticLog.isEnabled(directory);
+        try {
+            DiagnosticLog.setEnabled(directory, true);
+            long start = System.currentTimeMillis();
+            long silentMs = CallerAudioProviderDeviceTest.runLateFirstWrite(this);
+            check(DiagnosticLog.awaitIdleForTest(5000), "caller diagnostics did not drain");
+            String log = new String(DiagnosticLog.snapshot(directory), java.nio.charset.StandardCharsets.UTF_8);
+            long firstInputMs = -1;
+            for (String line : log.split("\n")) {
+                int space = line.indexOf(' ');
+                if (space <= 0 || !line.contains(" timing ") || !line.contains("route=caller_audio")) continue;
+                try {
+                    if (Long.parseLong(line.substring(0, space)) < start) continue;
+                } catch (NumberFormatException oldOrIncompleteLine) { continue; }
+                java.util.regex.Matcher value = java.util.regex.Pattern.compile("first_input_ms=(\\d+)").matcher(line);
+                check(firstInputMs < 0 && value.find(), "expected one caller timing line with first_input_ms");
+                firstInputMs = Long.parseLong(value.group(1));
+            }
+            // Measured from job start, which precedes onReadyForSpeech and the silent wait.
+            check(firstInputMs >= silentMs && firstInputMs < silentMs + 5000,
+                    "first_input_ms=" + firstInputMs + " silent_ms=" + silentMs);
+            return firstInputMs;
+        } finally {
+            DiagnosticLog.setEnabled(directory, basic);
         }
     }
 

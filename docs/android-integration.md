@@ -112,7 +112,7 @@ Offline Speech to Text snapshots the private preferred-word list once per transc
 
 Long caller-audio sessions remain one ordinary recognition request. OSTT keeps the supplied PCM as one continuous utterance and calls the standard final `onResults` only after the writer closes or the caller stops listening. Caller audio is decoded like a shared file while it arrives: in the model's bounded windows (one minute for Whisper), split at quiet points with overlapping text reconciliation, so a short recording is one model run. An ordinary hesitation is never used as an app-level endpoint. Do not enable `EXTRA_SEGMENTED_SESSION` or concatenate partial callbacks. `cancel()` discards the captured utterance.
 
-A caller-audio session is bounded to 60 seconds of wall-clock time from `startListening`, however fast the PCM arrives. When that bound passes before the writer closes, OSTT stops reading and finalizes only the audio already received, so the transcript can miss the rest of a longer stream. Pending PCM is bounded to two minutes (about 7.7 MB), with backpressure when decoding falls behind; consumed windows are discarded apart from their reconciliation overlap. A fast writer cannot grow the queue without bound. To transcribe a saved recording, pass it as a file through `EXTRA_AUDIO_URI` instead; that path decodes with bounded memory and has no duration or wall-clock cap.
+A caller-audio session is bounded to 60 seconds of wall-clock time from `startListening`, however fast the PCM arrives. When that bound passes before the writer closes, OSTT stops reading and finalizes only the audio already received, so the transcript can miss the rest of a longer stream. Before the first PCM byte, an open writer may stay silent until that bound (for example while the caller buffers its own recording); once PCM has started, 10 seconds without a byte ends the input and finalizes the audio received. Closing the writer ends the input at once. Pending PCM is bounded to two minutes (about 7.7 MB), with backpressure when decoding falls behind; consumed windows are discarded apart from their reconciliation overlap. A fast writer cannot grow the queue without bound. To transcribe a saved recording, pass it as a file through `EXTRA_AUDIO_URI` instead; that path decodes with bounded memory and has no duration or wall-clock cap.
 
 ### Caller-audio completion and errors
 
@@ -123,6 +123,9 @@ and capture slot. While a caller-audio request is being transcribed, the OSTT
 voice keyboard, the popup and a microphone request from another app keep
 working: the transcription runs as background work, window by window, and an
 interactive final decode runs before its next window on the same loaded model.
+The caller request's own last window, once its writer closes or it stops
+listening, is admitted like an interactive final decode. Interactive final
+decodes run in the order they arrive, ahead of background windows.
 A microphone request never cancels a caller-audio request.
 
 Only one background recognition-service request (caller audio or file URI) runs at a time. A second one while the first is

@@ -328,6 +328,10 @@ public final class DiagnosticLog {
                 case "session_id":
                 case "cpu_ms":
                 case "stop_wait_ms":
+                case "first_input_ms":
+                case "input_ms":
+                case "warmup_ms":
+                case "gate_wait_ms":
                 case "prepare_ms":
                 case "decode_ms":
                 case "postprocess_ms":

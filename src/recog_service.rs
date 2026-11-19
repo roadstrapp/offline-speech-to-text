@@ -13,13 +13,15 @@
 //! window by window as background work behind `INFERENCE_GATE` (see
 //! `caller_audio_job.rs`). The voice keyboard, the popup and a microphone request
 //! from another app therefore keep working while a long caller transcription runs;
-//! their final decodes take the engine between the caller's windows. A second
+//! their final decodes take the engine between the caller's windows. Only the last
+//! decode after the caller closed its input is admitted as foreground work (see
+//! `decode_caller_window`). A second
 //! caller-audio request while one runs is answered with `ERROR_RECOGNIZER_BUSY`.
 
 use std::fs::File;
 use std::io::{self, ErrorKind};
 use std::os::fd::{FromRawFd, AsRawFd};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -31,7 +33,7 @@ use once_cell::sync::Lazy;
 
 use crate::background_chunking::CaptureBuffer;
 use crate::background_transcription::{BackgroundTranscriber, Completion};
-use crate::caller_audio_input::{self, InputEnd, Readiness, SourceState};
+use crate::caller_audio_input::{self, EndReason, InputEnd, Readiness, SourceState};
 use crate::engine;
 use crate::voice_session::{
     claim_session_owner, release_session_owner, SendStream, OWNER_RECOGNITION_SERVICE,
@@ -121,9 +123,17 @@ struct CallerJob {
     terminal: AtomicBool,
     speech_started: AtomicBool,
     /// Caller stop drains already-readable bytes; it must not finalize on the Java thread.
+    /// Also the one claim Stop, the no-data limit and the cap race for (see `caller_audio_input`).
     stop_after_ms: AtomicU64,
     /// `started_at`-relative time of the last bytes read; drives the no-data timeout.
     last_data_ms: AtomicU64,
+    /// `started_at`-relative time of the first bytes read; `u64::MAX` until then.
+    first_data_ms: AtomicU64,
+    /// `started_at`-relative time the input ended; `u64::MAX` until then.
+    input_end_ms: AtomicU64,
+    /// The one published `EndReason` (0 until the input ends); set by whoever
+    /// finalizes the input, and the only source of the tail's priority.
+    end_reason: AtomicU8,
     started_at: Instant,
     jvm: Arc<jni::JavaVM>,
     target: GlobalRef,
@@ -160,6 +170,25 @@ fn call_outcome(env: &mut JNIEnv, obj: &JObject, reason: i32, audio_ms: u64) {
 fn call_results(env: &mut JNIEnv, obj: &JObject, text: &str) {
     if let Ok(jtxt) = env.new_string(text) {
         let _ = env.call_method(obj, "onResults", "(Ljava/lang/String;)V", &[(&jtxt).into()]);
+    }
+}
+
+/// Where a caller job's time went; `-1` for a stage that never happened.
+fn call_caller_timing(env: &mut JNIEnv, obj: &JObject, job: &CallerJob, timing: &CallerTiming, result_ms: u64) {
+    let values = caller_timing_values(
+        job.first_data_ms.load(Ordering::SeqCst),
+        job.input_end_ms.load(Ordering::SeqCst),
+        timing,
+        result_ms,
+    );
+    let result = env.call_method(
+        obj,
+        "onCallerAudioTiming",
+        "(JJJJJJ)V",
+        &values.map(JValue::Long),
+    );
+    if result.is_err() || env.exception_check().unwrap_or(true) {
+        let _ = env.exception_clear();
     }
 }
 
@@ -372,6 +401,9 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
             speech_started: AtomicBool::new(false),
             stop_after_ms: AtomicU64::new(u64::MAX),
             last_data_ms: AtomicU64::new(0),
+            first_data_ms: AtomicU64::new(u64::MAX),
+            input_end_ms: AtomicU64::new(u64::MAX),
+            end_reason: AtomicU8::new(0),
             started_at: Instant::now(),
             jvm: jvm.clone(),
             target,
@@ -425,12 +457,8 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
     let job = CALLER_JOB.lock().unwrap().clone();
     if let Some(job) = job {
         let deadline = (job.started_at.elapsed().as_millis() as u64).saturating_add(500);
-        let _ = job.stop_after_ms.compare_exchange(
-            u64::MAX,
-            deadline,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        );
+        // A no-op if the input already ended or the no-data limit claimed it first.
+        caller_audio_input::request_stop(&job.stop_after_ms, deadline);
     }
 }
 
@@ -647,8 +675,11 @@ fn read_caller_audio(job: Arc<CallerJob>, source: File, format: SourceFormat) {
         source,
         || wait_readable(fd, &job),
         |bytes| {
-            job.last_data_ms
-                .store(job.started_at.elapsed().as_millis() as u64, Ordering::SeqCst);
+            let now = elapsed_ms(&job);
+            let _ = job
+                .first_data_ms
+                .compare_exchange(u64::MAX, now, Ordering::SeqCst, Ordering::SeqCst);
+            job.last_data_ms.store(now, Ordering::SeqCst);
             carry.extend_from_slice(bytes);
             mono.clear();
             drain_mono_frames(&mut carry, &format, &mut mono);
@@ -660,19 +691,33 @@ fn read_caller_audio(job: Arc<CallerJob>, source: File, format: SourceFormat) {
         },
     );
     match end {
-        // Cancelled, or the safety cap already ended the input.
+        // Cancelled, or the safety cap claimed and ended the input.
         Ok(InputEnd::Cancelled) => {}
-        Ok(InputEnd::Finished) if carry.is_empty() => {
-            if idle_ms(&job) >= caller_audio_input::IDLE_INPUT_MS
-                && job.stop_after_ms.load(Ordering::SeqCst) == u64::MAX
-            {
-                log::info!("caller audio: no data for {} ms, ending input", caller_audio_input::IDLE_INPUT_MS);
-            }
-            job.input_closed.store(true, Ordering::SeqCst);
-            job.queue.end();
+        Ok(InputEnd::Closed) if carry.is_empty() => end_caller_input(&job, EndReason::Closed),
+        Ok(InputEnd::Drained) if carry.is_empty() => end_caller_input(&job, EndReason::Stopped),
+        Ok(InputEnd::Idle) if carry.is_empty() => {
+            log::info!(
+                "caller audio: no data for {} ms, ending input",
+                caller_source_state(&job).no_data_limit_ms()
+            );
+            end_caller_input(&job, EndReason::Idle);
         }
         _ => fail_caller_audio(&job),
     }
+}
+
+/// No more input will be queued. Only the first reason (reader or session cap) is
+/// published and finalizes the input; the queue's tail is released after it.
+fn end_caller_input(job: &CallerJob, reason: EndReason) {
+    caller_audio_input::end_input(&job.end_reason, &job.input_closed, reason, || {
+        release_caller_tail(job)
+    });
+}
+
+/// Records when the input ended and lets the decoder take the tail.
+fn release_caller_tail(job: &CallerJob) {
+    job.input_end_ms.store(elapsed_ms(job), Ordering::SeqCst);
+    job.queue.end();
 }
 
 /// A malformed or failed source must not turn a partial recording into success.
@@ -730,8 +775,13 @@ fn caller_cap_monitor(job: Arc<CallerJob>) {
             return;
         }
         if job.started_at.elapsed() >= Duration::from_millis(MAX_SESSION_MS) {
-            job.input_closed.store(true, Ordering::SeqCst);
-            job.queue.end();
+            // A Stop or no-data claim already made owns the end; its drain still runs.
+            caller_audio_input::end_input_on_cap(
+                &job.stop_after_ms,
+                &job.end_reason,
+                &job.input_closed,
+                || release_caller_tail(&job),
+            );
             return;
         }
     }
@@ -740,7 +790,9 @@ fn caller_cap_monitor(job: Arc<CallerJob>) {
 /// Decodes the caller's audio window by window while it arrives, each window
 /// admitted as background work, then the tail, and delivers the one result.
 fn decode_caller_audio(job: Arc<CallerJob>) {
-    let result = run_caller_decode(&job);
+    let mut timing = CallerTiming::default();
+    let result = run_caller_decode(&job, &mut timing);
+    let result_ms = elapsed_ms(&job);
     job.input_closed.store(true, Ordering::SeqCst);
     job.queue.stop();
     // Whoever stopped the queue (cancel or input failure) owns the terminal callback.
@@ -757,6 +809,7 @@ fn decode_caller_audio(job: Arc<CallerJob>) {
     };
     clear_caller(&job);
     let target = job.target.as_obj();
+    call_caller_timing(&mut env, target, &job, &timing, result_ms);
     match result {
         CallerDecode::Stopped => {}
         CallerDecode::TooShort(total) => {
@@ -768,12 +821,8 @@ fn decode_caller_audio(job: Arc<CallerJob>) {
             call_outcome(&mut env, target, 3, job.queue.total_samples().saturating_mul(1000) / 16000);
             call_error(&mut env, target, ERROR_SERVER);
         }
-        CallerDecode::Text {
-            text,
-            audio_ms,
-            compute_ms,
-        } => {
-            call_metrics(&mut env, target, audio_ms, compute_ms);
+        CallerDecode::Text { text, audio_ms } => {
+            call_metrics(&mut env, target, audio_ms, timing.decode_ms.unwrap_or(0));
             if text.trim().is_empty() {
                 call_outcome(&mut env, target, 2, audio_ms);
                 call_error(&mut env, target, ERROR_NO_MATCH);
@@ -806,37 +855,72 @@ enum CallerDecode {
     Text {
         text: String,
         audio_ms: u64,
-        compute_ms: u64,
     },
 }
 
-fn run_caller_decode(job: &Arc<CallerJob>) -> CallerDecode {
-    if engine::get_engine().is_none() {
-        if let Err(error) = engine::ensure_loaded_from_thread(&job.jvm, &job.target) {
-            return CallerDecode::Failed(error);
+/// Caller job time spent outside waiting for input; `None` for a stage never entered.
+#[derive(Default)]
+struct CallerTiming {
+    /// Model load (if not already warm) and transcription setup, including a failed one.
+    warmup_ms: Option<u64>,
+    /// Queued behind other work at `INFERENCE_GATE`.
+    gate_wait_ms: Option<u64>,
+    /// Window decodes plus final assembly (the existing `duration_ms`).
+    decode_ms: Option<u64>,
+}
+
+/// Adds the time since `started` to `stage` and marks the stage as entered.
+fn add_stage(stage: &mut Option<u64>, started: Instant) {
+    let ms = started.elapsed().as_millis() as u64;
+    *stage = Some(stage.unwrap_or(0).saturating_add(ms));
+}
+
+/// `onCallerAudioTiming` arguments: first input, input end, warm-up, gate wait,
+/// decode, stop-to-result; `-1` where the stage never happened.
+fn caller_timing_values(first_data_ms: u64, input_end_ms: u64, timing: &CallerTiming, result_ms: u64) -> [i64; 6] {
+    let known = |ms: u64| if ms == u64::MAX { -1 } else { ms as i64 };
+    let stage = |ms: Option<u64>| ms.map_or(-1, |ms| ms as i64);
+    let stop_wait = if input_end_ms == u64::MAX { -1 } else { result_ms.saturating_sub(input_end_ms) as i64 };
+    [
+        known(first_data_ms),
+        known(input_end_ms),
+        stage(timing.warmup_ms),
+        stage(timing.gate_wait_ms),
+        stage(timing.decode_ms),
+        stop_wait,
+    ]
+}
+
+fn run_caller_decode(job: &Arc<CallerJob>, timing: &mut CallerTiming) -> CallerDecode {
+    let warmup_started = Instant::now();
+    let warm = (|| {
+        if engine::get_engine().is_none() {
+            engine::ensure_loaded_from_thread(&job.jvm, &job.target)?;
         }
-    }
-    let Some(eng) = engine::get_engine() else {
-        return CallerDecode::Failed("model not loaded".to_string());
-    };
-    let setup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let guard = eng.lock().unwrap_or_else(|p| p.into_inner());
-        (guard.file_window_limit(), guard.begin_transcription())
-    }));
-    let Ok((limit, mut transcription)) = setup else {
-        return CallerDecode::Failed("transcription setup failed unexpectedly".to_string());
+        let eng = engine::get_engine().ok_or_else(|| "model not loaded".to_string())?;
+        let setup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let guard = eng.lock().unwrap_or_else(|p| p.into_inner());
+            (guard.file_window_limit(), guard.begin_transcription())
+        }))
+        .map_err(|_| "transcription setup failed unexpectedly".to_string())?;
+        Ok((eng, setup))
+    })();
+    // Recorded on failure too, so a slow failed load is visible.
+    add_stage(&mut timing.warmup_ms, warmup_started);
+    let (eng, (limit, mut transcription)) = match warm {
+        Ok(warm) => warm,
+        Err(error) => return CallerDecode::Failed(error),
     };
     if limit > 60 * 16_000 {
         return CallerDecode::Failed("model window exceeds caller queue capacity".to_string());
     }
     let mut assembled = String::new();
-    let mut compute_ms = 0u64;
     loop {
         match job.queue.next(limit) {
             crate::caller_audio_job::Work::Stop => return CallerDecode::Stopped,
             crate::caller_audio_job::Work::Window(window) => {
                 if let Err(error) =
-                    decode_caller_window(job, &eng, &mut transcription, &window, &mut assembled, &mut compute_ms)
+                    decode_caller_window(job, &eng, &mut transcription, &window, &mut assembled, timing, false)
                 {
                     job.queue.stop();
                     return CallerDecode::Failed(error);
@@ -856,8 +940,10 @@ fn run_caller_decode(job: &Arc<CallerJob>) -> CallerDecode {
                     }
                 }
                 if !tail.is_empty() {
+                    // Published before the queue released this tail, so it is final.
+                    let interactive = caller_audio_input::ended_by_caller(&job.end_reason);
                     if let Err(error) =
-                        decode_caller_window(job, &eng, &mut transcription, &tail, &mut assembled, &mut compute_ms)
+                        decode_caller_window(job, &eng, &mut transcription, &tail, &mut assembled, timing, interactive)
                     {
                         return CallerDecode::Failed(error);
                     }
@@ -867,11 +953,10 @@ fn run_caller_decode(job: &Arc<CallerJob>) -> CallerDecode {
                 }
                 let started = Instant::now();
                 let text = engine::Engine::finish_file_job(transcription, assembled);
+                add_stage(&mut timing.decode_ms, started);
                 return CallerDecode::Text {
                     text,
                     audio_ms: total.saturating_mul(1000) / 16000,
-                    compute_ms: compute_ms
-                        .saturating_add(started.elapsed().as_millis() as u64),
                 };
             }
         }
@@ -884,10 +969,22 @@ fn decode_caller_window(
     transcription: &mut engine::TranscriptionJob,
     audio: &[f32],
     assembled: &mut String,
-    compute_ms: &mut u64,
+    timing: &mut CallerTiming,
+    interactive: bool,
 ) -> Result<(), String> {
-    // Background admission: a waiting keyboard/popup final decode goes first.
-    let _permit = engine::INFERENCE_GATE.acquire(false);
+    // Windows decoded while audio still arrives are background work: a waiting
+    // keyboard/popup final decode goes first. The tail after the caller closed its
+    // input (or tapped Stop) is the request's final decode and someone is waiting on
+    // it, so it is admitted as foreground like the keyboard's own final decode. That
+    // cannot starve the keyboard: foreground admissions are served in arrival order,
+    // so a keyboard final decode already waiting goes before any later caller tail,
+    // and each caller job (one at a time, `CALLER_JOB`) makes this foreground
+    // admission at most once, for a tail no longer than one model window. Interim
+    // windows stay background, so a long caller stream cannot hold foreground
+    // priority; keyboard preparation windows wait for at most one tail per request.
+    let queued = Instant::now();
+    let _permit = engine::INFERENCE_GATE.acquire(interactive);
+    add_stage(&mut timing.gate_wait_ms, queued);
     if job.cancelled.load(Ordering::SeqCst) {
         return Ok(());
     }
@@ -898,7 +995,7 @@ fn decode_caller_window(
             .decode_window(transcription, audio, true, assembled)
     }))
     .unwrap_or_else(|_| Err("transcription failed unexpectedly".to_string()));
-    *compute_ms = compute_ms.saturating_add(started.elapsed().as_millis() as u64);
+    add_stage(&mut timing.decode_ms, started);
     result
 }
 
@@ -914,22 +1011,27 @@ fn clear_caller(job: &Arc<CallerJob>) {
     }
 }
 
-fn idle_ms(job: &CallerJob) -> u64 {
-    (job.started_at.elapsed().as_millis() as u64)
-        .saturating_sub(job.last_data_ms.load(Ordering::SeqCst))
+fn elapsed_ms(job: &CallerJob) -> u64 {
+    job.started_at.elapsed().as_millis() as u64
+}
+
+fn caller_source_state(job: &CallerJob) -> SourceState {
+    SourceState {
+        cancelled: job.cancelled.load(Ordering::SeqCst),
+        finalized: job.input_closed.load(Ordering::SeqCst),
+        elapsed_ms: elapsed_ms(job),
+        stop_after_ms: job.stop_after_ms.load(Ordering::SeqCst),
+        idle_ms: elapsed_ms(job).saturating_sub(job.last_data_ms.load(Ordering::SeqCst)),
+        received_data: job.first_data_ms.load(Ordering::SeqCst) != u64::MAX,
+    }
 }
 
 /// Stop drains currently readable data without waiting for an unclosed writer.
 /// Cancellation, safety limits, and poll errors have distinct outcomes.
 fn wait_readable(fd: i32, job: &Arc<CallerJob>) -> io::Result<Readiness> {
-    caller_audio_input::wait_ready(
-        || SourceState {
-            cancelled: job.cancelled.load(Ordering::SeqCst),
-            finalized: job.input_closed.load(Ordering::SeqCst),
-            elapsed_ms: job.started_at.elapsed().as_millis() as u64,
-            stop_after_ms: job.stop_after_ms.load(Ordering::SeqCst),
-            idle_ms: idle_ms(job),
-        },
+    caller_audio_input::wait_ready_or_stop(
+        &job.stop_after_ms,
+        || caller_source_state(job),
         |timeout| {
             let mut poll_fd = libc::pollfd {
                 fd,
@@ -1028,6 +1130,28 @@ mod tests {
                 "sample {index}: expected {expected}, got {actual}"
             );
         }
+    }
+
+    #[test]
+    fn caller_timing_omits_stages_never_entered() {
+        // A warm-up that failed after 1.5 s: it is reported; gate and decode are not.
+        let mut timing = CallerTiming::default();
+        add_stage(&mut timing.warmup_ms, Instant::now() - Duration::from_millis(1_500));
+        let values = caller_timing_values(u64::MAX, 2_000, &timing, 3_600);
+        assert_eq!(values[0], -1);
+        assert_eq!(values[1], 2_000);
+        assert!(values[2] >= 1_500);
+        assert_eq!(&values[3..], &[-1, -1, 1_600]);
+        // An entered stage reports its time even when it is 0 ms, and accumulates.
+        add_stage(&mut timing.gate_wait_ms, Instant::now() + Duration::from_secs(1));
+        add_stage(&mut timing.decode_ms, Instant::now() - Duration::from_millis(40));
+        add_stage(&mut timing.decode_ms, Instant::now() - Duration::from_millis(60));
+        let values = caller_timing_values(300, u64::MAX, &timing, 3_600);
+        assert_eq!(values[0], 300);
+        assert_eq!(values[1], -1);
+        assert_eq!(values[3], 0);
+        assert!(values[4] >= 100);
+        assert_eq!(values[5], -1);
     }
 
     #[test]

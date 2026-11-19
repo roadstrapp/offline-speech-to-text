@@ -47,6 +47,85 @@ final class CallerAudioProviderDeviceTest {
         }
     }
 
+    /** A caller that records into its own buffer first: the descriptor stays open and
+     * silent for 30 s, then the benchmark arrives and the writer closes. The request must
+     * stay open through the silence and end with exactly one complete result. Returns
+     * the wall time from ready to first write, for the caller's timing assertion. */
+    static long runLateFirstWrite(Instrumentation fixture) throws Exception {
+        byte[] pcm = benchmarkPcm(fixture);
+        SpeechRecognizer[] recognizer = new SpeechRecognizer[1];
+        CountDownLatch ready = new CountDownLatch(1), terminal = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicInteger results = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger errors = new java.util.concurrent.atomic.AtomicInteger();
+        String[] text = new String[1];
+        int[] error = new int[1];
+        ParcelFileDescriptor[] pipe = ParcelFileDescriptor.createPipe();
+        OutputStream writer = new ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]);
+        Thread feeder = null;
+        try {
+            fixture.runOnMainSync(() -> {
+                recognizer[0] = SpeechRecognizer.createSpeechRecognizer(fixture.getTargetContext(),
+                        new ComponentName(fixture.getTargetContext(), VoiceRecognitionService.class));
+                recognizer[0].setRecognitionListener(new RecognitionListener() {
+                    public void onReadyForSpeech(Bundle b) { closeReader(pipe[0]); ready.countDown(); }
+                    public void onBeginningOfSpeech() {}
+                    public void onRmsChanged(float f) {}
+                    public void onBufferReceived(byte[] b) {}
+                    public void onEndOfSpeech() {}
+                    public void onPartialResults(Bundle b) {}
+                    public void onEvent(int i, Bundle b) {}
+                    public void onError(int code) {
+                        error[0] = code; errors.incrementAndGet(); closeReader(pipe[0]);
+                        ready.countDown(); terminal.countDown();
+                    }
+                    public void onResults(Bundle result) {
+                        ArrayList<String> hypotheses = result.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                        text[0] = hypotheses == null || hypotheses.isEmpty() ? "" : hypotheses.get(0);
+                        results.incrementAndGet(); terminal.countDown();
+                    }
+                });
+                recognizer[0].startListening(new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                        .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, pipe[0])
+                        .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, 16000)
+                        .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
+                        .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT));
+            });
+            if (!ready.await(10, TimeUnit.SECONDS)) throw new AssertionError("provider not ready");
+            long readyAt = android.os.SystemClock.elapsedRealtime();
+            if (terminal.await(30, TimeUnit.SECONDS))
+                throw new AssertionError("caller ended during silence, error=" + error[0]);
+            long silentMs = android.os.SystemClock.elapsedRealtime() - readyAt;
+            boolean[] feederFailed = new boolean[1];
+            feeder = new Thread(() -> {
+                try { writer.write(pcm); writer.close(); }
+                catch (Throwable failure) { feederFailed[0] = true; terminal.countDown(); }
+            }, "caller-audio-late-fixture");
+            feeder.start();
+            // The 60 s session cap counts from start; input ends about 31 s in.
+            if (!terminal.await(28, TimeUnit.SECONDS)) throw new AssertionError("caller service timed out");
+            feeder.join(5000);
+            if (feeder.isAlive() || feederFailed[0])
+                throw new AssertionError("caller feeder failed; provider error=" + error[0]);
+            android.os.SystemClock.sleep(1000);
+            if (results.get() != 1 || errors.get() != 0)
+                throw new AssertionError("results=" + results.get() + " errors=" + errors.get() + " error=" + error[0]);
+            String words = text[0] == null ? "" : text[0].toLowerCase(java.util.Locale.ROOT)
+                    .replaceAll("[^a-z ]", "").replaceAll("\\s+", " ").trim();
+            // bench.wav: "and so my fellow americans ask not ... what you can do for your country".
+            if (!words.startsWith("and so my fellow americans") && !words.startsWith("so my fellow americans"))
+                throw new AssertionError("late caller benchmark lost its start: " + words);
+            if (!words.endsWith("for your country"))
+                throw new AssertionError("late caller benchmark lost its tail: " + words);
+            return silentMs;
+        } finally {
+            try { writer.close(); } catch (Exception ignored) {}
+            try { pipe[0].close(); } catch (Exception ignored) {}
+            if (feeder != null) feeder.join(5000);
+            fixture.runOnMainSync(() -> { if (recognizer[0] != null) recognizer[0].destroy(); });
+            fixture.waitForIdleSync();
+        }
+    }
+
     /** Clip-length regression for the encoder padding defect fixed in transcribe.cpp
      * 0.4.2: one mel frame is 160 samples, so eight consecutive cuts cover every
      * frame count modulo the encoder's 8x subsampling. Speech is cut mid-word, so

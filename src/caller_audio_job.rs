@@ -4,7 +4,9 @@
 //! capture owner. It is decoded like a file: one bounded model window at a
 //! time, each admitted through `INFERENCE_GATE` as background work, so a
 //! keyboard or popup final decode that is waiting runs before the next caller
-//! window. The reader only appends samples; the decoder takes complete windows
+//! window. Only the tail, once the caller has closed its input, is admitted as
+//! foreground (see `recog_service::decode_caller_window`). The reader only
+//! appends samples; the decoder takes complete windows
 //! (keeping the overlap the long-audio reconciliation needs) and, once the
 //! input has ended, the tail. Kept free of JNI so the policy runs in host tests.
 
@@ -212,5 +214,129 @@ mod backpressure_tests {
         queue.stop();
         completed.recv_timeout(Duration::from_secs(2)).unwrap();
         thread.join().unwrap();
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod caller_end_tests {
+    use super::*;
+    use crate::caller_audio_input::pipe_tests::{kernel_poll, pair, stopped};
+    use crate::caller_audio_input::{
+        drain, end_input, end_input_on_cap, ended_by_caller, request_stop, wait_ready_or_stop,
+        EndReason, InputEnd, SourceState,
+    };
+    use std::io::Write;
+    use std::os::fd::AsRawFd;
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+    use std::sync::{mpsc, Arc};
+
+    impl Queue {
+        fn ended(&self) -> bool {
+            self.lock().ended
+        }
+    }
+
+    /// Releases the real queue's tail, checking the shared end already published its
+    /// reason and closed the input, as the decoder's tail priority relies on.
+    fn release(queue: &Queue, reason: &AtomicU8, closed: &AtomicBool, releases: &AtomicUsize) {
+        assert_ne!(reason.load(Ordering::SeqCst), 0, "tail released before the reason");
+        assert!(closed.load(Ordering::SeqCst), "tail released before the input closed");
+        releases.fetch_add(1, Ordering::SeqCst);
+        queue.end();
+    }
+
+    #[test]
+    fn cap_tick_during_a_paused_stop_drain_keeps_the_pcm_and_one_foreground_tail() {
+        let (reader, mut writer) = pair();
+        let pcm: Vec<u8> = (0..4096u32).map(|n| (n % 251) as u8).collect();
+        writer.write_all(&pcm).unwrap();
+        let fd = reader.as_raw_fd();
+        let queue = Arc::new(Queue::default());
+        let stop_after_ms = Arc::new(AtomicU64::new(u64::MAX));
+        let end_reason = Arc::new(AtomicU8::new(0));
+        let input_closed = Arc::new(AtomicBool::new(false));
+        let releases = Arc::new(AtomicUsize::new(0));
+        assert!(request_stop(&stop_after_ms, 500));
+
+        let (paused_tx, paused_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel::<()>();
+        let reader_thread = {
+            let (queue, stop, reason, closed, releases) = (
+                queue.clone(),
+                stop_after_ms.clone(),
+                end_reason.clone(),
+                input_closed.clone(),
+                releases.clone(),
+            );
+            std::thread::spawn(move || {
+                let mut paused = false;
+                let mut received = Vec::new();
+                let end = drain(
+                    reader,
+                    || {
+                        wait_ready_or_stop(
+                            &stop,
+                            || {
+                                // Pause the reader right after Stop's claim, before it reads.
+                                if !paused {
+                                    paused = true;
+                                    paused_tx.send(()).unwrap();
+                                    resume_rx.recv().unwrap();
+                                }
+                                SourceState {
+                                    finalized: closed.load(Ordering::SeqCst),
+                                    stop_after_ms: stop.load(Ordering::SeqCst),
+                                    ..stopped()
+                                }
+                            },
+                            |t| kernel_poll(fd, t),
+                        )
+                    },
+                    |bytes| {
+                        received.extend_from_slice(bytes);
+                        // One sample per byte keeps PCM framing out of this test.
+                        let samples: Vec<f32> = bytes.iter().map(|&b| b as f32 / 255.0).collect();
+                        queue.push(&samples);
+                    },
+                )
+                .unwrap();
+                if matches!(end, InputEnd::Drained) {
+                    end_input(&reason, &closed, EndReason::Stopped, || {
+                        release(&queue, &reason, &closed, &releases)
+                    });
+                }
+                (end, received)
+            })
+        };
+
+        paused_rx.recv().unwrap();
+        assert!(kernel_poll(fd, 0).unwrap(), "PCM is readable when the cap ticks");
+        let capped = end_input_on_cap(&stop_after_ms, &end_reason, &input_closed, || {
+            release(&queue, &end_reason, &input_closed, &releases)
+        });
+        // Stop owns the claim: the cap tick releases nothing and leaves the input open.
+        assert!(!capped);
+        assert_eq!(releases.load(Ordering::SeqCst), 0);
+        assert!(!queue.ended());
+        assert!(!input_closed.load(Ordering::SeqCst));
+        assert_eq!(end_reason.load(Ordering::SeqCst), 0);
+        resume_tx.send(()).unwrap();
+
+        let (end, received) = reader_thread.join().unwrap();
+        assert!(matches!(end, InputEnd::Drained));
+        assert_eq!(received, pcm);
+        assert_eq!(releases.load(Ordering::SeqCst), 1);
+        match queue.next(20 * 16_000) {
+            Work::Tail(audio, total) => {
+                assert_eq!(total, pcm.len() as u64);
+                assert_eq!(audio.len(), pcm.len());
+            }
+            other => panic!("expected tail, got {other:?}"),
+        }
+        assert!(matches!(queue.next(20 * 16_000), Work::Stop));
+        // The decoder admits the tail as foreground only when the caller ended the input.
+        assert_eq!(end_reason.load(Ordering::SeqCst), EndReason::Stopped as u8);
+        assert!(ended_by_caller(&end_reason));
+        drop(writer);
     }
 }

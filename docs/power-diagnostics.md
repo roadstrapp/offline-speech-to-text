@@ -71,6 +71,10 @@ Basic `timing duration_ms` measures cumulative decode and final cleanup, includi
 windows prepared during capture. Stop latency is recorded separately. Detailed
 `stop_wait_ms` measures that wait; `decode_ms` also includes engine-lock contention.
 `model_warm=1` reports model loading state only; hardware cache state remains unknown.
+Caller-audio requests add a `timing route=caller_audio` line: `first_input_ms` and
+`input_ms` (first byte and end of input, from start), `warmup_ms`, `gate_wait_ms`
+(queued behind other inference), `decode_ms`, and `stop_wait_ms` (end of input to result).
+A stage the request never reached is left out.
 
 The experimental setting is off by default and snapshotted per recording. Short
 dictation and Whisper use deferred decoding. Activation time depends on the native limit. Earlier compute can increase heat during capture even if
