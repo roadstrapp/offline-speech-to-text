@@ -54,15 +54,21 @@ pub(crate) struct TranscriptionJob {
     /// delivered piecemeal or joined at a silence-only boundary.
     prepared_windows: usize,
     prepared_text: String,
+    /// Byte offsets in the text assembled by `decode_window` where two
+    /// windows were concatenated without an overlap alignment.
+    window_joins: Vec<usize>,
+    /// The same offsets in `text`.
+    joins: Vec<usize>,
 }
 
 impl TranscriptionJob {
     pub(crate) fn finish(self) -> String {
-        crate::transcript_cleanup::finish(
+        crate::transcript_cleanup::finish_with_joins(
             self.text,
             self.output_language,
             self.preferred_terms.as_deref(),
             self.corrections.as_deref(),
+            &self.joins,
         )
     }
 }
@@ -321,6 +327,8 @@ impl Engine {
             output_language: crate::transcript_cleanup::OutputLanguage::English,
             prepared_windows: 0,
             prepared_text: String::new(),
+            window_joins: Vec::new(),
+            joins: Vec::new(),
         }
     }
 
@@ -339,6 +347,7 @@ impl Engine {
                 // never turn a recoverable recording into an error or loss.
                 job.prepared_windows = 0;
                 job.prepared_text.clear();
+                job.window_joins.clear();
                 job.output_language = crate::transcript_cleanup::OutputLanguage::English;
             }
             let prepared_windows = std::mem::take(&mut job.prepared_windows);
@@ -354,7 +363,8 @@ impl Engine {
                     &mut assembled,
                 )?;
             }
-            append_piece(&mut job.text, &assembled);
+            let window_joins = std::mem::take(&mut job.window_joins);
+            append_joined_piece(&mut job.text, &mut job.joins, &assembled, &window_joins);
         } else {
             let mut audio;
             let samples = if pad_final {
@@ -382,7 +392,10 @@ impl Engine {
             .unwrap_or(crate::long_audio::DEFAULT_MAX_WINDOW_SAMPLES)
     }
 
+    /// `text` is the string assembled by `decode_window` for this job.
     pub(crate) fn finish_file_job(mut job: TranscriptionJob, text: String) -> String {
+        job.joins = std::mem::take(&mut job.window_joins);
+        job.joins.retain(|&join| join < text.len());
         job.text = text;
         job.finish()
     }
@@ -450,9 +463,30 @@ impl Engine {
         if !transcript.text.trim().is_empty() {
             job.output_language = job.output_language.combine(self.output_language(transcript.language.as_deref()));
         }
-        *assembled = crate::long_audio::stitch(assembled, transcript.text.trim());
+        let (stitched, outcome) = crate::long_audio::stitch_with_join(assembled, transcript.text.trim());
+        match outcome {
+            crate::long_audio::StitchOutcome::Aligned { truncated_at } => {
+                job.window_joins.retain(|&join| join < truncated_at)
+            }
+            crate::long_audio::StitchOutcome::Fallback { join } => job.window_joins.push(join),
+        }
+        *assembled = stitched;
         Ok(())
     }
+}
+
+/// Appends like `append_piece` and moves the piece's join offsets into `target_joins`.
+fn append_joined_piece(target: &mut String, target_joins: &mut Vec<usize>, piece: &str, joins: &[usize]) {
+    let leading = piece.len() - piece.trim_start().len();
+    let trimmed = piece.trim();
+    append_piece(target, trimmed);
+    let start = target.len() - trimmed.len();
+    target_joins.extend(
+        joins
+            .iter()
+            .filter(|&&join| join > leading && join < leading + trimmed.len())
+            .map(|&join| start + join - leading),
+    );
 }
 
 fn append_piece(target: &mut String, piece: &str) {
@@ -951,6 +985,8 @@ mod tests {
                 else { crate::transcript_cleanup::OutputLanguage::Other },
             prepared_windows: 0,
             prepared_text: String::new(),
+            window_joins: Vec::new(),
+            joins: Vec::new(),
         };
         assert_eq!(job(true).finish(), "I think so");
         assert_eq!(job(false).finish(), "I uh think so");

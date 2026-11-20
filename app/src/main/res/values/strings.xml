@@ -263,9 +263,9 @@
     <string name="custom_terms_close">Close personal dictionary</string>
     <string name="custom_terms_hints_title">Preferred words</string>
     <string name="custom_terms_hint">One preferred word or phrase per line</string>
-    <string name="custom_terms_support_whisper">Whisper uses the first words or phrases as recognition hints, then restores exact and close spellings after transcription.</string>
-    <string name="custom_terms_support_unavailable">Parakeet applies dictionary spellings after recognition. Names with letters and digits support exact matching; symbol names and other recognition errors need an exact correction. English filler cleanup needs English selected in model language settings.</string>
-    <string name="custom_terms_support_unknown">All models restore exact and close spellings afterward; Whisper also uses the first terms as recognition hints.</string>
+    <string name="custom_terms_support_whisper">Whisper uses the first words or phrases as recognition hints, then restores exact and close spellings after transcription. English words that sound like a listed word are also fixed.</string>
+    <string name="custom_terms_support_unavailable">Parakeet applies dictionary spellings after recognition. It fixes exact and close spellings and, in English, words or phrases of up to three words that sound like a listed word. This can join ordinary words into a listed name, so “tail scale” becomes Tailscale. Names with letters and digits support exact matching; symbol names and other recognition errors need an exact correction. Sound-alike fixes and English filler cleanup work best with English selected in model language settings.</string>
+    <string name="custom_terms_support_unknown">All models restore exact and close spellings afterward and fix English words that sound like a listed word; Whisper also uses the first terms as recognition hints. A word you list exactly is never changed into another listed word.</string>
     <string name="custom_dictionary_summary">%1$d preferred terms · %2$d exact corrections (%3$s)</string>
     <string name="personal_corrections_on">on</string>
     <string name="personal_corrections_off">off</string>

@@ -135,6 +135,10 @@ rustc --edition 2021 --test "$ROOT/tests/PersonalCorrectionsTest.rs" \
   -o "$OUT/personal_corrections_test"
 "$OUT/personal_corrections_test"
 
+rustc --edition 2021 --test "$ROOT/tests/SoundAlikeTest.rs" \
+  -o "$OUT/sound_alike_test"
+"$OUT/sound_alike_test"
+
 javac -d "$OUT" \
   "$ROOT/docs/examples/CallerAudioSessionCore.java" \
   "$ROOT/tests/CallerAudioLifecycleTest.java"

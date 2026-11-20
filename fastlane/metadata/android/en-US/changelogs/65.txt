@@ -1,0 +1,1 @@
+Preferred words now also fix words that sound like a listed word but are spelled differently: with Nostr on your list, "no stir" becomes Nostr, and "tail scale" becomes Tailscale. Ordinary dictionary words and common names are left alone. This works with English selected; in automatic language mode, only text that looks English is changed.

@@ -16,22 +16,102 @@ pub(crate) fn finish(
     preferred_terms: Option<&[String]>,
     corrections: Option<&[crate::personal_corrections::Rule]>,
 ) -> String {
+    finish_with_joins(raw_text, language, preferred_terms, corrections, &[])
+}
+
+/// `joins` are byte offsets in `raw_text` where two recognition results were
+/// concatenated without alignment; no sound-alike window spans one.
+pub(crate) fn finish_with_joins(
+    raw_text: String,
+    language: OutputLanguage,
+    preferred_terms: Option<&[String]>,
+    corrections: Option<&[crate::personal_corrections::Rule]>,
+    joins: &[usize],
+) -> String {
+    finish_body(raw_text, language, preferred_terms, corrections, joins, |_| {})
+}
+
+/// The final text plus the text after corrections and after preferred words.
+#[cfg(test)]
+pub(crate) fn finish_snapshots(
+    raw_text: String,
+    language: OutputLanguage,
+    preferred_terms: Option<&[String]>,
+    corrections: Option<&[crate::personal_corrections::Rule]>,
+    joins: &[usize],
+) -> (String, Vec<String>) {
+    let mut snapshots = Vec::new();
+    let text = finish_body(raw_text, language, preferred_terms, corrections, joins, |text| {
+        snapshots.push(text.to_string())
+    });
+    (text, snapshots)
+}
+
+fn finish_body(
+    raw_text: String,
+    language: OutputLanguage,
+    preferred_terms: Option<&[String]>,
+    corrections: Option<&[crate::personal_corrections::Rule]>,
+    joins: &[usize],
+    mut snapshot: impl FnMut(&str),
+) -> String {
+    let mut joins = joins.to_vec();
+    joins.sort_unstable();
+    joins.dedup();
     // Match explicit rules against the raw assembled recognition result.
-    let (text, protected) = if let Some(rules) = corrections {
-        crate::personal_corrections::apply_with_ranges(&raw_text, rules)
-    } else {
-        (raw_text, Vec::new())
+    // Joins exist only where long audio fell back to concatenation.
+    let (text, protected) = match corrections {
+        Some(rules) if joins.is_empty() => {
+            crate::personal_corrections::apply_with_ranges(&raw_text, rules)
+        }
+        Some(rules) => crate::personal_corrections::apply_with_joins(&raw_text, rules, &mut joins),
+        None => (raw_text, Vec::new()),
     };
+    snapshot(&text);
+    // `looks_english` of the current text, once known.
+    let mut english_looking = None;
     let (text, protected) = if let Some(terms) = preferred_terms {
-        crate::preferred_terms::apply_with_ranges(&text, terms, &protected)
+        let gate = sound_alike_gate(language, &text, &mut english_looking);
+        let (preferred, protected) = if gate.is_open() {
+            crate::preferred_terms::apply_with_sound_alike(&text, terms, &protected, gate, &joins)
+        } else {
+            crate::preferred_terms::apply_with_ranges(&text, terms, &protected)
+        };
+        if preferred != text {
+            english_looking = None;
+        }
+        (preferred, protected)
     } else {
         (text, protected)
     };
+    snapshot(&text);
     // Guess only when language evidence is absent; a known non-English language always wins.
     if language == OutputLanguage::English
-        || (language == OutputLanguage::Unknown && crate::english_fillers::looks_english(&text)) {
+        || (language == OutputLanguage::Unknown
+            && *english_looking.get_or_insert_with(|| crate::english_fillers::looks_english(&text))) {
         crate::english_fillers::remove_with_protected_owned(text, &protected)
     } else {
         text
+    }
+}
+
+/// Sound-alike keys are English. Without language evidence a single word is
+/// matched only in English-looking text, and words are joined only when the
+/// whole text is ASCII and each joined word is an English word.
+/// `english_looking` caches `looks_english(text)`.
+fn sound_alike_gate(
+    language: OutputLanguage,
+    text: &str,
+    english_looking: &mut Option<bool>,
+) -> crate::preferred_terms::sound_alike::Gate {
+    use crate::preferred_terms::sound_alike::Gate;
+    match language {
+        OutputLanguage::English => Gate { single: true, multi: true, multi_common_only: false },
+        OutputLanguage::Other => Gate { single: false, multi: false, multi_common_only: false },
+        OutputLanguage::Unknown => Gate {
+            single: *english_looking.get_or_insert_with(|| crate::english_fillers::looks_english(text)),
+            multi: text.is_ascii(),
+            multi_common_only: true,
+        },
     }
 }
