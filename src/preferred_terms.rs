@@ -128,7 +128,9 @@ fn apply_inner<'a>(
         }
         let guessed = index < policy.guessed_terms;
         let keeps_case = policy.lowercase_keeps_case && !term.chars().any(char::is_uppercase);
-        if keeps_case && (!guessed || !term.chars().all(char::is_alphabetic)) {
+        // A lowercase word past the guessed tier changes nothing itself, but it stays
+        // listed so that its exact form still blocks a close-spelling guess.
+        if keeps_case && !term.chars().all(char::is_alphabetic) {
             // Its exact form is already written as the caller wants it.
             continue;
         }
@@ -229,7 +231,7 @@ fn apply_inner<'a>(
                 break;
             }
             if !word.guessed
-                || (word.keeps_case && text[start..].chars().next().is_some_and(char::is_uppercase))
+                || (word.keeps_case && text[start..offset].chars().any(char::is_uppercase))
             {
                 continue;
             }

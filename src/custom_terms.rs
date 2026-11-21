@@ -123,13 +123,16 @@ pub(crate) fn parse_request_terms(raw: &str) -> Vec<String> {
         {
             continue;
         }
+        let key = term.to_lowercase();
+        if seen.contains(&key) {
+            continue;
+        }
         if bytes + term.len() > MAX_REQUEST_BYTES {
             break;
         }
-        if seen.insert(term.to_lowercase()) {
-            bytes += term.len();
-            terms.push(term);
-        }
+        seen.insert(key);
+        bytes += term.len();
+        terms.push(term);
     }
     terms
 }

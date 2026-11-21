@@ -48,9 +48,11 @@ final class BiasingWords {
             if (word.length() > 4 * CustomTerms.MAX_TERM_CODE_POINTS) continue;
             word = DictionaryText.normalize(word);
             if (!usable(word)) continue;
+            String key = word.toLowerCase(Locale.ROOT);
+            if (seen.contains(key)) continue;
             int size = word.getBytes(StandardCharsets.UTF_8).length;
             if (bytes + size > MAX_TOTAL_BYTES) break;
-            if (!seen.add(word.toLowerCase(Locale.ROOT))) continue;
+            seen.add(key);
             bytes += size;
             if (joined.length() > 0) joined.append('\n');
             joined.append(word);

@@ -373,3 +373,18 @@ fn request_words_never_change_what_the_users_list_or_a_correction_matched() {
     // Without the user's list the request's spelling applies.
     assert_eq!(request("i like nostr", &["NOSTR"]), "i like NOSTR");
 }
+
+#[test]
+fn a_lowercase_request_word_after_the_first_128_still_blocks_a_close_spelling_guess() {
+    let mut terms = vec!["Nostr".to_string()];
+    terms.extend((1..preferred_terms::REQUEST_GUESSED_TERMS).map(|index| format!("Filler{index}x")));
+    terms.push("nostar".to_string());
+    let terms: Vec<&str> = terms.iter().map(String::as_str).collect();
+    assert_eq!(request("nostar and noster", &terms), "nostar and Nostr");
+}
+
+#[test]
+fn a_lowercase_request_word_never_lowers_a_capital_inside_a_word() {
+    assert_eq!(request("my macBoook broke", &["macbook"]), "my macBoook broke");
+    assert_eq!(request("my macboook broke", &["macbook"]), "my macbook broke");
+}

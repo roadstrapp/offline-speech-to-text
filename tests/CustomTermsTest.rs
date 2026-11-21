@@ -142,3 +142,14 @@ fn request_words_fill_only_the_prompt_space_the_users_words_leave() {
     assert!(prompt.starts_with("name0, name1, name2"));
     assert!(!prompt.contains("name999"));
 }
+
+#[test]
+fn a_repeated_request_word_at_the_byte_bound_does_not_end_the_list() {
+    let wide: Vec<String> = (0..204).map(|index| format!("{index:04}{}", "x".repeat(76))).collect();
+    let mut lines = wide.clone();
+    lines.push(wide[0].clone());
+    lines.push("Droneboard".to_string());
+    let words = custom_terms::parse_request_terms(&lines.join("\n"));
+    assert_eq!(words.len(), 205);
+    assert_eq!(words.last().unwrap(), "Droneboard");
+}

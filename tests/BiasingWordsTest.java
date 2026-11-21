@@ -12,6 +12,7 @@ public final class BiasingWordsTest {
         entriesAreCleanedOneByOneInTheCallersOrder();
         countAndTotalLengthAreBounded();
         hostileListsAreBoundedWork();
+        aRepeatAtTheByteBoundDoesNotEndTheList();
     }
 
     private static void nothingUsableIsNoList() {
@@ -71,6 +72,16 @@ public final class BiasingWordsTest {
         StringBuilder builder = new StringBuilder();
         for (int index = 0; index < count; index++) builder.append(text);
         return builder.toString();
+    }
+
+    private static void aRepeatAtTheByteBoundDoesNotEndTheList() {
+        List<Object> raw = new ArrayList<>();
+        for (int index = 0; index < 204; index++) raw.add(String.format("%04d", index) + repeat("x", 76));
+        raw.add(raw.get(0));
+        raw.add("Droneboard");
+        String joined = BiasingWords.sanitize(raw);
+        check(joined.endsWith("\nDroneboard"), "a repeat at the byte bound is skipped, not the end");
+        check(joined.split("\n").length == 205, "every distinct word that fits is kept");
     }
 
     private static void check(boolean condition, String message) {
