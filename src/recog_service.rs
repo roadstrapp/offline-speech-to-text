@@ -7,23 +7,33 @@
 //! own: the calling keyboard expects *us* to decide when the user has finished speaking.
 //! So this module adds trailing-silence endpointing on top of the same `engine` model,
 //! and finalises automatically (it also honours an explicit `stopListening`/`cancel`).
+//!
+//! Caller-supplied audio (`EXTRA_AUDIO_SOURCE`) is a separate job slot: it opens no
+//! microphone, so it never claims the process-wide capture owner, and it is decoded
+//! window by window as background work behind `INFERENCE_GATE` (see
+//! `caller_audio_job.rs`). The voice keyboard, the popup and a microphone request
+//! from another app therefore keep working while a long caller transcription runs;
+//! their final decodes take the engine between the caller's windows. Only the last
+//! decode after the caller closed its input is admitted as foreground work (see
+//! `decode_caller_window`). A second
+//! caller-audio request while one runs is answered with `ERROR_RECOGNIZER_BUSY`.
 
 use std::fs::File;
 use std::io::{self, ErrorKind};
-use std::os::fd::FromRawFd;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::os::fd::{FromRawFd, AsRawFd};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::HostTrait;
 use jni::objects::{GlobalRef, JClass, JObject, JValue};
-use jni::sys::jint;
+use jni::sys::{jboolean, jint, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 use once_cell::sync::Lazy;
 
 use crate::background_chunking::CaptureBuffer;
 use crate::background_transcription::{BackgroundTranscriber, Completion};
-use crate::caller_audio_input::{self, InputEnd, Readiness, SourceState};
+use crate::caller_audio_input::{self, EndReason, InputEnd, Readiness, SourceState};
 use crate::engine;
 use crate::voice_session::{
     claim_session_owner, release_session_owner, SendStream, OWNER_RECOGNITION_SERVICE,
@@ -35,10 +45,6 @@ use crate::voice_session::{
 // transcribes whatever was captured, so a mis-tuned threshold only affects the
 // auto-stop *timing*, never whether text is returned.
 //
-/// Absolute smoothed level (0..1) that must be exceeded to count as speech.
-const MIN_SPEECH_LEVEL: f32 = 0.12;
-/// How far above the running noise floor a level must be to count as speech.
-const SPEECH_MARGIN: f32 = 0.08;
 /// Trailing silence after speech that triggers auto-finalisation.
 const SILENCE_MS: u64 = 1500;
 /// If no speech is ever detected, finalise after this long anyway.
@@ -62,6 +68,7 @@ const ENCODING_PCM_FLOAT: i32 = 4;
 const ERROR_AUDIO: i32 = 3;
 const ERROR_SERVER: i32 = 4;
 const ERROR_NO_MATCH: i32 = 7;
+const ERROR_RECOGNIZER_BUSY: i32 = 8;
 
 /// State shared between the audio callback, the endpoint-monitor thread and the
 /// finaliser. Deliberately does NOT hold the cpal stream, to avoid an Arc cycle
@@ -76,12 +83,8 @@ struct Endpoint {
     finalized: AtomicBool,
     cancelled: AtomicBool,
     inference_running: AtomicBool,
-    /// Caller stop drains already-readable bytes; it must not finalize on the Java thread.
-    stop_after_ms: AtomicU64,
     started_at: Instant,
-    /// A caller streaming its own audio owns the endpoint: the session runs until the audio is
-    /// closed or `stopListening` arrives, so trailing-silence auto-stop must not cut it short.
-    caller_endpointed: bool,
+    capture_ready_ms: AtomicU64,
     jvm: Arc<jni::JavaVM>,
     target: GlobalRef,
 }
@@ -89,14 +92,14 @@ struct Endpoint {
 /// Analysis state has exactly one producer per session: either the microphone
 /// callback or the caller-audio reader. It therefore stays local and lock-free.
 struct AudioAnalyzer {
-    noise_floor: f32,
+    endpointer: crate::endpoint::Endpointer,
     last_level_sent: Instant,
 }
 
 impl AudioAnalyzer {
     fn new() -> Self {
         Self {
-            noise_floor: 0.0,
+            endpointer: crate::endpoint::Endpointer::new(),
             last_level_sent: Instant::now(),
         }
     }
@@ -108,6 +111,35 @@ struct Session {
 }
 
 static SESSION: Lazy<Mutex<Option<Session>>> = Lazy::new(|| Mutex::new(None));
+
+/// One caller-supplied-audio transcription. Independent of `SESSION` and of the
+/// capture owner: it holds no microphone.
+struct CallerJob {
+    queue: crate::caller_audio_job::Queue,
+    cancelled: AtomicBool,
+    /// No more input will be read (EOF, stop drained, safety cap, failure).
+    input_closed: AtomicBool,
+    /// The one terminal callback (results or error) has been claimed.
+    terminal: AtomicBool,
+    speech_started: AtomicBool,
+    /// Caller stop drains already-readable bytes; it must not finalize on the Java thread.
+    /// Also the one claim Stop, the no-data limit and the cap race for (see `caller_audio_input`).
+    stop_after_ms: AtomicU64,
+    /// `started_at`-relative time of the last bytes read; drives the no-data timeout.
+    last_data_ms: AtomicU64,
+    /// `started_at`-relative time of the first bytes read; `u64::MAX` until then.
+    first_data_ms: AtomicU64,
+    /// `started_at`-relative time the input ended; `u64::MAX` until then.
+    input_end_ms: AtomicU64,
+    /// The one published `EndReason` (0 until the input ends); set by whoever
+    /// finalizes the input, and the only source of the tail's priority.
+    end_reason: AtomicU8,
+    started_at: Instant,
+    jvm: Arc<jni::JavaVM>,
+    target: GlobalRef,
+}
+
+static CALLER_JOB: Lazy<Mutex<Option<Arc<CallerJob>>>> = Lazy::new(|| Mutex::new(None));
 
 // --- JNI callbacks into VoiceRecognitionService -------------------------------
 
@@ -138,6 +170,25 @@ fn call_outcome(env: &mut JNIEnv, obj: &JObject, reason: i32, audio_ms: u64) {
 fn call_results(env: &mut JNIEnv, obj: &JObject, text: &str) {
     if let Ok(jtxt) = env.new_string(text) {
         let _ = env.call_method(obj, "onResults", "(Ljava/lang/String;)V", &[(&jtxt).into()]);
+    }
+}
+
+/// Where a caller job's time went; `-1` for a stage that never happened.
+fn call_caller_timing(env: &mut JNIEnv, obj: &JObject, job: &CallerJob, timing: &CallerTiming, result_ms: u64) {
+    let values = caller_timing_values(
+        job.first_data_ms.load(Ordering::SeqCst),
+        job.input_end_ms.load(Ordering::SeqCst),
+        timing,
+        result_ms,
+    );
+    let result = env.call_method(
+        obj,
+        "onCallerAudioTiming",
+        "(JJJJJJ)V",
+        &values.map(JValue::Long),
+    );
+    if result.is_err() || env.exception_check().unwrap_or(true) {
+        let _ = env.exception_clear();
     }
 }
 
@@ -189,7 +240,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
 /// silence-based endpoint monitor.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService_startListening(
-    env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
     service: JObject,
 ) {
@@ -202,60 +253,82 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
         Err(_) => return,
     };
 
-    let (shared, stream_holder) = match begin_session(&jvm, target, false) {
+    let (shared, stream_holder) = match begin_session(&jvm, target) {
         Some(session) => session,
         None => return,
     };
 
+    // Claim synchronously, but never block the Android main looper on routing.
+    let route_class = crate::bluetooth_mic::route_class(&mut env);
+    if shared.cancelled.load(Ordering::SeqCst) || shared.finalized.load(Ordering::SeqCst) { return; }
     // Open the microphone (16 kHz mono, matching the model + voice_session).
     let host = cpal::default_host();
-    let device = match host.default_input_device() {
+    let _device = match host.default_input_device() {
         Some(d) => d,
         None => {
             let mut env2 = jvm.attach_current_thread().unwrap();
-            call_error(&mut env2, shared.target.as_obj(), ERROR_AUDIO);
-            clear_session(&shared);
+            fail_microphone(&mut env2, &shared);
             return;
         }
     };
-    let config = cpal::StreamConfig {
-        channels: 1,
-        sample_rate: cpal::SampleRate(16000),
-        buffer_size: cpal::BufferSize::Default,
-    };
-
+    // Optional Bluetooth microphone, held by the capture (see managed_capture.rs).
     let cb_shared = shared.clone();
     let mut analyzer = AudioAnalyzer::new();
-    let stream = device.build_input_stream(
-        &config,
-        move |data: &[f32], _: &_| audio_callback(&cb_shared, data, &mut analyzer),
-        |e| log::error!("RecognitionService stream error: {}", e),
-        None,
+    let stream = crate::managed_capture::ManagedCapture::open_with_class(
+        &mut env,
+        &jvm,
+        shared.target.as_obj(),
+        move |data: &[f32]| audio_callback(&cb_shared, data, &mut analyzer),
+        {
+            let failure = shared.clone();
+            move |e: String| {
+                log::error!("RecognitionService stream error: {}", e);
+                if !failure.cancelled.load(Ordering::SeqCst) && !failure.finalized.swap(true, Ordering::SeqCst) {
+                    if let Ok(mut env) = failure.jvm.attach_current_thread() {
+                        call_error(&mut env, failure.target.as_obj(), ERROR_AUDIO);
+                    }
+                    clear_session(&failure);
+                }
+            }
+        },
+        route_class,
+        Some(Box::new({
+            let ready = shared.clone();
+            move || {
+                if !ready.cancelled.load(Ordering::SeqCst) && !ready.finalized.load(Ordering::SeqCst) {
+                    ready.capture_ready_ms.store(ready.started_at.elapsed().as_millis() as u64, Ordering::SeqCst);
+                    if let Ok(mut env) = ready.jvm.attach_current_thread() {
+                        call_void(&mut env, ready.target.as_obj(), "onReadyForSpeech");
+                    }
+                }
+            }
+        })),
     );
 
     match stream {
         Ok(s) => {
+            let s = SendStream(s);
             if shared.cancelled.load(Ordering::SeqCst) {
                 return;
             }
-            if let Err(e) = s.play() {
+            if let Err(e) = s.0.play() {
                 log::error!("Failed to start microphone: {}", e);
                 let mut env2 = jvm.attach_current_thread().unwrap();
-                call_error(&mut env2, shared.target.as_obj(), ERROR_AUDIO);
-                clear_session(&shared);
+                fail_microphone(&mut env2, &shared);
                 return;
             }
             if shared.cancelled.load(Ordering::SeqCst) {
                 drop(s);
                 return;
             }
-            *stream_holder.lock().unwrap() = Some(SendStream(s));
+            let mut holder = stream_holder.lock().unwrap();
+            if shared.cancelled.load(Ordering::SeqCst) || shared.finalized.load(Ordering::SeqCst) { return; }
+            *holder = Some(s);
         }
         Err(e) => {
             log::error!("Failed to open microphone: {}", e);
             let mut env2 = jvm.attach_current_thread().unwrap();
-            call_error(&mut env2, shared.target.as_obj(), ERROR_AUDIO);
-            clear_session(&shared);
+            fail_microphone(&mut env2, &shared);
             return;
         }
     }
@@ -279,14 +352,25 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
     sample_rate: jint,
     channel_count: jint,
     encoding: jint,
-) {
+) -> jboolean {
+    // JNI_FALSE: nothing was or will be delivered, so Java must end the request itself.
+    if fd < 0 {
+        return JNI_FALSE;
+    }
+    let source = File::from_raw_fd(fd);
     let jvm = match env.get_java_vm() {
         Ok(vm) => Arc::new(vm),
-        Err(_) => return,
+        Err(_) => {
+            log::error!("caller audio: no Java VM handle");
+            return JNI_FALSE;
+        }
     };
     let target = match env.new_global_ref(&service) {
         Ok(r) => r,
-        Err(_) => return,
+        Err(_) => {
+            log::error!("caller audio: no callback reference");
+            return JNI_FALSE;
+        }
     };
 
     let format = match SourceFormat::new(sample_rate, channel_count, encoding) {
@@ -298,29 +382,103 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
                 channel_count,
                 encoding
             );
-            drop(File::from_raw_fd(fd));
-            if let Ok(mut env2) = jvm.attach_current_thread() {
-                call_error(&mut env2, target.as_obj(), ERROR_AUDIO);
-            }
-            return;
+            return deliver_start_error(&jvm, &target, ERROR_AUDIO);
         }
     };
 
-    let (shared, stream_holder) = match begin_session(&jvm, target, true) {
-        Some(session) => session,
-        None => {
-            drop(File::from_raw_fd(fd));
-            return;
+    let job = {
+        let mut slot = CALLER_JOB.lock().unwrap();
+        if slot.is_some() {
+            drop(slot);
+            log::info!("caller audio: native job still running, refusing");
+            return deliver_start_error(&jvm, &target, ERROR_RECOGNIZER_BUSY);
         }
+        let job = Arc::new(CallerJob {
+            queue: crate::caller_audio_job::Queue::default(),
+            cancelled: AtomicBool::new(false),
+            input_closed: AtomicBool::new(false),
+            terminal: AtomicBool::new(false),
+            speech_started: AtomicBool::new(false),
+            stop_after_ms: AtomicU64::new(u64::MAX),
+            last_data_ms: AtomicU64::new(0),
+            first_data_ms: AtomicU64::new(u64::MAX),
+            input_end_ms: AtomicU64::new(u64::MAX),
+            end_reason: AtomicU8::new(0),
+            started_at: Instant::now(),
+            jvm: jvm.clone(),
+            target,
+        });
+        *slot = Some(job.clone());
+        job
     };
+    if let Ok(mut env2) = jvm.attach_current_thread() {
+        call_void(&mut env2, job.target.as_obj(), "onReadyForSpeech");
+    }
 
-    let reader_shared = shared.clone();
-    let reader_stream = stream_holder.clone();
-    std::thread::spawn(move || read_caller_audio(reader_shared, reader_stream, fd, format));
+    let reader = job.clone();
+    std::thread::spawn(move || read_caller_audio(reader, source, format));
+    let decoder = job.clone();
+    std::thread::spawn(move || decode_caller_audio(decoder));
+    std::thread::spawn(move || caller_cap_monitor(job));
+    JNI_TRUE
+}
 
-    let mon_shared = shared.clone();
-    let mon_stream = stream_holder.clone();
-    std::thread::spawn(move || endpoint_monitor(mon_shared, mon_stream));
+/// An error for a request refused before its job existed; JNI_FALSE if it could not be sent.
+fn deliver_start_error(jvm: &jni::JavaVM, target: &GlobalRef, code: i32) -> jboolean {
+    match jvm.attach_current_thread() {
+        Ok(mut env) => {
+            call_error(&mut env, target.as_obj(), code);
+            JNI_TRUE
+        }
+        Err(_) => JNI_FALSE,
+    }
+}
+
+/// Caller job state for the Java slot: 0 none, 1 receiving audio, 2 input closed (decoding).
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService_callerJobState(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jint {
+    match CALLER_JOB.lock().unwrap().as_ref() {
+        None => 0,
+        Some(job) if job.input_closed.load(Ordering::SeqCst) => 2,
+        Some(_) => 1,
+    }
+}
+
+/// `onStopListening` for caller audio: drain what is readable (bounded to 500 ms
+/// even if the caller keeps writing), then transcribe. Only the reader ends input.
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService_stopCallerAudio(
+    _env: JNIEnv,
+    _class: JClass,
+) {
+    let job = CALLER_JOB.lock().unwrap().clone();
+    if let Some(job) = job {
+        let deadline = (job.started_at.elapsed().as_millis() as u64).saturating_add(500);
+        // A no-op if the input already ended or the no-data limit claimed it first.
+        caller_audio_input::request_stop(&job.stop_after_ms, deadline);
+    }
+}
+
+/// `onCancel` for caller audio: discard it. A window already decoding finishes
+/// behind the engine mutex; nothing is delivered and the slot is free at once.
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService_cancelCallerAudio(
+    _env: JNIEnv,
+    _class: JClass,
+) {
+    cancel_caller_job();
+}
+
+fn cancel_caller_job() {
+    let job = CALLER_JOB.lock().unwrap().take();
+    if let Some(job) = job {
+        job.cancelled.store(true, Ordering::SeqCst);
+        job.input_closed.store(true, Ordering::SeqCst);
+        job.queue.stop();
+    }
 }
 
 /// Called from `onStopListening`: the keyboard asked us to finish now. Finalise
@@ -336,18 +494,6 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
         .as_ref()
         .map(|s| (s.shared.clone(), s.stream.clone()));
     if let Some((shared, stream)) = session {
-        if shared.caller_endpointed {
-            // Only the reader may finalize supplied PCM. Drain buffered bytes,
-            // bounded to 500 ms total even if the caller continues writing.
-            let deadline = (shared.started_at.elapsed().as_millis() as u64).saturating_add(500);
-            let _ = shared.stop_after_ms.compare_exchange(
-                u64::MAX,
-                deadline,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            );
-            return;
-        }
         std::thread::spawn(move || finalize(shared, stream));
     }
 }
@@ -405,7 +551,16 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
     env: JNIEnv,
     class: JClass,
 ) {
+    cancel_caller_job();
     Java_dev_notune_transcribe_VoiceRecognitionService_cancelNative(env, class);
+}
+
+fn fail_microphone(env: &mut JNIEnv, shared: &Arc<Endpoint>) {
+    if !shared.cancelled.load(Ordering::SeqCst)
+        && !shared.finalized.swap(true, Ordering::SeqCst) {
+        call_error(env, shared.target.as_obj(), ERROR_AUDIO);
+    }
+    clear_session(shared);
 }
 
 // --- Session lifecycle --------------------------------------------------------
@@ -415,19 +570,20 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
 fn begin_session(
     jvm: &Arc<jni::JavaVM>,
     target: GlobalRef,
-    caller_endpointed: bool,
 ) -> Option<(Arc<Endpoint>, Arc<Mutex<Option<SendStream>>>)> {
     // A second wrapper start must never replace the process-global owner.
+    // Busy, not an audio fault: the keyboard, popup or long recording holds
+    // the microphone and model owner, and the caller may simply retry.
     if SESSION.lock().unwrap().is_some() {
         if let Ok(mut env) = jvm.attach_current_thread() {
-            call_error(&mut env, target.as_obj(), ERROR_AUDIO);
+            call_error(&mut env, target.as_obj(), ERROR_RECOGNIZER_BUSY);
         }
         return None;
     }
 
     if !claim_session_owner(OWNER_RECOGNITION_SERVICE) {
         if let Ok(mut env) = jvm.attach_current_thread() {
-            call_error(&mut env, target.as_obj(), ERROR_AUDIO);
+            call_error(&mut env, target.as_obj(), ERROR_RECOGNIZER_BUSY);
         }
         return None;
     }
@@ -442,14 +598,14 @@ fn begin_session(
         finalized: AtomicBool::new(false),
         cancelled: AtomicBool::new(false),
         inference_running: AtomicBool::new(false),
-        stop_after_ms: AtomicU64::new(u64::MAX),
         started_at: now,
-        caller_endpointed,
+        capture_ready_ms: AtomicU64::new(u64::MAX),
         jvm: jvm.clone(),
         target,
     });
 
-    let mut env = match jvm.attach_current_thread() {
+    // Keep this thread attached for the session setup below.
+    let _attached = match jvm.attach_current_thread() {
         Ok(env) => env,
         Err(_) => {
             release_session_owner(OWNER_RECOGNITION_SERVICE);
@@ -462,8 +618,8 @@ fn begin_session(
         stream: stream.clone(),
     });
 
-    // Tell the caller we're ready to receive speech.
-    call_void(&mut env, shared.target.as_obj(), "onReadyForSpeech");
+    // Actual microphone readiness is delivered only after capture setup, before
+    // its data gate opens. Caller-supplied PCM has its own immediate readiness.
 
     Some((shared, stream))
 }
@@ -502,18 +658,13 @@ impl SourceFormat {
     }
 }
 
-/// Feeds the endpoint from the caller's descriptor until the audio is closed, the session is
-/// cancelled, or reading fails. Closing the descriptor ends the utterance, the same end of audio
-/// the microphone path gets from its own recorder stopping.
-fn read_caller_audio(
-    shared: Arc<Endpoint>,
-    stream: Arc<Mutex<Option<SendStream>>>,
-    fd: i32,
-    format: SourceFormat,
-) {
+/// Feeds the caller job from its descriptor until the audio is closed, the job is
+/// cancelled, or reading fails. Closing the descriptor ends the utterance, the same
+/// end of audio the microphone path gets from its own recorder stopping.
+fn read_caller_audio(job: Arc<CallerJob>, source: File, format: SourceFormat) {
     // SAFETY: the descriptor was detached from the caller's ParcelFileDescriptor, so this File is
     // its sole owner and closes it on drop.
-    let source = unsafe { File::from_raw_fd(fd) };
+    let fd = source.as_raw_fd();
     let mut resampler = Resampler::new(format.sample_rate, TARGET_SAMPLE_RATE);
     let mut carry: Vec<u8> = Vec::new();
     let mut mono: Vec<f32> = Vec::new();
@@ -522,65 +673,365 @@ fn read_caller_audio(
 
     let end = caller_audio_input::drain(
         source,
-        || wait_readable(fd, &shared),
+        || wait_readable(fd, &job),
         |bytes| {
+            let now = elapsed_ms(&job);
+            let _ = job
+                .first_data_ms
+                .compare_exchange(u64::MAX, now, Ordering::SeqCst, Ordering::SeqCst);
+            job.last_data_ms.store(now, Ordering::SeqCst);
             carry.extend_from_slice(bytes);
             mono.clear();
             drain_mono_frames(&mut carry, &format, &mut mono);
             frames.clear();
             resampler.push(&mono, &mut frames);
             if !frames.is_empty() {
-                audio_callback(&shared, &frames, &mut analyzer);
+                caller_audio_callback(&job, &frames, &mut analyzer);
             }
         },
     );
     match end {
+        // Cancelled, or the safety cap claimed and ended the input.
         Ok(InputEnd::Cancelled) => {}
-        Ok(InputEnd::Finished) if carry.is_empty() => finalize(shared, stream),
-        _ => fail_caller_audio(shared, stream),
+        Ok(InputEnd::Closed) if carry.is_empty() => end_caller_input(&job, EndReason::Closed),
+        Ok(InputEnd::Drained) if carry.is_empty() => end_caller_input(&job, EndReason::Stopped),
+        Ok(InputEnd::Idle) if carry.is_empty() => {
+            log::info!(
+                "caller audio: no data for {} ms, ending input",
+                caller_source_state(&job).no_data_limit_ms()
+            );
+            end_caller_input(&job, EndReason::Idle);
+        }
+        _ => fail_caller_audio(&job),
     }
 }
 
+/// No more input will be queued. Only the first reason (reader or session cap) is
+/// published and finalizes the input; the queue's tail is released after it.
+fn end_caller_input(job: &CallerJob, reason: EndReason) {
+    caller_audio_input::end_input(&job.end_reason, &job.input_closed, reason, || {
+        release_caller_tail(job)
+    });
+}
+
+/// Records when the input ended and lets the decoder take the tail.
+fn release_caller_tail(job: &CallerJob) {
+    job.input_end_ms.store(elapsed_ms(job), Ordering::SeqCst);
+    job.queue.end();
+}
+
 /// A malformed or failed source must not turn a partial recording into success.
-fn fail_caller_audio(shared: Arc<Endpoint>, stream: Arc<Mutex<Option<SendStream>>>) {
-    if shared
-        .finalized
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return;
-    }
-    *stream.lock().unwrap() = None;
-    let completion = shared.background.cancel();
-    if !shared.cancelled.load(Ordering::SeqCst) {
-        if let Ok(mut env) = shared.jvm.attach_current_thread() {
-            let audio_ms = shared
-                .audio_buffer
-                .lock()
-                .unwrap()
-                .total_samples()
-                .saturating_mul(1000)
-                / 16000;
-            call_outcome(&mut env, shared.target.as_obj(), 3, audio_ms);
-            call_error(&mut env, shared.target.as_obj(), ERROR_AUDIO);
+fn fail_caller_audio(job: &Arc<CallerJob>) {
+    job.input_closed.store(true, Ordering::SeqCst);
+    job.queue.stop();
+    if claim_terminal(job) {
+        clear_caller(job);
+        if let Ok(mut env) = job.jvm.attach_current_thread() {
+            let audio_ms = job.queue.total_samples().saturating_mul(1000) / 16000;
+            call_outcome(&mut env, job.target.as_obj(), 3, audio_ms);
+            call_error(&mut env, job.target.as_obj(), ERROR_AUDIO);
         }
     }
-    clear_session(&shared);
-    if let Some(completion) = completion {
-        let _ = completion.recv();
+    clear_caller(job);
+}
+
+/// Level and beginning-of-speech callbacks for supplied audio, then queue it.
+fn caller_audio_callback(job: &Arc<CallerJob>, data: &[f32], analyzer: &mut AudioAnalyzer) {
+    if job.input_closed.load(Ordering::SeqCst) {
+        return;
+    }
+    let mut sum = 0.0f32;
+    for &x in data {
+        sum += x * x;
+    }
+    let rms = (sum / (data.len().max(1) as f32)).sqrt();
+    let level = (rms * 6.0).clamp(0.0, 1.0);
+    analyzer.endpointer.push(data);
+    if analyzer.endpointer.is_voiced()
+        && job
+            .speech_started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    {
+        if let Ok(mut env) = job.jvm.attach_current_thread() {
+            call_void(&mut env, job.target.as_obj(), "onBeginningOfSpeech");
+        }
+    }
+    job.queue.push(data);
+    if analyzer.last_level_sent.elapsed() >= Duration::from_millis(LEVEL_UPDATE_MS) {
+        analyzer.last_level_sent = Instant::now();
+        if let Ok(mut env) = job.jvm.attach_current_thread() {
+            call_rms(&mut env, job.target.as_obj(), level * 10.0);
+        }
+    }
+}
+
+/// The hard cap bounds how long a caller may keep its input open; it ends the
+/// input (what arrived is still transcribed), as the microphone path's cap does.
+fn caller_cap_monitor(job: Arc<CallerJob>) {
+    loop {
+        std::thread::sleep(Duration::from_millis(ENDPOINT_MONITOR_MS));
+        if job.cancelled.load(Ordering::SeqCst) || job.input_closed.load(Ordering::SeqCst) {
+            return;
+        }
+        if job.started_at.elapsed() >= Duration::from_millis(MAX_SESSION_MS) {
+            // A Stop or no-data claim already made owns the end; its drain still runs.
+            caller_audio_input::end_input_on_cap(
+                &job.stop_after_ms,
+                &job.end_reason,
+                &job.input_closed,
+                || release_caller_tail(&job),
+            );
+            return;
+        }
+    }
+}
+
+/// Decodes the caller's audio window by window while it arrives, each window
+/// admitted as background work, then the tail, and delivers the one result.
+fn decode_caller_audio(job: Arc<CallerJob>) {
+    let mut timing = CallerTiming::default();
+    let result = run_caller_decode(&job, &mut timing);
+    let result_ms = elapsed_ms(&job);
+    job.input_closed.store(true, Ordering::SeqCst);
+    job.queue.stop();
+    // Whoever stopped the queue (cancel or input failure) owns the terminal callback.
+    if matches!(result, CallerDecode::Stopped) || !claim_terminal(&job) {
+        clear_caller(&job);
+        return;
+    }
+    // A result that cannot reach Java must not hold the slot: the service's liveness
+    // check sees the job gone and ends the request with an error.
+    let Some(mut env) = attach_with_retry(&job.jvm) else {
+        log::error!("caller audio: cannot attach to deliver the result");
+        clear_caller(&job);
+        return;
+    };
+    clear_caller(&job);
+    let target = job.target.as_obj();
+    call_caller_timing(&mut env, target, &job, &timing, result_ms);
+    match result {
+        CallerDecode::Stopped => {}
+        CallerDecode::TooShort(total) => {
+            call_outcome(&mut env, target, 1, total.saturating_mul(1000) / 16000);
+            call_error(&mut env, target, ERROR_NO_MATCH);
+        }
+        CallerDecode::Failed(error) => {
+            log::error!("caller audio transcription failed: {}", error);
+            call_outcome(&mut env, target, 3, job.queue.total_samples().saturating_mul(1000) / 16000);
+            call_error(&mut env, target, ERROR_SERVER);
+        }
+        CallerDecode::Text { text, audio_ms } => {
+            call_metrics(&mut env, target, audio_ms, timing.decode_ms.unwrap_or(0));
+            if text.trim().is_empty() {
+                call_outcome(&mut env, target, 2, audio_ms);
+                call_error(&mut env, target, ERROR_NO_MATCH);
+            } else {
+                call_outcome(&mut env, target, 0, audio_ms);
+                call_results(&mut env, target, &text);
+            }
+        }
+    }
+    clear_caller(&job);
+}
+
+fn attach_with_retry(jvm: &jni::JavaVM) -> Option<jni::AttachGuard<'_>> {
+    for attempt in 0..3 {
+        if let Ok(env) = jvm.attach_current_thread() {
+            return Some(env);
+        }
+        if attempt < 2 {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    None
+}
+
+enum CallerDecode {
+    /// Cancelled or failed elsewhere; that path owns the terminal callback.
+    Stopped,
+    TooShort(u64),
+    Failed(String),
+    Text {
+        text: String,
+        audio_ms: u64,
+    },
+}
+
+/// Caller job time spent outside waiting for input; `None` for a stage never entered.
+#[derive(Default)]
+struct CallerTiming {
+    /// Model load (if not already warm) and transcription setup, including a failed one.
+    warmup_ms: Option<u64>,
+    /// Queued behind other work at `INFERENCE_GATE`.
+    gate_wait_ms: Option<u64>,
+    /// Window decodes plus final assembly (the existing `duration_ms`).
+    decode_ms: Option<u64>,
+}
+
+/// Adds the time since `started` to `stage` and marks the stage as entered.
+fn add_stage(stage: &mut Option<u64>, started: Instant) {
+    let ms = started.elapsed().as_millis() as u64;
+    *stage = Some(stage.unwrap_or(0).saturating_add(ms));
+}
+
+/// `onCallerAudioTiming` arguments: first input, input end, warm-up, gate wait,
+/// decode, stop-to-result; `-1` where the stage never happened.
+fn caller_timing_values(first_data_ms: u64, input_end_ms: u64, timing: &CallerTiming, result_ms: u64) -> [i64; 6] {
+    let known = |ms: u64| if ms == u64::MAX { -1 } else { ms as i64 };
+    let stage = |ms: Option<u64>| ms.map_or(-1, |ms| ms as i64);
+    let stop_wait = if input_end_ms == u64::MAX { -1 } else { result_ms.saturating_sub(input_end_ms) as i64 };
+    [
+        known(first_data_ms),
+        known(input_end_ms),
+        stage(timing.warmup_ms),
+        stage(timing.gate_wait_ms),
+        stage(timing.decode_ms),
+        stop_wait,
+    ]
+}
+
+fn run_caller_decode(job: &Arc<CallerJob>, timing: &mut CallerTiming) -> CallerDecode {
+    let warmup_started = Instant::now();
+    let warm = (|| {
+        if engine::get_engine().is_none() {
+            engine::ensure_loaded_from_thread(&job.jvm, &job.target)?;
+        }
+        let eng = engine::get_engine().ok_or_else(|| "model not loaded".to_string())?;
+        let setup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let guard = eng.lock().unwrap_or_else(|p| p.into_inner());
+            (guard.file_window_limit(), guard.begin_transcription())
+        }))
+        .map_err(|_| "transcription setup failed unexpectedly".to_string())?;
+        Ok((eng, setup))
+    })();
+    // Recorded on failure too, so a slow failed load is visible.
+    add_stage(&mut timing.warmup_ms, warmup_started);
+    let (eng, (limit, mut transcription)) = match warm {
+        Ok(warm) => warm,
+        Err(error) => return CallerDecode::Failed(error),
+    };
+    if limit > 60 * 16_000 {
+        return CallerDecode::Failed("model window exceeds caller queue capacity".to_string());
+    }
+    let mut assembled = String::new();
+    loop {
+        match job.queue.next(limit) {
+            crate::caller_audio_job::Work::Stop => return CallerDecode::Stopped,
+            crate::caller_audio_job::Work::Window(window) => {
+                if let Err(error) =
+                    decode_caller_window(job, &eng, &mut transcription, &window, &mut assembled, timing, false)
+                {
+                    job.queue.stop();
+                    return CallerDecode::Failed(error);
+                }
+            }
+            crate::caller_audio_job::Work::Tail(tail, total) => {
+                if job.cancelled.load(Ordering::SeqCst) {
+                    return CallerDecode::Stopped;
+                }
+                // ~0.2 s minimum of audio to bother transcribing.
+                if total < 3200 {
+                    return CallerDecode::TooShort(total);
+                }
+                if job.speech_started.load(Ordering::SeqCst) {
+                    if let Ok(mut env) = job.jvm.attach_current_thread() {
+                        call_void(&mut env, job.target.as_obj(), "onEndOfSpeech");
+                    }
+                }
+                if !tail.is_empty() {
+                    // Published before the queue released this tail, so it is final.
+                    let interactive = caller_audio_input::ended_by_caller(&job.end_reason);
+                    if let Err(error) =
+                        decode_caller_window(job, &eng, &mut transcription, &tail, &mut assembled, timing, interactive)
+                    {
+                        return CallerDecode::Failed(error);
+                    }
+                }
+                if job.cancelled.load(Ordering::SeqCst) {
+                    return CallerDecode::Stopped;
+                }
+                let started = Instant::now();
+                let text = engine::Engine::finish_file_job(transcription, assembled);
+                add_stage(&mut timing.decode_ms, started);
+                return CallerDecode::Text {
+                    text,
+                    audio_ms: total.saturating_mul(1000) / 16000,
+                };
+            }
+        }
+    }
+}
+
+fn decode_caller_window(
+    job: &Arc<CallerJob>,
+    eng: &Arc<Mutex<engine::Engine>>,
+    transcription: &mut engine::TranscriptionJob,
+    audio: &[f32],
+    assembled: &mut String,
+    timing: &mut CallerTiming,
+    interactive: bool,
+) -> Result<(), String> {
+    // Windows decoded while audio still arrives are background work: a waiting
+    // keyboard/popup final decode goes first. The tail after the caller closed its
+    // input (or tapped Stop) is the request's final decode and someone is waiting on
+    // it, so it is admitted as foreground like the keyboard's own final decode. That
+    // cannot starve the keyboard: foreground admissions are served in arrival order,
+    // so a keyboard final decode already waiting goes before any later caller tail,
+    // and each caller job (one at a time, `CALLER_JOB`) makes this foreground
+    // admission at most once, for a tail no longer than one model window. Interim
+    // windows stay background, so a long caller stream cannot hold foreground
+    // priority; keyboard preparation windows wait for at most one tail per request.
+    let queued = Instant::now();
+    let _permit = engine::INFERENCE_GATE.acquire(interactive);
+    add_stage(&mut timing.gate_wait_ms, queued);
+    if job.cancelled.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    let started = Instant::now();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        eng.lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .decode_window(transcription, audio, true, assembled)
+    }))
+    .unwrap_or_else(|_| Err("transcription failed unexpectedly".to_string()));
+    add_stage(&mut timing.decode_ms, started);
+    result
+}
+
+fn claim_terminal(job: &Arc<CallerJob>) -> bool {
+    !job.cancelled.load(Ordering::SeqCst) && !job.terminal.swap(true, Ordering::SeqCst)
+}
+
+/// Free the caller slot, but only if it still holds *this* job.
+fn clear_caller(job: &Arc<CallerJob>) {
+    let mut slot = CALLER_JOB.lock().unwrap();
+    if slot.as_ref().is_some_and(|current| Arc::ptr_eq(current, job)) {
+        *slot = None;
+    }
+}
+
+fn elapsed_ms(job: &CallerJob) -> u64 {
+    job.started_at.elapsed().as_millis() as u64
+}
+
+fn caller_source_state(job: &CallerJob) -> SourceState {
+    SourceState {
+        cancelled: job.cancelled.load(Ordering::SeqCst),
+        finalized: job.input_closed.load(Ordering::SeqCst),
+        elapsed_ms: elapsed_ms(job),
+        stop_after_ms: job.stop_after_ms.load(Ordering::SeqCst),
+        idle_ms: elapsed_ms(job).saturating_sub(job.last_data_ms.load(Ordering::SeqCst)),
+        received_data: job.first_data_ms.load(Ordering::SeqCst) != u64::MAX,
     }
 }
 
 /// Stop drains currently readable data without waiting for an unclosed writer.
 /// Cancellation, safety limits, and poll errors have distinct outcomes.
-fn wait_readable(fd: i32, shared: &Arc<Endpoint>) -> io::Result<Readiness> {
-    caller_audio_input::wait_ready(
-        || SourceState {
-            cancelled: shared.cancelled.load(Ordering::SeqCst),
-            finalized: shared.finalized.load(Ordering::SeqCst),
-            elapsed_ms: shared.started_at.elapsed().as_millis() as u64,
-            stop_after_ms: shared.stop_after_ms.load(Ordering::SeqCst),
-        },
+fn wait_readable(fd: i32, job: &Arc<CallerJob>) -> io::Result<Readiness> {
+    caller_audio_input::wait_ready_or_stop(
+        &job.stop_after_ms,
+        || caller_source_state(job),
         |timeout| {
             let mut poll_fd = libc::pollfd {
                 fd,
@@ -679,6 +1130,28 @@ mod tests {
                 "sample {index}: expected {expected}, got {actual}"
             );
         }
+    }
+
+    #[test]
+    fn caller_timing_omits_stages_never_entered() {
+        // A warm-up that failed after 1.5 s: it is reported; gate and decode are not.
+        let mut timing = CallerTiming::default();
+        add_stage(&mut timing.warmup_ms, Instant::now() - Duration::from_millis(1_500));
+        let values = caller_timing_values(u64::MAX, 2_000, &timing, 3_600);
+        assert_eq!(values[0], -1);
+        assert_eq!(values[1], 2_000);
+        assert!(values[2] >= 1_500);
+        assert_eq!(&values[3..], &[-1, -1, 1_600]);
+        // An entered stage reports its time even when it is 0 ms, and accumulates.
+        add_stage(&mut timing.gate_wait_ms, Instant::now() + Duration::from_secs(1));
+        add_stage(&mut timing.decode_ms, Instant::now() - Duration::from_millis(40));
+        add_stage(&mut timing.decode_ms, Instant::now() - Duration::from_millis(60));
+        let values = caller_timing_values(300, u64::MAX, &timing, 3_600);
+        assert_eq!(values[0], 300);
+        assert_eq!(values[1], -1);
+        assert_eq!(values[3], 0);
+        assert!(values[4] >= 100);
+        assert_eq!(values[5], -1);
     }
 
     #[test]
@@ -807,13 +1280,14 @@ fn audio_callback(shared: &Arc<Endpoint>, data: &[f32], analyzer: &mut AudioAnal
     let rms = (sum / (data.len().max(1) as f32)).sqrt();
     let level = (rms * 6.0).clamp(0.0, 1.0);
 
-    let is_speech = level > MIN_SPEECH_LEVEL && level > analyzer.noise_floor + SPEECH_MARGIN;
+    analyzer.endpointer.push(data);
+    let is_speech = analyzer.endpointer.is_voiced();
 
     shared.audio_buffer.lock().unwrap().push(data);
 
     if is_speech {
         shared.last_voice_ms.store(
-            shared.started_at.elapsed().as_millis() as u64,
+            (shared.started_at.elapsed().as_millis() as u64).saturating_sub(shared.capture_ready_ms.load(Ordering::SeqCst)),
             Ordering::Relaxed,
         );
         // First detected speech -> notify beginningOfSpeech exactly once.
@@ -826,9 +1300,6 @@ fn audio_callback(shared: &Arc<Endpoint>, data: &[f32], analyzer: &mut AudioAnal
                 call_void(&mut env, shared.target.as_obj(), "onBeginningOfSpeech");
             }
         }
-    } else {
-        // Slowly adapt the noise floor while no speech is present.
-        analyzer.noise_floor = analyzer.noise_floor * 0.95 + level * 0.05;
     }
 
     // Throttled mic-level updates for the keyboard's waveform UI.
@@ -848,22 +1319,18 @@ fn endpoint_monitor(shared: Arc<Endpoint>, stream: Arc<Mutex<Option<SendStream>>
             return;
         }
 
-        let elapsed = shared.started_at.elapsed();
+        let ready = shared.capture_ready_ms.load(Ordering::SeqCst);
+        if ready == u64::MAX { continue; }
+        let elapsed = shared.started_at.elapsed().saturating_sub(Duration::from_millis(ready));
         let speech = shared.speech_started.load(Ordering::SeqCst);
         let silence = Duration::from_millis(
             (elapsed.as_millis() as u64)
                 .saturating_sub(shared.last_voice_ms.load(Ordering::Relaxed)),
         );
 
-        // A caller streaming its own audio decides when the utterance ends; only the hard cap,
-        // which bounds how much audio a session may buffer, still applies to it.
-        let done = if shared.caller_endpointed {
-            elapsed >= Duration::from_millis(MAX_SESSION_MS)
-        } else {
-            (speech && silence >= Duration::from_millis(SILENCE_MS))
-                || elapsed >= Duration::from_millis(MAX_SESSION_MS)
-                || (!speech && elapsed >= Duration::from_millis(NO_SPEECH_TIMEOUT_MS))
-        };
+        let done = (speech && silence >= Duration::from_millis(SILENCE_MS))
+            || elapsed >= Duration::from_millis(MAX_SESSION_MS)
+            || (!speech && elapsed >= Duration::from_millis(NO_SPEECH_TIMEOUT_MS));
 
         if done {
             finalize(shared, stream);

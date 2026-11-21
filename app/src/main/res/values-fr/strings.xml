@@ -105,4 +105,46 @@
 
     <string name="voice_help_title">Configuration de la saisie vocale</string>
     <string name="voice_help_body">Comment l\'utiliser\n• Ouvrez n\'importe quelle app et touchez le micro d\'un clavier/d\'une app pris en charge. Un petit panneau apparaît, vous parlez, touchez pour arrêter, et le texte est inséré. (Activez « Arrêt automatique après un silence » dans les paramètres pour qu\'il s\'arrête tout seul.)\n\nQuels claviers ouvrent le panneau vocal\n• Microsoft SwiftKey (non open source) et la recherche vocale des sites web ouvrent le panneau directement.\n• AnySoftKeyboard est la voie open source vers le panneau : sa touche micro l\'ouvre tant qu\'aucun clavier vocal n\'est activé sur votre système.\n\nAutres claviers open source\n• HeliBoard, FlorisBoard, OpenBoard, Fossify Keyboard et Unexpected Keyboard n\'ouvrent pas le panneau : leur touche micro bascule vers le clavier « Offline Speech to Text ». Activez-le une fois (voir « Alternative : clavier vocal »), parlez, puis revenez avec sa touche de changement de clavier. FUTO Keyboard embarque sa propre saisie vocale.\n• Gboard n\'utilise que la saisie vocale de Google et ne peut pas du tout utiliser cette app.\n\nSi la saisie vocale de SwiftKey s\'ouvre à la place\n• Paramètres → Saisie riche → désactivez « Saisie vocale multimodale ».\n• Touchez ensuite à nouveau le micro et choisissez « Offline Speech to Text ».\n\nSi Android demande quelle app utiliser\n• Choisissez « Offline Speech to Text » et touchez « Toujours ».\n\nSi une autre app s\'ouvre toujours\n• Ouvrez Paramètres → Applications → cette app → « Ouvrir par défaut » → Effacer les valeurs par défaut, puis réessayez.</string>
+
+<string name="no_model_short">Aucun modèle vocal installé. Ouvrez Offline Voice Input pour en ajouter un.</string>
+<string name="voice_listening">Écoute… (touchez pour arrêter)</string>
+<string name="voice_no_speech">Aucune parole reconnue</string>
+<string name="voice_processing">Traitement…</string>
+<string name="voice_need_mic">Autorisation du micro requise.\nAccordez-la dans l\'application.</string>
+<string name="ime_tap_to_record">Touchez pour enregistrer</string>
+<string name="file_decoding">Décodage de l\'audio…</string>
+<string name="file_transcribing">Transcription…</string>
+<string name="file_transcribing_progress">Transcription… %1$s / %2$s</string>
+<string name="file_transcribing_at">Transcription… %1$s</string>
+<string name="file_copied">Copié dans le presse-papiers</string>
+<string name="file_copied_auto">Transcription copiée dans le presse-papiers</string>
+<string name="file_no_audio">Aucun fichier audio reçu</string>
+<string name="file_decode_error">Impossible de décoder ce fichier audio</string>
+<string name="file_no_speech">Aucune parole reconnue dans ce fichier</string>
+<string name="file_copy">Copier</string>
+<string name="file_share">Partager</string>
+<string name="file_save">Enregistrer</string>
+<string name="file_share_title">Partager la transcription</string>
+<string name="file_share_failed">Aucune application ne peut recevoir la transcription</string>
+<string name="file_saved">Transcription enregistrée</string>
+<string name="file_save_failed">Impossible d\'enregistrer la transcription</string>
+<string name="file_not_audio">Ce fichier ne semble pas être un fichier audio</string>
+    <string name="setting_bluetooth_mic">Utiliser le micro Bluetooth s\'il est connecté</string>
+    <string name="setting_bluetooth_mic_desc">Enregistre avec un casque Bluetooth ou une aide auditive LE Audio connectés dans le clavier vocal, la fenêtre de saisie, l\'enregistrement long et la saisie vocale des autres apps. Tant que son micro est actif, le casque passe en mode appel : la musique et les autres sons sont de moins bonne qualité jusqu\'à la fin de l\'enregistrement. Si aucun n\'est connecté, le micro du téléphone est utilisé.</string>
+    <string name="mic_toggle_bluetooth">Micro Bluetooth</string>
+    <string name="mic_toggle_phone">Micro du téléphone</string>
+    <string name="mic_toggle_desc_bluetooth">Enregistrement avec le micro Bluetooth. Appuyez pour passer au micro du téléphone.</string>
+    <string name="mic_toggle_desc_phone">Enregistrement avec le micro du téléphone. Appuyez pour passer au micro Bluetooth.</string>
+    <string name="mic_switch_to_bluetooth_title">Enregistrer avec le micro Bluetooth ?</string>
+    <string name="mic_switch_to_phone_title">Enregistrer avec le micro du téléphone ?</string>
+    <string name="mic_switch_message">Changer de micro arrête cet enregistrement, supprime tout ce qui a été dit jusqu\'ici et relance l\'enregistrement.</string>
+    <string name="mic_switch_once">Changer pour cet enregistrement</string>
+    <string name="mic_switch_keep_bluetooth">Changer et garder le Bluetooth</string>
+    <string name="mic_switch_keep_phone">Changer et garder le téléphone</string>
+    <string name="mic_fallback_status">Le micro Bluetooth n\'envoie plus de son. L\'enregistrement continue avec le micro du téléphone.</string>
+    <string name="mic_bt_waiting">En attente du micro Bluetooth…</string>
+    <string name="ime_dictation_channel">Dictée du clavier</string>
+    <string name="ime_dictation_title">Dictée en cours</string>
+    <string name="ime_dictation_text">L\'enregistrement continue écran éteint. Arrêtez pour insérer le texte.</string>
+    <string name="ime_dictation_stop">Arrêter</string>
 </resources>

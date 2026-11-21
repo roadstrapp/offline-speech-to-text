@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="personal_correction_original" type="id"/>
+    <item name="personal_correction_replacement" type="id"/>
+</resources>

@@ -1,0 +1,1 @@
+When another app sends its own audio, the app now waits up to 60 seconds for the first audio to arrive (it was 10), so a recording that starts late gets through. After audio starts, a 10-second gap still ends the request. The final result comes back sooner because its last part now runs ahead of background work, and keyboard dictation keeps its turn.
