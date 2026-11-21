@@ -103,14 +103,34 @@ pub(crate) struct BackgroundTranscriber {
 }
 
 impl BackgroundTranscriber {
+    #[cfg(test)]
     pub(crate) fn start(jvm: Arc<jni::JavaVM>, target: GlobalRef) -> Self {
         Self::start_with_capture(jvm, target, None)
+    }
+
+    /// A recognition-service microphone request whose caller sent words of its own
+    /// (`EXTRA_BIASING_STRINGS`); they apply to this one job.
+    pub(crate) fn start_with_request_terms(
+        jvm: Arc<jni::JavaVM>,
+        target: GlobalRef,
+        request_terms: Vec<String>,
+    ) -> Self {
+        Self::spawn(jvm, target, None, request_terms)
     }
 
     pub(crate) fn start_with_capture(
         jvm: Arc<jni::JavaVM>,
         target: GlobalRef,
         capture: Option<Arc<Mutex<CaptureBuffer>>>,
+    ) -> Self {
+        Self::spawn(jvm, target, capture, Vec::new())
+    }
+
+    fn spawn(
+        jvm: Arc<jni::JavaVM>,
+        target: GlobalRef,
+        capture: Option<Arc<Mutex<CaptureBuffer>>>,
+        request_terms: Vec<String>,
     ) -> Self {
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
         let (completion_tx, completion_rx) = crossbeam_channel::bounded(1);
@@ -150,6 +170,7 @@ impl BackgroundTranscriber {
                 worker_requested,
                 worker_next,
                 session_id,
+                request_terms,
             )
         });
         Self {
@@ -257,8 +278,10 @@ fn worker_loop(
     requested: Arc<AtomicBool>,
     prepared_through: Arc<AtomicUsize>,
     session_id: i64,
+    request_terms: Vec<String>,
 ) {
     let mut state = WorkerState {
+        request_terms,
         prepared: None,
         next_sample: 0,
         compute_ms: 0,
@@ -306,6 +329,7 @@ fn worker_loop(
             prepared,
             mut compute_ms,
             mut pipeline,
+            request_terms,
             ..
         } = state;
 
@@ -325,7 +349,7 @@ fn worker_loop(
             .unwrap_or_else(|| {
                 let started = Instant::now();
                 pipeline.model_warm = i32::from(engine::get_engine().is_some());
-                let result = prepare_job(&jvm, &target);
+                let result = prepare_job(&jvm, &target, &request_terms);
                 pipeline.prepare_ms += started.elapsed().as_millis() as u64;
                 result
             })
@@ -387,6 +411,8 @@ type PreparedJob = (Arc<Mutex<engine::Engine>>, engine::TranscriptionJob);
 
 /// Capture-time preparation state, owned by the single worker thread.
 struct WorkerState {
+    /// The request's own words; empty for every surface but the recognition service.
+    request_terms: Vec<String>,
     prepared: Option<PreparedJob>,
     next_sample: usize,
     compute_ms: u64,
@@ -443,11 +469,12 @@ impl WorkerState {
             let started = Instant::now();
             // Bind limit, settings and decoder to this exact engine.
             let pipeline = &mut self.pipeline;
+            let request_terms = &self.request_terms;
             let job = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let guard = eng.lock().unwrap_or_else(|p| p.into_inner());
                 pipeline.model_family = guard.diagnostic_family();
                 pipeline.model_warm = 1;
-                guard.begin_transcription()
+                guard.begin_request_transcription(request_terms)
             }));
             self.pipeline.prepare_ms += started.elapsed().as_millis() as u64;
             match job {
@@ -493,7 +520,11 @@ impl WorkerState {
     }
 }
 
-fn prepare_job(jvm: &Arc<jni::JavaVM>, target: &GlobalRef) -> Result<PreparedJob, String> {
+fn prepare_job(
+    jvm: &Arc<jni::JavaVM>,
+    target: &GlobalRef,
+    request_terms: &[String],
+) -> Result<PreparedJob, String> {
     if engine::get_engine().is_none() {
         engine::ensure_loaded_from_thread(jvm, target)?;
     }
@@ -501,7 +532,7 @@ fn prepare_job(jvm: &Arc<jni::JavaVM>, target: &GlobalRef) -> Result<PreparedJob
     let job = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         eng.lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .begin_transcription()
+            .begin_request_transcription(request_terms)
     }))
     .map_err(|_| "transcription setup failed unexpectedly".to_string())?;
     Ok((eng, job))

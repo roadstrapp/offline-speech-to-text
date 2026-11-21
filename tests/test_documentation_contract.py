@@ -232,7 +232,7 @@ class DocumentationContractTest(unittest.TestCase):
             self.assertIn(code, guide)
         # The file session is attributed to the caller before any failure is delivered.
         body = self._method_body(
-            service, "startListeningFromFile(Intent intent, Callback callback, int rejection, NativeCallbacks target)")
+            service, "startListeningFromFile(Intent intent, Callback callback, int rejection, NativeCallbacks target, String biasingWords)")
         self.assertLess(body.index("attributeSessionToCaller(callback)"), body.index("safeError(file, rejection)"))
         checks = self._method_body(
             service, "fileRequestRejection(Intent intent, Callback callback, boolean hasCallerAudio)")

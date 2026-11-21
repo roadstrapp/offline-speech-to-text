@@ -24,6 +24,9 @@ struct FileSession {
     assembled: String,
     engine: Option<Arc<Mutex<Engine>>>,
     job: Option<TranscriptionJob>,
+    /// Words the caller sent for this request (`EXTRA_BIASING_STRINGS`); empty for
+    /// the share screen and the activity contract.
+    request_terms: Vec<String>,
     failed: bool,
     finished: bool,
 }
@@ -49,11 +52,24 @@ fn notify(env: &mut JNIEnv, target: &JObject, method: &str, text: &str) {
 /// receives `onStatusUpdate("Ready")` (or an `Error:` status) when it may push.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_notune_transcribe_FileTranscription_nativeCreate(
-    env: JNIEnv,
+    mut env: JNIEnv,
     _: JClass,
     owner: JObject,
     partials: jboolean,
+    biasing_words: jni::objects::JString,
 ) -> jlong {
+    // One word per line, null for none; bounded and validated again, never logged.
+    let request_terms = if biasing_words.is_null() {
+        Vec::new()
+    } else {
+        match env.get_string(&biasing_words) {
+            Ok(raw) => crate::custom_terms::parse_request_terms(&String::from(raw)),
+            Err(_) => {
+                let _ = env.exception_clear();
+                Vec::new()
+            }
+        }
+    };
     let Ok(vm) = env.get_java_vm() else {
         return 0;
     };
@@ -67,6 +83,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_FileTranscription_nativ
         assembled: String::new(),
         engine: None,
         job: None,
+        request_terms,
         failed: false,
         finished: false,
     }));
@@ -123,7 +140,7 @@ fn ensure_job(s: &mut FileSession) -> Result<usize, String> {
     if s.engine.is_none() {
         let engine = engine::get_engine().ok_or("model not ready")?;
         let locked = engine.lock().map_err(|_| "model unavailable")?;
-        s.job = Some(locked.begin_transcription());
+        s.job = Some(locked.begin_request_transcription(&s.request_terms));
         drop(locked);
         s.engine = Some(engine);
     }
