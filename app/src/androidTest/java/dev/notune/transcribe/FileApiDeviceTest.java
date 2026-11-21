@@ -129,9 +129,14 @@ final class FileApiDeviceTest {
                         written[0] += quiet.length;
                         pace(t0, written[0], pace);
                     }
-                    out.write(clip);
-                    written[0] += clip.length;
-                    pace(t0, written[0], pace);
+                    // Speech in the same 100 ms buffers: a whole clip written at once and then
+                    // paced would leave the pipe quiet for longer than the idle limit.
+                    for (int offset = 0; offset < clip.length && terminal.getCount() > 0; offset += 3200) {
+                        int length = Math.min(3200, clip.length - offset);
+                        out.write(clip, offset, length);
+                        written[0] += length;
+                        pace(t0, written[0], pace);
+                    }
                 }
             } catch (Exception closedByProvider) {
                 // EPIPE: the provider stopped reading.
