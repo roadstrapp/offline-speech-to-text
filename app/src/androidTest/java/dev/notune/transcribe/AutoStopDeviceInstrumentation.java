@@ -42,6 +42,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
     private boolean bluetoothMic;
     private boolean lengthSweep;
     private boolean callerAudioLateStart;
+    private boolean biasingWords;
     private static final class InjectedFixtureFailure extends Exception {}
 
     @Override
@@ -80,6 +81,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         captureCapability = arguments != null && "true".equals(arguments.getString("capture_capability"));
         lengthSweep = arguments != null && "true".equals(arguments.getString("length_sweep"));
         callerAudioLateStart = arguments != null && "true".equals(arguments.getString("caller_audio_late_start"));
+        biasingWords = arguments != null && "true".equals(arguments.getString("biasing_words"));
         start();
     }
 
@@ -111,6 +113,12 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         if (callerAudioLateStart) {
             Bundle result = new Bundle(); int code = Activity.RESULT_OK;
             try { result.putLong("first_input_ms", testCallerLateFirstWrite()); result.putBoolean("caller_audio_late_start", true); }
+            catch (Throwable error) { code = Activity.RESULT_CANCELED; result.putString("failure", error.toString()); }
+            finish(code, result); return;
+        }
+        if (biasingWords) {
+            Bundle result = new Bundle(); int code = Activity.RESULT_OK;
+            try { CallerAudioProviderDeviceTest.runBiasingWords(this); result.putBoolean("biasing_words", true); }
             catch (Throwable error) { code = Activity.RESULT_CANCELED; result.putString("failure", error.toString()); }
             finish(code, result); return;
         }
