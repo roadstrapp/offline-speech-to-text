@@ -23,12 +23,24 @@ pub(crate) enum Work {
     Stop,
 }
 
+/// Pending audio the decoder has not consumed yet. A writer faster than the model (a
+/// saved recording, or a live stream with a model slower than real time) is held back
+/// here instead of growing memory: two minutes, about 7.7 MB.
+pub(crate) const MAX_QUEUED: usize = 120 * 16_000;
+/// Room above `MAX_QUEUED` for a Stop drain. Stop reads what is already in the pipe for
+/// at most 500 ms; if the queue is full at that moment, waiting for the decoder would
+/// outlast that budget and turn the whole dictation into an input error. Thirty seconds
+/// of audio (1.9 MB) covers a full 1 MB pipe of 16 kHz PCM16.
+pub(crate) const STOP_DRAIN_EXTRA: usize = 30 * 16_000;
+
 #[derive(Default)]
 struct State {
     buffer: crate::file_audio::Buffer,
     total_samples: u64,
     ended: bool,
     stopped: bool,
+    /// A caller Stop is draining: `STOP_DRAIN_EXTRA` applies.
+    stop_draining: bool,
 }
 
 #[derive(Default)]
@@ -40,10 +52,9 @@ pub(crate) struct Queue {
 impl Queue {
     pub(crate) fn push(&self, samples: &[f32]) {
         // Bound queued audio even when a caller writes much faster than real time.
-        const MAX_QUEUED: usize = 120 * 16_000;
         for chunk in samples.chunks(16_000) {
             let mut state = self.lock();
-            while !state.ended && !state.stopped && state.buffer.len() + chunk.len() > MAX_QUEUED {
+            while !state.ended && !state.stopped && state.buffer.len() + chunk.len() > state.bound() {
                 state = self.changed.wait(state).unwrap_or_else(|p| p.into_inner());
             }
             if state.ended || state.stopped { return; }
@@ -56,6 +67,13 @@ impl Queue {
 
     pub(crate) fn total_samples(&self) -> u64 {
         self.lock().total_samples
+    }
+
+    /// The caller stopped: its bounded drain may queue a little past the pending bound,
+    /// and a reader waiting for room is released to perform it.
+    pub(crate) fn drain_for_stop(&self) {
+        self.lock().stop_draining = true;
+        self.changed.notify_all();
     }
 
     /// No more input: what is buffered is decoded, then the tail.
@@ -96,6 +114,12 @@ impl Queue {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+}
+
+impl State {
+    fn bound(&self) -> usize {
+        if self.stop_draining { MAX_QUEUED + STOP_DRAIN_EXTRA } else { MAX_QUEUED }
     }
 }
 
@@ -183,6 +207,116 @@ mod tests {
         }
     }
 
+    /// A live stream (100 ms buffers) with its decoder keeping up: every window the
+    /// decoder took, then the tail, with the overlap between neighbours checked.
+    fn stream(queue: &Queue, audio: &[f32], limit: usize) -> (Vec<Vec<f32>>, Vec<f32>, usize) {
+        let mut windows = Vec::new();
+        let mut peak = 0;
+        for buffer in audio.chunks(1_600) {
+            queue.push(buffer);
+            peak = peak.max(queue.lock().buffer.len());
+            while let Some(window) = queue.next_ready(limit) {
+                windows.push(window);
+            }
+        }
+        queue.end();
+        match queue.next(limit) {
+            Work::Tail(tail, total) => {
+                assert_eq!(total, audio.len() as u64);
+                (windows, tail, peak)
+            }
+            other => panic!("expected tail, got {other:?}"),
+        }
+    }
+
+    /// Rebuilds the stream from the decoded pieces, dropping each piece's leading overlap.
+    fn rebuilt(windows: &[Vec<f32>], tail: &[f32], limit: usize) -> Vec<f32> {
+        let overlap = crate::long_audio::overlap_samples(limit);
+        let mut all: Vec<f32> = Vec::new();
+        for (index, piece) in windows.iter().map(Vec::as_slice).chain([tail]).enumerate() {
+            if index == 0 {
+                all.extend_from_slice(piece);
+            } else {
+                // The overlap repeats the end of the previous piece exactly.
+                assert_eq!(&piece[..overlap], &all[all.len() - overlap..]);
+                all.extend_from_slice(&piece[overlap..]);
+            }
+        }
+        all
+    }
+
+    /// Distinct, non-quiet samples, so lost, repeated or reordered audio is detected.
+    fn speech(seconds: usize, offset: usize) -> Vec<f32> {
+        (0..seconds * 16_000).map(|n| 0.2 + ((n + offset) % 9_973) as f32 / 20_000.0).collect()
+    }
+
+    #[test]
+    fn five_minute_live_stream_is_decoded_as_it_arrives_with_bounded_memory() {
+        let limit = 60 * 16_000;
+        let audio = speech(300, 0);
+        let queue = Queue::default();
+        let (windows, tail, peak) = stream(&queue, &audio, limit);
+        // Only the tail is left to decode when the writer closes.
+        assert!(windows.len() >= 4, "got {} windows", windows.len());
+        assert!(tail.len() <= limit);
+        assert!(windows.iter().all(|window| window.len() <= limit));
+        // A decoder that keeps up holds one window plus the buffer being added.
+        assert!(peak <= limit + 1_600, "peak {peak}");
+        assert_eq!(rebuilt(&windows, &tail, limit), audio);
+    }
+
+    #[test]
+    fn twenty_second_pause_ends_nothing_and_loses_no_audio() {
+        let limit = 60 * 16_000;
+        let mut audio = speech(50, 0);
+        let pause = audio.len()..audio.len() + 20 * 16_000;
+        audio.extend(vec![0.0; 20 * 16_000]);
+        audio.extend(speech(30, 4_000));
+        let queue = Queue::default();
+        let (windows, tail, _) = stream(&queue, &audio, limit);
+        // The pause is not an endpoint. The only cut is the model's one-minute bound,
+        // placed at a quiet point inside the pause; the tail starts with the overlap
+        // (speech from before the pause) and holds the pause and all speech after it.
+        assert_eq!(windows.len(), 1);
+        assert!(pause.contains(&windows[0].len()), "cut at {}", windows[0].len());
+        let overlap = crate::long_audio::overlap_samples(limit);
+        assert!(windows[0].len() - overlap < pause.start);
+        assert!(tail.len() > (20 + 30) * 16_000);
+        assert_eq!(rebuilt(&windows, &tail, limit), audio);
+    }
+
+    #[test]
+    fn stop_releases_a_reader_held_by_backpressure_and_keeps_its_audio() {
+        let queue = Arc::new(Queue::default());
+        queue.push(&speechless(120));
+        let (done, completed) = std::sync::mpsc::channel();
+        let reader = {
+            let queue = queue.clone();
+            std::thread::spawn(move || {
+                // What the Stop drain still finds in the pipe.
+                queue.push(&speechless(2));
+                done.send(()).unwrap();
+            })
+        };
+        // Held while the decoder is behind: nothing is dropped, nothing grows.
+        assert!(completed.recv_timeout(Duration::from_millis(100)).is_err());
+        assert_eq!(queue.total_samples(), 120 * 16_000);
+        queue.drain_for_stop();
+        completed.recv_timeout(Duration::from_secs(2)).unwrap();
+        reader.join().unwrap();
+        assert_eq!(queue.total_samples(), 122 * 16_000);
+        // The allowance is bounded too: a writer that ignores Stop is held again.
+        queue.push(&speechless(28));
+        let flood = {
+            let queue = queue.clone();
+            std::thread::spawn(move || queue.push(&speechless(1)))
+        };
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(queue.total_samples(), (MAX_QUEUED + STOP_DRAIN_EXTRA) as u64);
+        queue.stop();
+        flood.join().unwrap();
+    }
+
     impl Queue {
         /// Test helper: a ready window without blocking.
         fn next_ready(&self, limit: usize) -> Option<Vec<f32>> {
@@ -204,8 +338,8 @@ mod backpressure_tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         loop {
             let state = queue.lock();
-            assert!(state.buffer.len() <= 120 * 16_000);
-            if state.buffer.len() == 120 * 16_000 { break; }
+            assert!(state.buffer.len() <= MAX_QUEUED);
+            if state.buffer.len() == MAX_QUEUED { break; }
             drop(state);
             assert!(std::time::Instant::now() < deadline);
             std::thread::yield_now();

@@ -459,7 +459,10 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
     if let Some(job) = job {
         let deadline = (job.started_at.elapsed().as_millis() as u64).saturating_add(500);
         // A no-op if the input already ended or the no-data limit claimed it first.
-        caller_audio_input::request_stop(&job.stop_after_ms, deadline);
+        if caller_audio_input::request_stop(&job.stop_after_ms, deadline) {
+            // A reader held by a full queue must reach its drain within that budget.
+            job.queue.drain_for_stop();
+        }
     }
 }
 
