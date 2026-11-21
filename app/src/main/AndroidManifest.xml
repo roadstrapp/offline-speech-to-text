@@ -4,8 +4,12 @@
 
     <uses-feature android:glEsVersion="0x00030002" android:required="true" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Select and clear the optional communication microphone route. -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- keyboard dictation keeps the CPU awake while the screen is off -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -21,6 +25,7 @@
         <intent>
             <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
         </intent>
+        <intent><action android:name="android.view.InputMethod" /></intent>
     </queries>
 
     <application
@@ -84,16 +89,26 @@
         <!-- Transcribe shared audio file -->
         <activity
             android:name=".TranscribeFileActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:exported="true"
             android:excludeFromRecents="true"
             android:launchMode="singleTask"
             android:theme="@style/AppTheme">
 
-            <!-- Handle "Share" from other apps -->
+            <!-- Handle "Share" from other apps. Messengers share voice notes as audio/*
+                 (AAC, M4A, Ogg/Opus, MP3), as video/mp4 or 3GPP for video and some voice
+                 notes, as application/ogg, or as generic binary data. A generic share is
+                 accepted only with an audio file name, and every file must still contain a
+                 decodable audio track. -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="audio/*" />
+                <data android:mimeType="application/ogg" />
+                <data android:mimeType="video/mp4" />
+                <data android:mimeType="video/3gpp" />
+                <data android:mimeType="video/webm" />
+                <data android:mimeType="application/octet-stream" />
             </intent-filter>
 
             <!-- Handle "Open with" for audio files -->
@@ -102,6 +117,29 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <!-- MIME-only VIEW is intentional for Android's Open with flow. -->
                 <data android:mimeType="audio/*" />
+                <data android:mimeType="application/ogg" />
+            </intent-filter>
+        </activity>
+
+        <!-- Public activity-result contract: transcribe the granted content Uri in the
+             intent data and return RecognizerIntent.EXTRA_RESULTS. Standard launch mode so
+             the result always reaches the requesting activity. -->
+        <activity
+            android:name=".TranscribeAudioActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:theme="@style/AppTheme">
+            <intent-filter tools:ignore="AppLinkUrlError">
+                <action android:name="app.offlinespeechtotext.action.TRANSCRIBE_AUDIO" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" android:mimeType="*/*" />
+            </intent-filter>
+            <!-- A provider may report no type for its Uri. -->
+            <intent-filter>
+                <action android:name="app.offlinespeechtotext.action.TRANSCRIBE_AUDIO" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
             </intent-filter>
         </activity>
 
@@ -115,7 +153,6 @@
         <activity
             android:name=".ImeTranscriptRecoveryActivity"
             android:excludeFromRecents="true"
-            android:process=":ime"
             android:exported="false" />
         <receiver
             android:name=".ForegroundRecordingActionReceiver"
@@ -149,12 +186,17 @@
                 android:resource="@xml/recognition_service" />
         </service>
 
+        <!-- Keeps a keyboard dictation recording while the keyboard is hidden -->
+        <service
+            android:name=".ImeDictationService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
         <!-- IME Service -->
         <service
             android:name=".RustInputMethodService"
             android:label="@string/app_name"
             android:permission="android.permission.BIND_INPUT_METHOD"
-            android:process=":ime"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.view.InputMethod" />

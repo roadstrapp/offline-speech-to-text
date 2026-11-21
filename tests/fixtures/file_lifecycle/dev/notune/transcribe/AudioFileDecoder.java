@@ -1,0 +1,1 @@
+package dev.notune.transcribe; class AudioFileDecoder {static final int TARGET_RATE=16000; interface Sink {boolean feed(float[] s,int l);} AudioFileDecoder(android.content.Context c,android.net.Uri u){} long decode(Sink s,java.util.function.BooleanSupplier c) throws java.io.IOException {return s.feed(new float[]{.1f},1)?1:0;} long durationUs(){return 1000;} }

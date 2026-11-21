@@ -1,0 +1,1 @@
+Dictation from another app no longer stays stuck as "recognizer busy". If audio stops arriving, the request now ends after 10 seconds. If the engine fails to start or ends without a result, you get an error right away. A new app can take over once the previous app's recording has finished.

@@ -79,6 +79,13 @@ final class TroubleshootingSession {
         handler.removeCallbacks(sample);
     }
 
+    void windowPlan(long rawLimitMs, int plannedWindows) {
+        if (ended) return;
+        DiagnosticLog.troubleshootingEvent(filesDir, "window_plan", prefix()
+                + ",raw_window_limit_ms=" + Math.max(0, rawLimitMs)
+                + ",planned_windows=" + Math.max(0, plannedWindows));
+    }
+
     private String prefix() {
         return "process=" + process + ",session_id=" + id + ",route=" + route
                 + ",version_code=" + BuildConfig.VERSION_CODE;

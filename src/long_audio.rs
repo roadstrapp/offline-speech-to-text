@@ -110,13 +110,30 @@ fn push_word<'a>(result: &mut Vec<Word<'a>>, text: &'a str, start: usize, end: u
 /// With no trustworthy alignment, preserve both results rather than silently
 /// dropping speech.
 pub(crate) fn stitch(previous: &str, next: &str) -> String {
+    stitch_with_join(previous, next).0
+}
+
+/// How `stitch_with_join` combined its inputs, in output byte offsets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StitchOutcome {
+    /// No alignment: both results were kept, joined by a space before `join`.
+    /// Words on either side were recognized independently.
+    Fallback { join: usize },
+    /// The output keeps the trimmed previous text only before `truncated_at`.
+    Aligned { truncated_at: usize },
+}
+
+pub(crate) fn stitch_with_join(previous: &str, next: &str) -> (String, StitchOutcome) {
     let previous = previous.trim();
     let next = next.trim();
     if previous.is_empty() {
-        return next.to_string();
+        return (next.to_string(), StitchOutcome::Aligned { truncated_at: 0 });
     }
     if next.is_empty() {
-        return previous.to_string();
+        return (
+            previous.to_string(),
+            StitchOutcome::Aligned { truncated_at: previous.len() },
+        );
     }
 
     let previous_words = words(previous);
@@ -151,16 +168,20 @@ pub(crate) fn stitch(previous: &str, next: &str) -> String {
     }
 
     let Some((_, left_start, right_start)) = best else {
-        return format!("{previous} {next}");
+        return (
+            format!("{previous} {next}"),
+            StitchOutcome::Fallback { join: previous.len() + 1 },
+        );
     };
     let replaced = &previous_words[left_start];
     let prefix = previous[..replaced.start].trim_end();
     let contextual_start = next_words[right_start].start;
     let contextual = match_case(next[contextual_start..].trim_start(), replaced.raw);
+    let outcome = StitchOutcome::Aligned { truncated_at: prefix.len() };
     if prefix.is_empty() {
-        contextual
+        (contextual, outcome)
     } else {
-        format!("{prefix} {contextual}")
+        (format!("{prefix} {contextual}"), outcome)
     }
 }
 
@@ -222,6 +243,19 @@ fn match_case(next: &str, replaced: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_window_threshold_is_independent_of_final_decoder_silence() {
+        let limit = 59 * SAMPLE_RATE + SAMPLE_RATE / 2;
+        for length in [limit - SAMPLE_RATE / 2, limit - 1, limit, limit + 1] {
+            let samples = vec![0.25; length];
+            let plan = windows(&samples, limit);
+            assert_eq!(plan.len(), if length <= limit { 1 } else { 2 });
+            assert_eq!(plan.first().unwrap().start, 0);
+            assert_eq!(plan.last().unwrap().end, length);
+            for span in plan { assert!(span.len() <= limit); }
+        }
+    }
 
     #[test]
     fn background_windows_equal_final_windows_for_every_stop_and_capture_schedule() {

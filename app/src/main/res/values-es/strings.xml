@@ -105,4 +105,46 @@
 
     <string name="voice_help_title">Configuración de la entrada de voz</string>
     <string name="voice_help_body">Cómo usarlo\n• Abre cualquier app y toca el micrófono de un teclado/una app compatible. Aparece un panel pequeño, hablas, tocas para detener y el texto se inserta. (Activa «Parada automática tras silencio» en los ajustes para que se detenga solo.)\n\nQué teclados abren el panel de voz\n• Microsoft SwiftKey (no es de código abierto) y la búsqueda por voz de los sitios web abren el panel directamente.\n• AnySoftKeyboard es la vía de código abierto al panel: su tecla de micrófono lo abre mientras no haya ningún teclado de voz activado en tu sistema.\n\nOtros teclados de código abierto\n• HeliBoard, FlorisBoard, OpenBoard, Fossify Keyboard y Unexpected Keyboard no abren el panel: su tecla de micrófono cambia al teclado «Offline Speech to Text». Actívalo una vez (mira «Alternativa: teclado de voz»), habla allí y vuelve con su tecla de cambio de teclado. FUTO Keyboard trae su propia entrada de voz.\n• Gboard solo usa la entrada de voz de Google y no puede usar esta app en absoluto.\n\nSi se abre la entrada de voz propia de SwiftKey\n• Ajustes → Entrada enriquecida → desactiva «Entrada de voz multimodal».\n• Luego toca de nuevo el micrófono y elige «Offline Speech to Text».\n\nSi Android pregunta qué app usar\n• Elige «Offline Speech to Text» y toca «Siempre».\n\nSi siempre se abre otra app\n• Abre Ajustes → Aplicaciones → esa app → «Abrir de forma predeterminada» → Borrar valores predeterminados, e inténtalo de nuevo.</string>
+
+<string name="no_model_short">No hay ningún modelo de voz instalado. Abre Offline Voice Input para añadir uno.</string>
+<string name="voice_listening">Escuchando… (toca para detener)</string>
+<string name="voice_no_speech">No se reconoció voz</string>
+<string name="voice_processing">Procesando…</string>
+<string name="voice_need_mic">Se necesita permiso de micrófono.\nConcédelo en la app.</string>
+<string name="ime_tap_to_record">Toca para grabar</string>
+<string name="file_decoding">Decodificando audio…</string>
+<string name="file_transcribing">Transcribiendo…</string>
+<string name="file_transcribing_progress">Transcribiendo… %1$s / %2$s</string>
+<string name="file_transcribing_at">Transcribiendo… %1$s</string>
+<string name="file_copied">Copiado al portapapeles</string>
+<string name="file_copied_auto">Transcripción copiada al portapapeles</string>
+<string name="file_no_audio">No se recibió ningún archivo de audio</string>
+<string name="file_decode_error">No se pudo decodificar este archivo de audio</string>
+<string name="file_no_speech">No se reconoció voz en este archivo</string>
+<string name="file_copy">Copiar</string>
+<string name="file_share">Compartir</string>
+<string name="file_save">Guardar</string>
+<string name="file_share_title">Compartir transcripción</string>
+<string name="file_share_failed">Ninguna app puede recibir la transcripción</string>
+<string name="file_saved">Transcripción guardada</string>
+<string name="file_save_failed">No se pudo guardar la transcripción</string>
+<string name="file_not_audio">Este archivo no parece ser de audio</string>
+    <string name="setting_bluetooth_mic">Usar el micrófono Bluetooth si está conectado</string>
+    <string name="setting_bluetooth_mic_desc">Graba con unos auriculares Bluetooth o un audífono LE Audio conectados en el teclado de voz, la ventana emergente, la grabación larga y la entrada de voz de otras apps. Mientras su micrófono está activo, los auriculares pasan al modo de llamada, así que la música y demás sonidos se oyen con menor calidad hasta que termina la grabación. Si no hay ninguno conectado, se usa el micrófono del teléfono.</string>
+    <string name="mic_toggle_bluetooth">Micro Bluetooth</string>
+    <string name="mic_toggle_phone">Micro del teléfono</string>
+    <string name="mic_toggle_desc_bluetooth">Grabando con el micrófono Bluetooth. Toca para cambiar al micrófono del teléfono.</string>
+    <string name="mic_toggle_desc_phone">Grabando con el micrófono del teléfono. Toca para cambiar al micrófono Bluetooth.</string>
+    <string name="mic_switch_to_bluetooth_title">¿Grabar con el micrófono Bluetooth?</string>
+    <string name="mic_switch_to_phone_title">¿Grabar con el micrófono del teléfono?</string>
+    <string name="mic_switch_message">Al cambiar se detiene esta grabación, se descarta todo lo dicho hasta ahora y se vuelve a empezar a grabar.</string>
+    <string name="mic_switch_once">Cambiar para esta grabación</string>
+    <string name="mic_switch_keep_bluetooth">Cambiar y usar siempre Bluetooth</string>
+    <string name="mic_switch_keep_phone">Cambiar y usar siempre el teléfono</string>
+    <string name="mic_fallback_status">El micrófono Bluetooth dejó de enviar sonido. La grabación continúa con el micrófono del teléfono.</string>
+    <string name="mic_bt_waiting">Esperando al micrófono Bluetooth…</string>
+    <string name="ime_dictation_channel">Dictado del teclado</string>
+    <string name="ime_dictation_title">Dictado en curso</string>
+    <string name="ime_dictation_text">Sigue grabando con la pantalla apagada. Detén para insertar el texto.</string>
+    <string name="ime_dictation_stop">Detener</string>
 </resources>

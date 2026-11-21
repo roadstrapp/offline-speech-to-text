@@ -3,22 +3,28 @@
 //! This is not Parakeet decoder bias: only a unique, very close spelling of
 //! a listed single word is changed after recognition. Compound names restore
 //! only their exact spelling and case, with identical punctuation. Exact correction pairs
-//! remain available for larger or ambiguous recognition errors.
+//! remain available for larger or ambiguous recognition errors. For English
+//! output, `sound_alike` may also propose short spoken windows that sound like
+//! a listed name; exact matches always win over those proposals.
 
-use crate::transcript_guard::{match_folded, right_boundary, ProtectedText};
+use crate::transcript_guard::{left_boundary, match_folded, right_boundary, ProtectedText};
+use sound_alike::Candidate;
 use std::collections::HashSet;
 use std::ops::Range;
+
+#[path = "sound_alike.rs"]
+pub(crate) mod sound_alike;
 
 const MAX_EXPANSION_BYTES: usize = 4096;
 
 #[derive(Clone)]
-struct Word {
-    written: String,
+struct Word<'a> {
+    written: &'a str,
     folded: Vec<char>,
 }
 
-struct Phrase {
-    written: String,
+struct Phrase<'a> {
+    written: &'a str,
     folded: String,
     char_count: usize,
     is_alias: bool,
@@ -29,16 +35,50 @@ pub(crate) fn apply(text: &str, terms: &[String]) -> String {
     apply_with_protected(text, terms, &[])
 }
 
+#[cfg(test)]
 pub(crate) fn apply_with_protected(
     text: &str,
     terms: &[String],
     protected: &[Range<usize>],
 ) -> String {
+    apply_with_ranges(text, terms, protected).0
+}
+
+/// Return protection in OUTPUT coordinates for the final filler pass.
+pub(crate) fn apply_with_ranges(
+    text: &str,
+    terms: &[String],
+    protected: &[Range<usize>],
+) -> (String, Vec<Range<usize>>) {
+    apply_inner(text, terms, protected, None)
+}
+
+/// As `apply_with_ranges`, also proposing English sound-alike windows that
+/// `gate` allows. No window spans one of `joins` (ascending byte offsets in
+/// `text`).
+pub(crate) fn apply_with_sound_alike(
+    text: &str,
+    terms: &[String],
+    protected: &[Range<usize>],
+    gate: sound_alike::Gate,
+    joins: &[usize],
+) -> (String, Vec<Range<usize>>) {
+    apply_inner(text, terms, protected, Some((gate, joins)))
+}
+
+fn apply_inner<'a>(
+    text: &str,
+    terms: &'a [String],
+    protected: &[Range<usize>],
+    sound: Option<(sound_alike::Gate, &[usize])>,
+) -> (String, Vec<Range<usize>>) {
     if text.is_empty() || terms.is_empty() {
-        return text.to_string();
+        return (text.to_string(), protected.to_vec());
     }
     let mut words = Vec::new();
     let mut phrases = Vec::new();
+    // Listed words and names a sound-alike window may become.
+    let mut eligible = Vec::new();
     let mut seen = HashSet::new();
     for term in terms {
         let folded = term.to_lowercase();
@@ -47,15 +87,16 @@ pub(crate) fn apply_with_protected(
         }
         if term.chars().all(char::is_alphabetic) {
             words.push(Word {
-                written: term.clone(),
+                written: term,
                 folded: folded.chars().collect(),
             });
+            eligible.push(term.as_str());
             if folded == "npub" {
                 // Decoder output may split the spoken prefix into two words.
                 // Keep these forms tied to the user's explicit npub entry.
                 for heard in ["en pub", "en pop", "n pub", "n pop", "m pups"] {
                     phrases.push(Phrase {
-                        written: term.clone(),
+                        written: term,
                         folded: heard.to_string(),
                         char_count: heard.chars().count(),
                         is_alias: true,
@@ -66,21 +107,25 @@ pub(crate) fn apply_with_protected(
             // Exact multiword spelling/case is safe to restore without
             // guessing whether an unrelated phrase was spoken.
             phrases.push(Phrase {
-                written: term.clone(),
+                written: term,
                 char_count: term.chars().count(),
                 folded,
                 is_alias: false,
             });
+            eligible.push(term.as_str());
         }
     }
     if words.is_empty() && phrases.is_empty() {
-        return text.to_string();
+        return (text.to_string(), protected.to_vec());
     }
     // Longer exact phrases win; a user's exact phrase always beats a known
     // spoken alias of the same length.
     phrases.sort_by_key(|phrase| (std::cmp::Reverse(phrase.char_count), phrase.is_alias));
 
-    let mut output = String::with_capacity(text.len());
+    // Exact matches are hard: nothing may overlap them. Close spellings and
+    // sound-alike windows are fuzzy proposals resolved afterwards.
+    let mut hard = Vec::new();
+    let mut fuzzy = Vec::new();
     // Reuse the scalar buffer across candidates. Keep String's contextual
     // lowercase rules (for example Greek final sigma) when filling it.
     let mut folded = Vec::new();
@@ -88,8 +133,16 @@ pub(crate) fn apply_with_protected(
     let guard = ProtectedText::new(text, protected);
     while offset < text.len() {
         let ch = text[offset..].chars().next().unwrap();
+        // Exact names may contain digits (or start with one). Match the whole
+        // name before the alphabetic fuzzy-word scan; digits are never guessed.
+        if ch.is_alphanumeric() && left_boundary(text, offset) {
+            if let Some((end, written)) = match_phrase(text, offset, &phrases, &guard) {
+                hard.push(Candidate { range: offset..end, written });
+                offset = end;
+                continue;
+            }
+        }
         if !ch.is_alphabetic() {
-            output.push(ch);
             offset += ch.len_utf8();
             continue;
         }
@@ -101,7 +154,6 @@ pub(crate) fn apply_with_protected(
             }
             offset += next.len_utf8();
         }
-        let candidate = &text[start..offset];
         let joined_to_other_token = text[..start]
             .chars()
             .next_back()
@@ -111,29 +163,18 @@ pub(crate) fn apply_with_protected(
                 .next()
                 .is_some_and(|value| value.is_alphanumeric() || value == '_');
         if !guard.allows(start, offset) || joined_to_other_token {
-            output.push_str(candidate);
-            continue;
-        }
-        if let Some((phrase_end, written)) = match_phrase(text, start, &phrases, &guard) {
-            output.push_str(written);
-            if output.len() > text.len().saturating_add(MAX_EXPANSION_BYTES) {
-                return text.to_string();
-            }
-            offset = phrase_end;
             continue;
         }
         if compound_component(text, start, offset) {
-            output.push_str(candidate);
             continue;
         }
         folded.clear();
-        folded.extend(candidate.to_lowercase().chars());
-        let mut exact = None;
-        let mut nearby = None;
-        let mut ambiguous = false;
+        folded.extend(text[start..offset].to_lowercase().chars());
+        let first_fuzzy = fuzzy.len();
         for word in &words {
             if word.folded == folded {
-                exact = Some(word.written.as_str());
+                fuzzy.truncate(first_fuzzy);
+                hard.push(Candidate { range: start..offset, written: word.written });
                 break;
             }
             // A few spoken identifier forms are too different from their
@@ -141,11 +182,7 @@ pub(crate) fn apply_with_protected(
             // explicit and conditional on the user listing that identifier;
             // a general phonetic rewrite would change ordinary words.
             if known_spoken_alias(&folded, &word.folded) {
-                if nearby.is_some() {
-                    ambiguous = true;
-                } else {
-                    nearby = Some(word.written.as_str());
-                }
+                fuzzy.push(Candidate { range: start..offset, written: word.written });
                 continue;
             }
             // Three common leading letters and the same ending make a one-
@@ -162,28 +199,136 @@ pub(crate) fn apply_with_protected(
             {
                 continue;
             }
-            if nearby.is_some() {
-                ambiguous = true;
-            } else {
-                nearby = Some(word.written.as_str());
-            }
+            fuzzy.push(Candidate { range: start..offset, written: word.written });
         }
-        output.push_str(
-            exact
-                .or(if ambiguous { None } else { nearby })
-                .unwrap_or(candidate),
-        );
-        if output.len() > text.len().saturating_add(MAX_EXPANSION_BYTES) {
-            return text.to_string();
+        // A guessed spelling must be a whole word: letters joined to a
+        // combining mark, symbol or another script are left alone.
+        if fuzzy.len() > first_fuzzy
+            && !sound_alike::is_stem(text, start, offset)
+        {
+            fuzzy.truncate(first_fuzzy);
         }
     }
-    output
+    if let Some((gate, joins)) = sound.filter(|(gate, _)| gate.is_open()) {
+        let terms = sound_alike::Terms::new(&eligible);
+        if !terms.is_empty() {
+            let baseline = fuzzy.len();
+            sound_alike::candidates(
+                text,
+                &sound_alike::tokens(text),
+                &terms,
+                gate,
+                joins,
+                |start, end| guard.allows(start, end),
+                &mut fuzzy,
+            );
+            // A one-edit or alias match wins over any sound-alike guess
+            // for the same words.
+            if baseline > 0 {
+                let mut spelled: Vec<Range<usize>> = fuzzy[..baseline].iter().map(|c| c.range.clone()).collect();
+                spelled.sort_unstable_by_key(|range| range.start);
+                spelled.dedup_by(|next, kept| {
+                    let overlaps = next.start < kept.end;
+                    if overlaps {
+                        kept.end = kept.end.max(next.end);
+                    }
+                    overlaps
+                });
+                let mut kept = baseline;
+                for index in baseline..fuzzy.len() {
+                    let guess = &fuzzy[index].range;
+                    let after = spelled.partition_point(|range| range.end <= guess.start);
+                    if spelled.get(after).is_none_or(|range| guess.end <= range.start) {
+                        fuzzy.swap(kept, index);
+                        kept += 1;
+                    }
+                }
+                fuzzy.truncate(kept);
+            }
+        }
+    }
+    resolve(&mut hard, fuzzy);
+
+    // Bound the whole output, not each edit, so a later shrinking edit can
+    // offset an earlier growing one.
+    let removed: usize = hard.iter().map(|candidate| candidate.range.len()).sum();
+    let Some(output_len) = hard
+        .iter()
+        .try_fold(text.len() - removed, |len, candidate| len.checked_add(candidate.written.len()))
+        .filter(|&len| len <= text.len().saturating_add(MAX_EXPANSION_BYTES))
+    else {
+        return (text.to_string(), protected.to_vec());
+    };
+    let mut output = String::with_capacity(output_len);
+    let mut matched_ranges = Vec::with_capacity(hard.len() + protected.len());
+    let mut edits = Vec::with_capacity(hard.len());
+    let mut copied = 0;
+    for candidate in &hard {
+        output.push_str(&text[copied..candidate.range.start]);
+        let output_start = output.len();
+        output.push_str(candidate.written);
+        matched_ranges.push(output_start..output.len());
+        edits.push((candidate.range.end, output.len()));
+        copied = candidate.range.end;
+    }
+    output.push_str(&text[copied..]);
+    // Explicit replacements cannot overlap edits because the guard rejected
+    // those matches. Remap their offsets using the last preceding edit.
+    let mut inherited = protected.to_vec();
+    inherited.sort_by_key(|range| range.start);
+    let mut edit_index = 0;
+    let mut delta = 0isize;
+    for range in inherited {
+        while let Some(&(input_end, output_end)) = edits.get(edit_index) {
+            if input_end > range.start {
+                break;
+            }
+            delta = output_end as isize - input_end as isize;
+            edit_index += 1;
+        }
+        matched_ranges
+            .push((range.start as isize + delta) as usize..(range.end as isize + delta) as usize);
+    }
+    matched_ranges.sort_by_key(|range| range.start);
+    (output, matched_ranges)
+}
+
+/// Add each fuzzy cluster that one written form covers whole to `hard`.
+/// Fuzzy proposals overlapping an exact match are dropped. Overlapping
+/// proposals form a cluster; it is applied only if every proposal spanning
+/// the entire cluster names the same listed word, otherwise nothing changes.
+fn resolve<'a>(hard: &mut Vec<Candidate<'a>>, mut fuzzy: Vec<Candidate<'a>>) {
+    fuzzy.retain(|candidate| {
+        let index = hard.partition_point(|exact| exact.range.end <= candidate.range.start);
+        hard.get(index).map_or(true, |exact| exact.range.start >= candidate.range.end)
+    });
+    fuzzy.sort_by_key(|candidate| (candidate.range.start, std::cmp::Reverse(candidate.range.end)));
+    let mut first = 0;
+    while first < fuzzy.len() {
+        let span_start = fuzzy[first].range.start;
+        let mut span_end = fuzzy[first].range.end;
+        let mut next = first + 1;
+        while next < fuzzy.len() && fuzzy[next].range.start < span_end {
+            span_end = span_end.max(fuzzy[next].range.end);
+            next += 1;
+        }
+        let mut covering = fuzzy[first..next]
+            .iter()
+            .filter(|candidate| candidate.range == (span_start..span_end));
+        if let Some(chosen) = covering.next() {
+            if covering.all(|other| other.written == chosen.written) {
+                hard.push(chosen.clone());
+            }
+        }
+        first = next;
+    }
+    hard.sort_by_key(|candidate| candidate.range.start);
 }
 
 fn match_phrase<'a>(
     text: &str,
     start: usize,
-    phrases: &'a [Phrase],
+    phrases: &[Phrase<'a>],
     guard: &ProtectedText,
 ) -> Option<(usize, &'a str)> {
     for phrase in phrases {
@@ -194,7 +339,7 @@ fn match_phrase<'a>(
             && guard.allows(start, end)
             && !compound_component(text, start, end)
         {
-            return Some((end, phrase.written.as_str()));
+            return Some((end, phrase.written));
         }
     }
     None
@@ -202,14 +347,15 @@ fn match_phrase<'a>(
 
 fn exact_name(term: &str) -> bool {
     let chars: Vec<char> = term.chars().collect();
-    chars.iter().enumerate().all(|(index, ch)| {
-        ch.is_alphabetic()
-            || (matches!(ch, ' ' | '-' | '\'' | '‘' | '’')
-                && index > 0
-                && index + 1 < chars.len()
-                && chars[index - 1].is_alphabetic()
-                && chars[index + 1].is_alphabetic())
-    })
+    chars.iter().any(|ch| ch.is_alphabetic())
+        && chars.iter().enumerate().all(|(index, ch)| {
+            ch.is_alphanumeric()
+                || (matches!(ch, ' ' | '-' | '\'' | '‘' | '’')
+                    && index > 0
+                    && index + 1 < chars.len()
+                    && chars[index - 1].is_alphanumeric()
+                    && chars[index + 1].is_alphanumeric())
+        })
 }
 
 fn compound_component(text: &str, start: usize, end: usize) -> bool {

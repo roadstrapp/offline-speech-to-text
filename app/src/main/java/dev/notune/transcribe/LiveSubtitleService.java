@@ -436,7 +436,7 @@ public class LiveSubtitleService extends Service {
         return new Notification.Builder(this, CHANNEL_ID)
                 .setContentTitle("Live Subtitles Active")
                 .setContentText("Recording internal audio...")
-                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                .setSmallIcon(R.drawable.ic_mic)
                 .addAction(new Notification.Action.Builder(null, "Stop", stopPendingIntent).build())
                 .build();
     }

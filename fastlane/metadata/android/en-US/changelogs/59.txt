@@ -1,0 +1,1 @@
+Add optional Bluetooth microphone support with a phone-microphone fallback. Transcribe shared audio and video notes, share or save transcripts, and let other apps request file transcription. Keep caller-supplied audio separate from microphone dictation. Improve request completion, cancellation and resource cleanup.
