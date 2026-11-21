@@ -105,14 +105,57 @@ Establish caller-audio support through a runtime check before the first real cap
 5. A final result confirms that the provider read the descriptor. `ERROR_NO_MATCH` or `ERROR_SPEECH_TIMEOUT` also confirms the read. `ERROR_INSUFFICIENT_PERMISSIONS` or `ERROR_CLIENT` means this route is unsupported; other errors and timeout leave support unknown.
 6. Re-resolve the provider after the probe. Discard the answer if the component or version changed.
 7. Choose caller audio or provider activity before starting `AudioRecord`. Keep the microphone closed until this decision is complete.
+8. Read the provider's [session bound](#session-length-and-its-bound) before recording anything longer than 60 seconds.
 
 Offline Speech to Text currently reports ready, beginning-of-speech, RMS, end-of-speech, final-result, and error callbacks. It does not emit partial-result callbacks. Set `EXTRA_PARTIAL_RESULTS` to `false` and design the UI around a final transcript.
 
 Offline Speech to Text snapshots the private preferred-word list once per transcription. Capable Whisper backends receive a bounded prompt; every model also restores exact preferred words and phrases, including letter-and-digit names and hyphenated and apostrophe-joined names with identical punctuation. It applies conservative close-spelling cleanup to single words and recognizes a few narrowly defined spoken identifier forms after decoding. For English output it also matches words and phrases of up to three spoken words that sound like a preferred word, which can join ordinary words into a listed name. When the language is unknown, single words need the English-text check and phrases join only common English words. No match spans a point where long-audio windows were joined without overlapping text. For English output, standalone “uh” and “um” fillers are removed after dictionary processing. Output counts as English when the model or language setting says so, or when the transcript passes the English-text check (at least two English-only function words making up a quarter of its words); other output is unchanged. All-capital UH and UM, quoted text, code and paths remain literal. A preferred UH or UM entry also preserves and capitalizes its lowercase matches. Exact correction sources match the raw transcript, so a source containing an intervening filler must include it. The multilingual Parakeet v3 model does not report a detected language in Auto mode, so there cleanup relies on that transcript check; short utterances may lack the evidence, and selecting English in OSTT's model-language setting removes the doubt. If the user enables advanced exact correction pairs, they run first on the final assembled transcript so an explicit rule wins over a preferred match or close-spelling guess. Every activity, recognition-service, file, subtitle, long-recording, and IME result receives the same final processing. Whisper hints and cleanup derive from one immutable word-list read per complete job. Exact replacements and matched preferred terms stay protected through later cleanup, with protection offsets updated after spelling changes; each pass also checks the whole match against quotes, code, URLs, email addresses, and dotted identifiers. OSTT supplies the complete cleanup pass for integrators. This is bounded English sound-alike matching after recognition, not decoder phrase boosting, and dictionary contents are never exposed to callers or diagnostic logs.
 
-Long caller-audio sessions remain one ordinary recognition request. OSTT keeps the supplied PCM as one continuous utterance and calls the standard final `onResults` only after the writer closes or the caller stops listening. Caller audio is decoded like a shared file while it arrives: in the model's bounded windows (one minute for Whisper), split at quiet points with overlapping text reconciliation, so a short recording is one model run. An ordinary hesitation is never used as an app-level endpoint. Do not enable `EXTRA_SEGMENTED_SESSION` or concatenate partial callbacks. `cancel()` discards the captured utterance.
+### Session length and its bound
 
-A caller-audio session is bounded to 60 seconds of wall-clock time from `startListening`, however fast the PCM arrives. When that bound passes before the writer closes, OSTT stops reading and finalizes only the audio already received, so the transcript can miss the rest of a longer stream. Before the first PCM byte, an open writer may stay silent until that bound (for example while the caller buffers its own recording); once PCM has started, 10 seconds without a byte ends the input and finalizes the audio received. Closing the writer ends the input at once. Pending PCM is bounded to two minutes (about 7.7 MB), with backpressure when decoding falls behind; consumed windows are discarded apart from their reconciliation overlap. A fast writer cannot grow the queue without bound. To transcribe a saved recording, pass it as a file through `EXTRA_AUDIO_URI` instead; that path decodes with bounded memory and has no duration or wall-clock cap.
+A caller-audio session is one ordinary recognition request for as long as audio keeps arriving. The caller streams PCM while the user speaks, OSTT transcribes it into private state as it arrives, and the standard final `onResults` carries the whole text once, after the input ends. The input ends in exactly these ways:
+
+| End of input | Result |
+|---|---|
+| The writer closes the pipe | Everything written is transcribed |
+| `stopListening()` | PCM already readable is drained (up to 500 ms), then transcribed |
+| `cancel()` | Nothing is delivered |
+| No byte for 10 seconds after audio started, or no first byte for 60 seconds | The audio received is transcribed |
+| 60 minutes after `startListening` | OSTT stops reading; the audio received is transcribed |
+
+Silence is PCM like any other audio. A pause of any length inside a stream that keeps delivering buffers ends neither the session nor the utterance; no silence-based endpoint and no **Stop after silence** applies to caller audio. Do not enable `EXTRA_SEGMENTED_SESSION` or concatenate partial callbacks. The two no-data limits exist so that a caller that died or forgot the descriptor cannot hold the recognizer. A running recorder delivers a buffer every few tens of milliseconds, so ten seconds without one is a stalled writer, not a pause. A caller that suspends capture but wants to keep the session writes zeros meanwhile. Bytes already waiting in the pipe are never counted as a stall. Before the first byte the limit is longer because a caller may buffer its own recording first.
+
+The 60-minute bound is absolute and counts from `startListening`, however fast the PCM arrives. It only stops a writer that never ends from holding the request slot; memory does not grow with the session. OSTT versions without the declaration below stop reading 60 seconds after `startListening` and silently transcribe only that first minute, so read the bound before recording. The recognition service declares it in seconds:
+
+```xml
+<meta-data
+    android:name="app.offlinespeechtotext.capability.CALLER_AUDIO_MAX_SECONDS"
+    android:value="3600" />
+```
+
+```kotlin
+const val CALLER_AUDIO_MAX_SECONDS =
+    "app.offlinespeechtotext.capability.CALLER_AUDIO_MAX_SECONDS"
+
+/** Longest caller-audio session the pinned OSTT service reads, in seconds. */
+fun callerAudioMaxSeconds(context: Context, component: ComponentName): Int {
+    val service = try {
+        context.packageManager.getServiceInfo(component, PackageManager.GET_META_DATA)
+    } catch (missing: PackageManager.NameNotFoundException) {
+        return 0
+    }
+    // OSTT builds without the entry stop reading after 60 seconds.
+    return service.metaData?.getInt(CALLER_AUDIO_MAX_SECONDS, 60) ?: 60
+}
+```
+
+The value needs no request and no running service; the `<queries>` entry above already makes the service visible. Read it for the pinned component whenever the provider's version changes. Keep each session shorter than the value. For a longer recording, close the writer at a pause before the bound and start the next request for the audio that follows. The value does not replace the probe: it says how long a session may be, not that this device lets the caller use the route.
+
+Caller audio is decoded like a shared file while it arrives: in the model's bounded windows (one minute for Whisper), split at quiet points with overlapping text reconciliation, so a short recording is one model run. Each complete window is decoded as soon as the audio after it has arrived. When the input ends, only the last, incomplete window is left to decode: at most one window of audio, however long the session was. An ordinary hesitation is never used as an app-level endpoint and never creates a window. A window is cut only by the model's bound, at the quietest point of its last ten seconds, and the next window repeats the three seconds before the cut so that the repeated words can be reconciled. When those three seconds hold no speech, because a long pause reaches the cut, the two texts share no words: they are joined with a space, no word is dropped, and the earlier text keeps the punctuation the model gave its end. A long pause inside one window is passed to the model as recorded. `cancel()` discards the captured utterance.
+
+Pending PCM is bounded to two minutes (about 7.7 MB), with backpressure when decoding falls behind; consumed windows are discarded apart from their reconciliation overlap. A fast writer cannot grow the queue without bound; it waits. A live writer cannot wait: with a model slower than real time the queue eventually fills, OSTT stops reading until a window is decoded, and the pipe fills. The caller's capture side must then drop or buffer audio, as the sample below does, and should count what it dropped. `stopListening()` still works in that state: its drain may queue up to 30 more seconds of audio. To transcribe a saved recording, pass it as a file through `EXTRA_AUDIO_URI` instead; that path decodes with bounded memory and has no duration or wall-clock cap.
+
+OSTT shows no notification and holds no wake lock for a recognition request; it works while the caller's `SpeechRecognizer` is connected. The caller owns the capture, so the caller runs the microphone foreground service described under [Lifecycle and result safety](#lifecycle-and-result-safety) when a session continues with the screen off. Hold a partial wake lock from `startListening` until `onResults` or `onError`, not only until the writer closes, or the device can suspend before the last window is decoded.
 
 ### Caller-audio completion and errors
 
@@ -130,7 +173,8 @@ A microphone request never cancels a caller-audio request.
 
 Only one background recognition-service request (caller audio or file URI) runs at a time. A second one while the first is
 running is refused with `ERROR_RECOGNIZER_BUSY`; the running one is not
-affected. Retry after the first one finishes. A microphone request made while
+affected. Retry after the first one finishes. A live caller-audio session holds
+that slot until its result, which can be many minutes. A microphone request made while
 OSTT's own keyboard, popup or long recording holds the microphone also gets
 `ERROR_RECOGNIZER_BUSY` (earlier versions answered `ERROR_AUDIO`).
 

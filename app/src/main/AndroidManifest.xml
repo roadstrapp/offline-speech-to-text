@@ -184,6 +184,12 @@
             <meta-data
                 android:name="android.speech"
                 android:resource="@xml/recognition_service" />
+            <!-- Longest EXTRA_AUDIO_SOURCE session, in seconds, for callers to read before
+                 they record (docs/android-integration.md). Builds without this entry stop
+                 reading 60 seconds after startListening. -->
+            <meta-data
+                android:name="app.offlinespeechtotext.capability.CALLER_AUDIO_MAX_SECONDS"
+                android:value="3600" />
         </service>
 
         <!-- Keeps a keyboard dictation recording while the keyboard is hidden -->
