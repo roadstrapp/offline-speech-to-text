@@ -209,6 +209,16 @@ class DocumentationContractTest(unittest.TestCase):
         self.assertIn("No byte for 10 seconds after audio started, or no first byte for 60 seconds", guide)
         self.assertIn("PackageManager.GET_META_DATA", guide)
         self.assertIn("getInt(CALLER_AUDIO_MAX_SECONDS, 60)", guide)
+        # Earlier windows for a live stream: the guide states the rule the queue applies.
+        for constant in ("LIVE_MIN_WINDOW: usize = 12 * 16_000;", "LIVE_PAUSE_FRAMES: usize = 25;",
+                         "LIVE_CUT_INTO_PAUSE: usize = 3_200;", "LIVE_QUIET_ABOVE_FLOOR_DB: f32 = 8.0;",
+                         "LIVE_QUIET_BELOW_SPEECH_DB: f32 = 15.0;", "LIVE_OVERLAP_SPEECH_FRAMES: usize = 75;",
+                         "LIVE_RATE_PERCENT: u64 = 125;", "LIVE_HEAD_START_MS: u64 = 2_000;"):
+            self.assertIn(constant, queue)
+        for expected in ("Once twelve seconds are buffered", "200 ms into the latest pause of at least half a second",
+                         "within 8 dB of the quietest tenth", "15 dB below its loudest frames",
+                         "at most 1.25 times the time it took to arrive", "A cut is not a sentence end"):
+            self.assertIn(expected, guide)
         self.assertIn("bounded to two minutes", guide)
         self.assertIn("up to 30 more seconds", guide)
         self.assertNotIn("bounded to 60 seconds of wall-clock time", guide)
