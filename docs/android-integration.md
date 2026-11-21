@@ -415,6 +415,60 @@ The platform-neutral [caller-audio lifecycle core](examples/CallerAudioSessionCo
 
 A blocked provider reader can fill a pipe. The capture side must therefore be nonblocking or use a bounded queue with a drop/fail policy; an unbounded blocking write can leave the microphone open after Stop or Cancel. Do not log PCM, transcript text, target identifiers, message drafts, or content-derived filenames. Content-free state, duration, byte counts, dropped-byte counts, and error codes are sufficient for diagnosis.
 
+## Preferred words from the caller
+
+A `SpeechRecognizer` caller may send words for one request in the standard `RecognizerIntent.EXTRA_BIASING_STRINGS` extra (an `ArrayList<String>`): names and terms the recognizer is unlikely to know, such as contact names or the words a user added to a keyboard's dictionary. OSTT reads the extra on microphone, caller-audio and file requests alike, and on every Android version: the constant is public from API 33, but its value `"android.speech.extra.BIASING_STRINGS"` is an ordinary extra name. The provider activity and `TRANSCRIBE_AUDIO` do not read it.
+
+The words are merged with the user's own preferred-word list for that one request. They are never stored, never shown in OSTT, never written to logs or diagnostics, and never returned to any caller; the next request starts without them. The user's own list stays private. A caller cannot read it, and a caller's words cannot remove, reorder or override one of its entries: the user's corrections and preferred words are applied first and their matches are protected.
+
+| Limit | Value |
+|---|---|
+| Words per request | The first 1,000 usable entries, in the caller's order |
+| One word or phrase | 80 characters |
+| All accepted words together | 16 KiB of UTF-8 |
+
+Each entry is trimmed and its inner whitespace collapsed. An entry that is empty, longer than 80 characters, or contains a control character or a model control token (`<|`, `|>`) is dropped alone. Entries that repeat an earlier one, ignoring case, count once. Entries past a limit are ignored; OSTT examines at most 4,000 entries. The extra never fails a request.
+
+Order is priority, so send the most important words first:
+
+- A Whisper model receives one prompt of at most 200 bytes per request. The user's own words fill it first, exactly as without the extra; the caller's words follow in the caller's order while they fit, which is usually the first 15 to 25 words when the user's list is short and none when it already fills the prompt. Other models, including Parakeet, take no prompt.
+- After decoding, with every model, the first 128 words are matched like the user's own preferred words: the exact spelling and case are restored, and the same conservative close-spelling cleanup of single words applies. Words after the first 128 only restore their exact spelling and case. With a thousand words listed, a correctly recognized word is too often one letter away from some other listed word.
+- A caller's word is never matched by sound. The English sound-alike matching can join ordinary words into a listed name and stays reserved for the list the user wrote.
+- A word sent without capital letters never changes capitalization, so the start of a sentence stays capitalized and sending ordinary lowercase dictionary words does no harm. A word sent with capitals replaces every whole-word occurrence whatever its case: send `Nostr` or `iPhone`, not `The`.
+
+This is the same bounded cleanup after recognition that the user's own list gets, plus the Whisper prompt. It is not decoder phrase boosting: a word the model did not hear in a close form is not produced.
+
+The recognition service declares how many words a request may carry, so a caller knows before it builds the list whether sending one is worth it:
+
+```xml
+<meta-data
+    android:name="app.offlinespeechtotext.capability.BIASING_STRINGS_MAX_COUNT"
+    android:value="1000" />
+```
+
+```kotlin
+const val BIASING_STRINGS_MAX_COUNT =
+    "app.offlinespeechtotext.capability.BIASING_STRINGS_MAX_COUNT"
+
+/** Words the pinned OSTT service reads per request; 0 when it ignores the extra. */
+fun biasingStringsMaxCount(context: Context, component: ComponentName): Int {
+    val service = try {
+        context.packageManager.getServiceInfo(component, PackageManager.GET_META_DATA)
+    } catch (missing: PackageManager.NameNotFoundException) {
+        return 0
+    }
+    return service.metaData?.getInt(BIASING_STRINGS_MAX_COUNT, 0) ?: 0
+}
+
+/** `words` in priority order. The literal is RecognizerIntent.EXTRA_BIASING_STRINGS. */
+fun Intent.withBiasingWords(words: List<String>, maxCount: Int): Intent =
+    if (maxCount <= 0 || words.isEmpty()) this
+    else putStringArrayListExtra(
+        "android.speech.extra.BIASING_STRINGS", ArrayList(words.take(maxCount)))
+```
+
+OSTT builds without the entry ignore the extra, so it is safe but useless to send. The list travels inside the recognition intent, one Binder transaction of at most about 1 MB for everything in it; a thousand words are a few tens of kilobytes.
+
 ## Existing audio files
 
 OSTT can transcribe an audio file another app already holds, with the same model and final transcript processing as every other path. It opens no microphone and does not record. The caller passes a `content:` Uri and grants read access; OSTT never accepts `file:` Uris. Supported inputs are whatever the device's `MediaExtractor` and `MediaCodec` decode: WAV, AAC/M4A, Ogg/Opus, MP3, AMR, FLAC, and the audio track of MP4, 3GP or WebM video. Decoding streams ten-second blocks through overlapping model windows, so memory stays bounded for any duration. No interactive limit applies: no initial-silence timeout, no **Stop after silence**, and no ten-minute cap. A 25-minute recording is one ordinary request.
