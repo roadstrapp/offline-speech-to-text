@@ -16,12 +16,35 @@ use std::ops::Range;
 pub(crate) mod sound_alike;
 
 const MAX_EXPANSION_BYTES: usize = 4096;
+/// How many of a request's words, in the caller's order, may also replace a close
+/// spelling. It is the size the user's own list is limited to, the size these guesses
+/// were designed and measured for. Later words of a request only restore their exact
+/// spelling: with a thousand ordinary words listed, a correctly recognized word is
+/// too often one edit away from some other listed word.
+pub(crate) const REQUEST_GUESSED_TERMS: usize = 128;
 
 #[derive(Clone)]
 struct Word<'a> {
     written: &'a str,
     folded: Vec<char>,
+    /// A close spelling of this word may be replaced, not only its exact form.
+    guessed: bool,
+    /// A request word written without capitals: it never changes the capitalization
+    /// the recognizer chose (a sentence start stays capitalized).
+    keeps_case: bool,
 }
+
+/// What a list may do. The user's own list restores its written form everywhere.
+#[derive(Clone, Copy)]
+struct Policy {
+    /// Only this many leading terms may replace anything but their exact form.
+    guessed_terms: usize,
+    /// Terms written without capitals leave capitalization alone.
+    lowercase_keeps_case: bool,
+}
+
+const OWN_LIST: Policy = Policy { guessed_terms: usize::MAX, lowercase_keeps_case: false };
+const REQUEST: Policy = Policy { guessed_terms: REQUEST_GUESSED_TERMS, lowercase_keeps_case: true };
 
 struct Phrase<'a> {
     written: &'a str,
@@ -50,7 +73,24 @@ pub(crate) fn apply_with_ranges(
     terms: &[String],
     protected: &[Range<usize>],
 ) -> (String, Vec<Range<usize>>) {
-    apply_inner(text, terms, protected, None)
+    apply_inner(text, terms, protected, None, OWN_LIST)
+}
+
+/// Words another app sent for this one request. Applied after the user's own list,
+/// whose matches arrive in `protected`, so a request can add spellings but never
+/// change or weaken what the user's list did. The first `REQUEST_GUESSED_TERMS`
+/// words are matched like the user's own words and names (exact form, close
+/// spelling, known spoken forms); the rest restore only their exact spelling and
+/// case. No request word is matched by sound: that guess joins ordinary words into a
+/// listed name and is kept for the list the user wrote. A keyboard's dictionary is
+/// mostly ordinary lowercase words, so a word sent without capitals never lowers a
+/// capital the recognizer wrote, for example at the start of a sentence.
+pub(crate) fn apply_request(
+    text: &str,
+    terms: &[String],
+    protected: &[Range<usize>],
+) -> (String, Vec<Range<usize>>) {
+    apply_inner(text, terms, protected, None, REQUEST)
 }
 
 /// As `apply_with_ranges`, also proposing English sound-alike windows that
@@ -63,7 +103,7 @@ pub(crate) fn apply_with_sound_alike(
     gate: sound_alike::Gate,
     joins: &[usize],
 ) -> (String, Vec<Range<usize>>) {
-    apply_inner(text, terms, protected, Some((gate, joins)))
+    apply_inner(text, terms, protected, Some((gate, joins)), OWN_LIST)
 }
 
 fn apply_inner<'a>(
@@ -71,6 +111,7 @@ fn apply_inner<'a>(
     terms: &'a [String],
     protected: &[Range<usize>],
     sound: Option<(sound_alike::Gate, &[usize])>,
+    policy: Policy,
 ) -> (String, Vec<Range<usize>>) {
     if text.is_empty() || terms.is_empty() {
         return (text.to_string(), protected.to_vec());
@@ -80,18 +121,26 @@ fn apply_inner<'a>(
     // Listed words and names a sound-alike window may become.
     let mut eligible = Vec::new();
     let mut seen = HashSet::new();
-    for term in terms {
+    for (index, term) in terms.iter().enumerate() {
         let folded = term.to_lowercase();
         if !seen.insert(folded.clone()) {
+            continue;
+        }
+        let guessed = index < policy.guessed_terms;
+        let keeps_case = policy.lowercase_keeps_case && !term.chars().any(char::is_uppercase);
+        if keeps_case && (!guessed || !term.chars().all(char::is_alphabetic)) {
+            // Its exact form is already written as the caller wants it.
             continue;
         }
         if term.chars().all(char::is_alphabetic) {
             words.push(Word {
                 written: term,
                 folded: folded.chars().collect(),
+                guessed,
+                keeps_case,
             });
             eligible.push(term.as_str());
-            if folded == "npub" {
+            if folded == "npub" && guessed {
                 // Decoder output may split the spoken prefix into two words.
                 // Keep these forms tied to the user's explicit npub entry.
                 for heard in ["en pub", "en pop", "n pub", "n pop", "m pups"] {
@@ -174,8 +223,15 @@ fn apply_inner<'a>(
         for word in &words {
             if word.folded == folded {
                 fuzzy.truncate(first_fuzzy);
-                hard.push(Candidate { range: start..offset, written: word.written });
+                if !word.keeps_case {
+                    hard.push(Candidate { range: start..offset, written: word.written });
+                }
                 break;
+            }
+            if !word.guessed
+                || (word.keeps_case && text[start..].chars().next().is_some_and(char::is_uppercase))
+            {
+                continue;
             }
             // A few spoken identifier forms are too different from their
             // spelling for edit distance to recover. Keep these aliases

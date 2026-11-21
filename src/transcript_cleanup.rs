@@ -10,6 +10,7 @@ impl OutputLanguage {
         }
     }
 }
+#[cfg(test)]
 pub(crate) fn finish(
     raw_text: String,
     language: OutputLanguage,
@@ -21,6 +22,7 @@ pub(crate) fn finish(
 
 /// `joins` are byte offsets in `raw_text` where two recognition results were
 /// concatenated without alignment; no sound-alike window spans one.
+#[cfg(test)]
 pub(crate) fn finish_with_joins(
     raw_text: String,
     language: OutputLanguage,
@@ -28,7 +30,23 @@ pub(crate) fn finish_with_joins(
     corrections: Option<&[crate::personal_corrections::Rule]>,
     joins: &[usize],
 ) -> String {
-    finish_body(raw_text, language, preferred_terms, corrections, joins, |_| {})
+    finish_body(raw_text, language, preferred_terms, corrections, joins, &[], |_| {})
+}
+
+/// The cleanup of every job. `joins` are byte offsets in `raw_text` where two
+/// recognition results were concatenated without alignment; no sound-alike window
+/// spans one. `request_terms` are the words the caller of a recognition-service
+/// request sent for it (`RecognizerIntent.EXTRA_BIASING_STRINGS`), empty otherwise;
+/// they apply after the user's list.
+pub(crate) fn finish_request(
+    raw_text: String,
+    language: OutputLanguage,
+    preferred_terms: Option<&[String]>,
+    corrections: Option<&[crate::personal_corrections::Rule]>,
+    joins: &[usize],
+    request_terms: &[String],
+) -> String {
+    finish_body(raw_text, language, preferred_terms, corrections, joins, request_terms, |_| {})
 }
 
 /// The final text plus the text after corrections and after preferred words.
@@ -41,7 +59,7 @@ pub(crate) fn finish_snapshots(
     joins: &[usize],
 ) -> (String, Vec<String>) {
     let mut snapshots = Vec::new();
-    let text = finish_body(raw_text, language, preferred_terms, corrections, joins, |text| {
+    let text = finish_body(raw_text, language, preferred_terms, corrections, joins, &[], |text| {
         snapshots.push(text.to_string())
     });
     (text, snapshots)
@@ -53,6 +71,7 @@ fn finish_body(
     preferred_terms: Option<&[String]>,
     corrections: Option<&[crate::personal_corrections::Rule]>,
     joins: &[usize],
+    request_terms: &[String],
     mut snapshot: impl FnMut(&str),
 ) -> String {
     let mut joins = joins.to_vec();
@@ -85,6 +104,17 @@ fn finish_body(
         (text, protected)
     };
     snapshot(&text);
+    // The request's own words last: corrections and the user's matches are protected
+    // by now, so a caller's word can only change text the user's rules left alone.
+    let (text, protected) = if request_terms.is_empty() {
+        (text, protected)
+    } else {
+        let (requested, protected) = crate::preferred_terms::apply_request(&text, request_terms, &protected);
+        if requested != text {
+            english_looking = None;
+        }
+        (requested, protected)
+    };
     // Guess only when language evidence is absent; a known non-English language always wins.
     if language == OutputLanguage::English
         || (language == OutputLanguage::Unknown

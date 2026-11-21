@@ -47,6 +47,9 @@ static ACTIVE_THREADS: AtomicI32 = AtomicI32::new(0);
 pub(crate) struct TranscriptionJob {
     run_ext: Option<transcribe_cpp::RunExtension>,
     preferred_terms: Option<Vec<String>>,
+    /// Words the caller of this one request sent (`EXTRA_BIASING_STRINGS`), already
+    /// bounded. They live and die with the job: never stored, logged or returned.
+    request_terms: Vec<String>,
     corrections: Option<Vec<crate::personal_corrections::Rule>>,
     text: String,
     output_language: crate::transcript_cleanup::OutputLanguage,
@@ -63,12 +66,13 @@ pub(crate) struct TranscriptionJob {
 
 impl TranscriptionJob {
     pub(crate) fn finish(self) -> String {
-        crate::transcript_cleanup::finish_with_joins(
+        crate::transcript_cleanup::finish_request(
             self.text,
             self.output_language,
             self.preferred_terms.as_deref(),
             self.corrections.as_deref(),
             &self.joins,
+            &self.request_terms,
         )
     }
 }
@@ -305,15 +309,19 @@ impl Engine {
     }
 
     pub(crate) fn begin_transcription(&self) -> TranscriptionJob {
+        self.begin_request_transcription(&[])
+    }
+
+    /// As `begin_transcription`, for a recognition-service request whose caller sent
+    /// words of its own. They join the user's list for this job only.
+    pub(crate) fn begin_request_transcription(&self, request_terms: &[String]) -> TranscriptionJob {
         // Snapshot once per complete transcription. Only models with prompt
         // support receive a recognition hint, but every model can restore the
         // spelling of a recognized preferred term after decoding. A prompt is
         // not a guarantee that the decoder will use or retain a term.
         let (preferred_terms, corrections) = self.snapshot_cleanup_terms();
         let prompt = if self.supports_initial_prompt {
-            preferred_terms
-                .as_deref()
-                .and_then(crate::custom_terms::compile_prompt)
+            crate::custom_terms::compile_request_prompt(preferred_terms.as_deref(), request_terms)
         } else {
             None
         };
@@ -322,6 +330,7 @@ impl Engine {
         TranscriptionJob {
             corrections,
             preferred_terms,
+            request_terms: request_terms.to_vec(),
             run_ext: self.run_extension(prompt),
             text: String::new(),
             output_language: crate::transcript_cleanup::OutputLanguage::English,
@@ -979,6 +988,7 @@ mod tests {
         let job = |english_output| TranscriptionJob {
             run_ext: None,
             preferred_terms: None,
+            request_terms: Vec::new(),
             corrections: None,
             text: "I uh think so".to_string(),
             output_language: if english_output { crate::transcript_cleanup::OutputLanguage::English }

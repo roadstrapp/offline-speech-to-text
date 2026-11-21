@@ -98,3 +98,30 @@ fn recapitalization_preserves_later_offsets_and_comma_case() {
     assert_eq!(english_fillers::remove_fillers("Uh, ǰump. Uh, next"), "J\u{030c}ump. Next");
     assert_eq!(english_fillers::remove_fillers("He said, Uh, the plan"), "He said, the plan");
 }
+
+#[test]
+fn request_words_apply_after_corrections_and_the_users_words_and_before_fillers() {
+    let rules = personal_corrections::parse("brand => iOS\n").unwrap();
+    let own = vec!["Nostr".to_string()];
+    let request = vec!["IOS".to_string(), "NOSTR".to_string(), "Droneboard".to_string(), "UM".to_string()];
+    let finish = |text: &str, request: &[String]| {
+        transcript_cleanup::finish_request(
+            text.to_string(), OutputLanguage::English, Some(&own), Some(&rules), &[], request)
+    };
+    // The user's correction and word keep their spelling; the request adds its own word,
+    // and a request word protects its match from filler removal like the user's would.
+    assert_eq!(finish("brand uh noster and droneboard um", &request), "iOS Nostr and Droneboard UM");
+    // No request words: the result is the ordinary one.
+    assert_eq!(
+        finish("brand uh noster and droneboard um", &[]),
+        transcript_cleanup::finish_with_joins(
+            "brand uh noster and droneboard um".to_string(), OutputLanguage::English, Some(&own), Some(&rules), &[])
+    );
+    assert_eq!(finish("brand uh noster and droneboard um", &[]), "iOS Nostr and droneboard");
+    // A request alone, without any list of the user's.
+    assert_eq!(
+        transcript_cleanup::finish_request(
+            "open droneboard".to_string(), OutputLanguage::Other, None, None, &[], &request),
+        "open Droneboard"
+    );
+}
