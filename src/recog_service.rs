@@ -49,7 +49,8 @@ use crate::voice_session::{
 const SILENCE_MS: u64 = 1500;
 /// If no speech is ever detected, finalise after this long anyway.
 const NO_SPEECH_TIMEOUT_MS: u64 = 7000;
-/// Hard cap on a single utterance (the engine internally chunks long audio).
+/// Hard cap on a single microphone utterance (the engine internally chunks long audio).
+/// Caller-supplied audio has its own bound, `caller_audio_input::MAX_SESSION_MS`.
 const MAX_SESSION_MS: u64 = 60000;
 /// Throttle interval for `rmsChanged` UI callbacks.
 const LEVEL_UPDATE_MS: u64 = 100;
@@ -768,13 +769,14 @@ fn caller_audio_callback(job: &Arc<CallerJob>, data: &[f32], analyzer: &mut Audi
 
 /// The hard cap bounds how long a caller may keep its input open; it ends the
 /// input (what arrived is still transcribed), as the microphone path's cap does.
+/// A live stream normally ends long before it: by EOF, Stop, Cancel or a stalled writer.
 fn caller_cap_monitor(job: Arc<CallerJob>) {
     loop {
         std::thread::sleep(Duration::from_millis(ENDPOINT_MONITOR_MS));
         if job.cancelled.load(Ordering::SeqCst) || job.input_closed.load(Ordering::SeqCst) {
             return;
         }
-        if job.started_at.elapsed() >= Duration::from_millis(MAX_SESSION_MS) {
+        if job.started_at.elapsed() >= Duration::from_millis(caller_audio_input::MAX_SESSION_MS) {
             // A Stop or no-data claim already made owns the end; its drain still runs.
             caller_audio_input::end_input_on_cap(
                 &job.stop_after_ms,
