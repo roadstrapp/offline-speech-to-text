@@ -136,11 +136,15 @@ public final class BehaviorTest {
         assertEquals(true, model.abis.contains("arm64-v8a")
                         && !model.requiresDotProduct && !model.requiresFp16,
                 "the baseline backend keeps every arm64 model installable");
-        assertEquals(11, ModelCatalog.curatedDownloads().size(), "picker only offers qualified choices");
+        assertEquals(13, ModelCatalog.curatedDownloads().size(), "picker only offers qualified choices");
         Set<String> curated = new HashSet<>();
         for (ModelDescriptor choice : ModelCatalog.curatedDownloads()) curated.add(choice.fileName);
         assertEquals(true, curated.contains("parakeet-tdt-0.6b-v3-Q8_0.gguf"), "owner reference has a verified download");
         assertEquals(true, curated.contains("canary-1b-v2-Q4_K_M.gguf"), "Canary v2 is a default choice");
+        ModelDescriptor ultra = ModelCatalog.findByFileName("parakeet-ultra-Q4_K_M.gguf");
+        assertEquals(true, curated.contains(ultra.fileName) && ultra.supportsLanguage("")
+                        && ultra.supportsLanguage("en") && ultra.supportsLanguage("de"),
+                "Ultra remains usable in Auto and covers both tested languages");
         ModelDescriptor canary = ModelCatalog.findByFileName("canary-1b-v2-Q4_K_M.gguf");
         assertEquals(true, canary.supportsLanguage("de-DE") && canary.supportsLanguage("en"),
                 "Canary v2 lists its 25 European languages");
@@ -157,7 +161,7 @@ public final class BehaviorTest {
                 }
             }
         }
-        assertEquals(54, ModelCatalog.verifiedDownloads().size(),
+        assertEquals(55, ModelCatalog.verifiedDownloads().size(),
                 "every model variant supported by the pinned runtime is downloadable");
         assertEquals(true, ModelCatalog.verifiedDownloads().stream().allMatch(
                         ModelDescriptor::isVerifiedDownload),
@@ -277,8 +281,18 @@ public final class BehaviorTest {
         ModelRecommendation.Result compact = ModelRecommendation.recommend(
                 capable, new ModelRecommendation.Request(
                         "en-US", false, ModelRecommendation.Goal.COMPACT));
-        assertEquals("whisper-tiny.en-Q4_K_M.gguf", compact.model.fileName,
-                "compact English chooses the smallest English Whisper variant");
+        assertEquals("canary-180m-flash-Q4_K_M.gguf", compact.model.fileName,
+                "compact English chooses the measured fast Canary model");
+        assertEquals(compact.model.fileName, ModelRecommendation.recommend(
+                capable, new ModelRecommendation.Request(
+                        "de-DE", false, ModelRecommendation.Goal.COMPACT)).model.fileName,
+                "compact German chooses the same fast model");
+        assertEquals(false, compact.model.supportsLanguage(""),
+                "Canary Flash requires a spoken language");
+        assertEquals("whisper-tiny-Q4_K_M.gguf", ModelRecommendation.recommend(
+                capable, new ModelRecommendation.Request(
+                        "", false, ModelRecommendation.Goal.COMPACT)).model.fileName,
+                "automatic language keeps a model with language detection");
         ModelRecommendation.Result multilingual = ModelRecommendation.recommend(
                 capable, new ModelRecommendation.Request(
                         "zh-CN", false, ModelRecommendation.Goal.MULTILINGUAL));

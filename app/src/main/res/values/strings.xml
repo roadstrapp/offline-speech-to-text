@@ -194,6 +194,7 @@
     <string name="models_catalog_section">Other models</string>
     <string name="models_catalog_desc">Exact GGUF downloads supported by this app version. Filter by family; larger models need more memory and storage.</string>
     <string name="models_catalog_all">All families</string>
+    <string name="models_canary_flash_guidance">%1$s · Choose a spoken language for transcription</string>
     <string name="models_catalog_meta">%1$s · %2$s · SHA-256 verified</string>
     <string name="models_catalog_guidance">%1$s · about %2$s RAM · %3$s</string>
     <string name="models_family_title">%1$s family</string>
@@ -216,7 +217,7 @@
     <string name="models_fit_memory">not enough device memory</string>
     <string name="models_fit_storage">not enough free storage</string>
     <string name="models_goal_balanced">Recommended balance</string>
-    <string name="models_goal_compact">Smallest and fastest</string>
+    <string name="models_goal_compact">Speed and size</string>
     <string name="models_goal_multilingual">Broad language coverage</string>
     <string name="models_goal_translate">Translate speech to English</string>
     <string name="models_goal_quality">Higher accuracy, slower</string>

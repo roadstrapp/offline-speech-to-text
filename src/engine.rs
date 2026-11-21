@@ -125,6 +125,8 @@ impl LanguageDetector {
     }
 }
 
+const CANARY_FLASH_LANGUAGE_REQUIRED: &str = "Choose a supported language for Canary 180M Flash in Speech models.";
+
 /// A loaded transcribe.cpp session plus the options applied to every run.
 pub struct Engine {
     model_path: PathBuf,
@@ -133,6 +135,7 @@ pub struct Engine {
     diagnostic_family: i32,
     session: transcribe_cpp::Session,
     language: Option<String>,
+    requires_language: bool,
     /// Present when the user speaks several languages and the language-ID model is installed.
     detector: Option<LanguageDetector>,
     task: transcribe_cpp::Task,
@@ -196,6 +199,18 @@ impl Engine {
         let language = if language_policy == ModelLanguagePolicy::EnglishOnly {
             Some("en".to_string())
         } else { language };
+        // Canary Flash defaults to English, which can translate German
+        // speech even when the requested task is transcription.
+        let requires_language = model.variant() == "canary-180m-flash";
+        if requires_language && language_policy != ModelLanguagePolicy::Detect {
+            let chosen = language.as_deref().map(crate::language_selection::parse_allowed)
+                .unwrap_or_default();
+            if chosen.len() != 1 || !capabilities.as_ref().is_some_and(|caps|
+                crate::language_selection::supports_all(&caps.languages, &chosen))
+            {
+                return Err(CANARY_FLASH_LANGUAGE_REQUIRED.into());
+            }
+        }
         let ready_status = if language_policy == ModelLanguagePolicy::IgnoresList {
             "Ready (this model ignores Languages I speak)"
         } else if language_policy == ModelLanguagePolicy::EnglishOnly {
@@ -281,6 +296,7 @@ impl Engine {
             },
             session,
             language,
+            requires_language,
             detector,
             task,
             english_only_model,
@@ -575,6 +591,11 @@ impl Engine {
                     return Ok(transcript);
                 }
                 Err(transcribe_cpp::Error::Unsupported(msg)) if detected.is_some() => {
+                    return Err(format!("The speech model rejected the chosen language: {msg}"));
+                }
+                Err(transcribe_cpp::Error::Unsupported(msg))
+                    if self.requires_language && self.language.as_deref().is_some_and(|tag| !tag.contains('-')) =>
+                {
                     return Err(format!("The speech model rejected the chosen language: {msg}"));
                 }
                 Err(transcribe_cpp::Error::Unsupported(msg)) if self.language.is_some() => {
@@ -913,7 +934,7 @@ fn do_load(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
             }
             Err(e) => {
                 log::error!("Imported model {} failed to load: {}", path.display(), e);
-                if allowed_languages.len() >= 2 {
+                if allowed_languages.len() >= 2 || e == CANARY_FLASH_LANGUAGE_REQUIRED {
                     notify_status(env, context, &format!("Error: {}", e));
                     return Err(e);
                 }

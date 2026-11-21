@@ -11,6 +11,7 @@ import java.util.Locale;
  * Offline catalog for exact model artifacts supported by transcribe.cpp 0.4.2.
  */
 public final class ModelCatalog {
+    static final String CANARY_FLASH_FILE = "canary-180m-flash-Q4_K_M.gguf";
     private static final long MIB = 1024L * 1024L;
     private static final String RUNTIME = "transcribe.cpp 0.4.2";
     private static final LinkedHashSet<String> PARAKEET_V3_LANGUAGES =
@@ -129,7 +130,8 @@ public final class ModelCatalog {
         // One mobile-oriented quantization for every model variant in the
         // pinned runtime's model documentation. Larger variants remain visible
         // with their exact size instead of being silently hidden.
-        add(models, "Canary", "canary-180m-flash-gguf", "456e6049062ecf06f1a0f4607f2ee3dc80ebbf8a", "canary-180m-flash-Q4_K_M.gguf", 139223744L, "c8ae5758d7d4dc59c48d816474a33544e362ca52c635f96ee0b4b95e1b48f90c");
+        add(models, "Parakeet", "parakeet-ultra-gguf", "a1539be1b849ea7463b88343e5277b373d0c4ea9", "parakeet-ultra-Q4_K_M.gguf", 486280096L, "c69b7a5f9071a7afd8a1818ef7ae542c386c4b01ed0cac380c19a99947646bf9");
+        add(models, "Canary", "canary-180m-flash-gguf", "456e6049062ecf06f1a0f4607f2ee3dc80ebbf8a", CANARY_FLASH_FILE, 139223744L, "c8ae5758d7d4dc59c48d816474a33544e362ca52c635f96ee0b4b95e1b48f90c");
         add(models, "Canary", "canary-1b-flash-gguf", "ea436b4968b6a4e5b34fbe9a51a961388f1bda71", "canary-1b-flash-Q4_K_M.gguf", 677141280L, "2521a615a2b04ab11900d894e1f5c5a70405d85aa74be0806b569b9cc311a707");
         add(models, "Canary", "canary-1b-gguf", "a44e9c7596fe5e37040bbad8c54fba47f14c992f", "canary-1b-Q4_K_M.gguf", 729686848L, "ded40db7f9d25e992bf35a0c3c3743e1a7c85d0c30bdbbabd46bca932a47353d");
         add(models, "Canary", "canary-1b-v2-gguf", "692af661b140183b60e44f55ad03c59e1e77d078", "canary-1b-v2-Q4_K_M.gguf", 735476448L, "49e0a67e219bec95a254c2348460b6350e75a7ac6f93a131e48244b4c7cb53b9");
@@ -207,7 +209,8 @@ public final class ModelCatalog {
     public static List<ModelDescriptor> curatedDownloads() {
         java.util.Set<String> choices = new LinkedHashSet<>(Arrays.asList(
                 DefaultModelContract.FILE_NAME, "parakeet-tdt-0.6b-v3-Q8_0.gguf",
-                "parakeet-primeline-Q4_K_M.gguf", "canary-1b-v2-Q4_K_M.gguf",
+                "parakeet-primeline-Q4_K_M.gguf", "parakeet-ultra-Q4_K_M.gguf",
+                CANARY_FLASH_FILE, "canary-1b-v2-Q4_K_M.gguf",
                 "whisper-tiny.en-Q4_K_M.gguf",
                 "whisper-tiny-Q4_K_M.gguf", "whisper-base-Q4_K_M.gguf",
                 "whisper-small-Q4_K_M.gguf", "whisper-medium-Q4_K_M.gguf",
@@ -274,6 +277,15 @@ public final class ModelCatalog {
             languages.add("en");
             streaming = ModelDescriptor.Capability.SUPPORTED;
             translation = ModelDescriptor.Capability.UNSUPPORTED;
+        } else if ("parakeet-ultra-Q4_K_M.gguf".equals(fileName)) {
+            languages.addAll(PARAKEET_V3_LANGUAGES);
+            detection = ModelDescriptor.Capability.SUPPORTED;
+            streaming = ModelDescriptor.Capability.UNSUPPORTED;
+            translation = ModelDescriptor.Capability.UNSUPPORTED;
+        } else if (CANARY_FLASH_FILE.equals(fileName)) {
+            languages.addAll(Arrays.asList("en", "de", "es", "fr"));
+            detection = ModelDescriptor.Capability.UNSUPPORTED;
+            streaming = ModelDescriptor.Capability.UNSUPPORTED;
         } else if ("canary-1b-v2-Q4_K_M.gguf".equals(fileName)) {
             // Same 25 European languages as Parakeet v3 (read from the GGUF's own language
             // list). It has no language detection: the language must be chosen, and without a
@@ -301,7 +313,8 @@ public final class ModelCatalog {
                         || ("Canary".equals(family) && !fileName.contains("qwen"))
                         || fileName.startsWith("nemotron-3.5")
                 ? ModelDescriptor.Capability.SUPPORTED
-                : languages.size() == 1 ? ModelDescriptor.Capability.UNSUPPORTED
+                : (languages.size() == 1 || "parakeet-ultra-Q4_K_M.gguf".equals(fileName))
+                ? ModelDescriptor.Capability.UNSUPPORTED
                 : ModelDescriptor.Capability.UNKNOWN;
         return new ModelDescriptor(
                 id, display, family, RUNTIME, fileName, bytes, sha256,

@@ -457,8 +457,11 @@ public class ModelsActivity extends AppCompatActivity {
                     .setText(ModelPresentation.shortName(model));
             ((TextView) row.findViewById(R.id.txt_download_model_meta)).setText(
                     Formatter.formatShortFileSize(this, model.byteSize));
-            ((TextView) row.findViewById(R.id.txt_download_model_guidance)).setText(
-                    deviceFitLabel(ModelGuidance.fit(model, device)));
+            String guidance = deviceFitLabel(ModelGuidance.fit(model, device));
+            if (ModelCatalog.CANARY_FLASH_FILE.equals(model.fileName)) {
+                guidance = getString(R.string.models_canary_flash_guidance, guidance);
+            }
+            ((TextView) row.findViewById(R.id.txt_download_model_guidance)).setText(guidance);
             row.findViewById(R.id.btn_download_details)
                     .setOnClickListener(v -> showModelDetails(model));
             Button action = row.findViewById(R.id.btn_download_model);
