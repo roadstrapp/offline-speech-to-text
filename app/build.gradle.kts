@@ -25,8 +25,8 @@ android {
         applicationId = "app.offlinespeechtotext"
         minSdk = 26
         targetSdk = 36
-        versionCode = 66
-        versionName = "0.25.0"
+        versionCode = 67
+        versionName = "0.26.0"
         testInstrumentationRunner = "dev.notune.transcribe.AutoStopDeviceInstrumentation"
         buildConfigField("boolean", "HAS_BUNDLED_MODEL", includeBundledModel.toString())
         ndk {
