@@ -177,6 +177,52 @@ class DocumentationContractTest(unittest.TestCase):
         self.assertIn("PCM 16-bit", guide)
         self.assertIn("OsConstants.O_NONBLOCK", guide)
 
+    def test_caller_audio_session_bound_is_declared_documented_and_enforced(self):
+        guide = GUIDE.read_text()
+        manifest = MANIFEST.read_text()
+        native = (ROOT / "src/recog_service.rs").read_text()
+        limits = (ROOT / "src/caller_audio_input.rs").read_text()
+        queue = (ROOT / "src/caller_audio_job.rs").read_text()
+        name = "app.offlinespeechtotext.capability.CALLER_AUDIO_MAX_SECONDS"
+        declared = re.search(
+            r'<meta-data\s+android:name="' + re.escape(name) + r'"\s+android:value="(\d+)"\s*/>', manifest)
+        self.assertIsNotNone(declared, "the recognition service must declare its caller-audio bound")
+        seconds = int(declared.group(1))
+        # The declaration belongs to the recognition service, where callers look for it.
+        service = manifest[manifest.index('android:name=".VoiceRecognitionService"'):]
+        self.assertIn(name, service[:service.index("</service>")])
+        # One native constant enforces exactly the declared bound; the microphone keeps its own.
+        minutes = re.search(r"pub\(crate\) const MAX_SESSION_MS: u64 = (\d+) \* 60_000;", limits)
+        self.assertIsNotNone(minutes)
+        self.assertEqual(seconds, int(minutes.group(1)) * 60)
+        monitor = native[native.index("fn caller_cap_monitor"):native.index("fn decode_caller_audio")]
+        self.assertIn("caller_audio_input::MAX_SESSION_MS", monitor)
+        self.assertIn("const MAX_SESSION_MS: u64 = 60000;", native)
+        self.assertIn("pub(crate) const IDLE_INPUT_MS: u64 = 10_000;", limits)
+        self.assertIn("pub(crate) const FIRST_INPUT_MS: u64 = 60_000;", limits)
+        self.assertIn("pub(crate) const MAX_QUEUED: usize = 120 * 16_000;", queue)
+        self.assertIn("pub(crate) const STOP_DRAIN_EXTRA: usize = 30 * 16_000;", queue)
+        # The guide states the same numbers and shows callers how to read the bound.
+        self.assertEqual(2, guide.count(name + '"'))
+        self.assertIn(f'android:value="{seconds}"', guide)
+        self.assertIn(f"{seconds // 60} minutes after `startListening`", guide)
+        self.assertIn("No byte for 10 seconds after audio started, or no first byte for 60 seconds", guide)
+        self.assertIn("PackageManager.GET_META_DATA", guide)
+        self.assertIn("getInt(CALLER_AUDIO_MAX_SECONDS, 60)", guide)
+        # Earlier windows for a live stream: the guide states the rule the queue applies.
+        for constant in ("LIVE_MIN_WINDOW: usize = 12 * 16_000;", "LIVE_PAUSE_FRAMES: usize = 25;",
+                         "LIVE_CUT_INTO_PAUSE: usize = 3_200;", "LIVE_QUIET_ABOVE_FLOOR_DB: f32 = 8.0;",
+                         "LIVE_QUIET_BELOW_SPEECH_DB: f32 = 15.0;", "LIVE_OVERLAP_SPEECH_FRAMES: usize = 75;",
+                         "LIVE_RATE_PERCENT: u64 = 125;", "LIVE_HEAD_START_MS: u64 = 2_000;"):
+            self.assertIn(constant, queue)
+        for expected in ("Once twelve seconds are buffered", "200 ms into the latest pause of at least half a second",
+                         "within 8 dB of the quietest tenth", "15 dB below its loudest frames",
+                         "at most 1.25 times the time it took to arrive", "A cut is not a sentence end"):
+            self.assertIn(expected, guide)
+        self.assertIn("bounded to two minutes", guide)
+        self.assertIn("up to 30 more seconds", guide)
+        self.assertNotIn("bounded to 60 seconds of wall-clock time", guide)
+
     def test_caller_audio_sample_links_executable_lifecycle_contract(self):
         sample = self._caller_audio_sample()
         guide = GUIDE.read_text()

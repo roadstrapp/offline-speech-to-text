@@ -162,6 +162,15 @@ pub(crate) const IDLE_INPUT_MS: u64 = 10_000;
 /// writer still ends the input at once (EOF/hang-up), and the session cap still applies.
 pub(crate) const FIRST_INPUT_MS: u64 = 60_000;
 
+/// Absolute bound on one caller-audio session, from `startListening`. A live stream is
+/// ended by its writer (EOF), by Stop or Cancel, or by the no-data limits above; this
+/// cap only stops a caller that keeps writing forever from holding the one background
+/// request slot and the CPU. Memory does not depend on it: pending audio is bounded by
+/// the queue and consumed windows are discarded. One hour covers a long dictation or a
+/// meeting, and its transcript (about 60 KB of text) is far below the 1 MB Binder limit
+/// of the single `onResults`. At the cap the audio received so far is still transcribed.
+pub(crate) const MAX_SESSION_MS: u64 = 60 * 60_000;
+
 impl SourceState {
     pub(crate) fn no_data_limit_ms(&self) -> u64 {
         if self.received_data { IDLE_INPUT_MS } else { FIRST_INPUT_MS }
@@ -182,7 +191,15 @@ pub(crate) fn wait_ready(
             return Err(io::Error::from(ErrorKind::TimedOut));
         }
         if !stopping && state.idle_ms >= state.no_data_limit_ms() {
-            return Ok(Readiness::Idle);
+            // The limit is about a writer that sends nothing. Bytes already waiting mean
+            // the reader was the one held up (the queue applies backpressure while
+            // decoding is behind), so they are read instead of ending the input.
+            match poll(0) {
+                Ok(true) => return Ok(Readiness::Readable),
+                Ok(false) => return Ok(Readiness::Idle),
+                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            }
         }
         match poll(if stopping { 0 } else { 100 }) {
             Ok(true) => return Ok(Readiness::Readable),
@@ -217,6 +234,88 @@ mod tests {
         assert!(!end_input(&end_reason, &input_closed, EndReason::Closed, release));
         assert_eq!(releases.load(Ordering::SeqCst), 1);
         assert!(!ended_by_caller(&end_reason));
+    }
+
+    fn open(idle_ms: u64, received_data: bool) -> SourceState {
+        SourceState {
+            cancelled: false,
+            finalized: false,
+            elapsed_ms: idle_ms,
+            stop_after_ms: u64::MAX,
+            idle_ms,
+            received_data,
+        }
+    }
+
+    #[test]
+    fn session_cap_fits_a_live_stream_and_keeps_the_stall_limits_short() {
+        // Long dictation is not cut at one minute any more; a stalled writer still is
+        // ended in seconds, and a writer that never starts within a minute.
+        assert_eq!(MAX_SESSION_MS, 60 * 60_000);
+        assert!(MAX_SESSION_MS >= 30 * 60_000);
+        assert_eq!(IDLE_INPUT_MS, 10_000);
+        assert_eq!(FIRST_INPUT_MS, 60_000);
+        assert!(FIRST_INPUT_MS < MAX_SESSION_MS && IDLE_INPUT_MS < FIRST_INPUT_MS);
+    }
+
+    #[test]
+    fn stalled_writer_ends_the_input_after_one_last_look() {
+        for (idle_ms, received) in [(IDLE_INPUT_MS, true), (FIRST_INPUT_MS, false)] {
+            let mut timeouts = Vec::new();
+            let ready = wait_ready(|| open(idle_ms, received), |timeout| {
+                timeouts.push(timeout);
+                Ok(false)
+            });
+            assert!(matches!(ready.unwrap(), Readiness::Idle));
+            // One non-blocking look, never a wait.
+            assert_eq!(timeouts, [0]);
+        }
+    }
+
+    #[test]
+    fn bytes_waiting_past_the_idle_limit_are_read_not_treated_as_a_stall() {
+        // The reader was blocked by queue backpressure for longer than the limit while
+        // the writer kept writing: the pipe is readable, so the input stays open.
+        let ready = wait_ready(|| open(IDLE_INPUT_MS * 3, true), |timeout| {
+            assert_eq!(timeout, 0);
+            Ok(true)
+        });
+        assert!(matches!(ready.unwrap(), Readiness::Readable));
+        let stop_after_ms = AtomicU64::new(u64::MAX);
+        let ready = wait_ready_or_stop(&stop_after_ms, || open(IDLE_INPUT_MS * 3, true), |_| Ok(true));
+        assert!(matches!(ready.unwrap(), Readiness::Readable));
+        // Nothing claimed the end: Stop, the cap or a later real stall still can.
+        assert_eq!(stop_after_ms.load(Ordering::SeqCst), u64::MAX);
+    }
+
+    #[test]
+    fn silence_is_data_so_a_long_pause_keeps_a_live_stream_open() {
+        // Fake clock: a live writer delivers two minutes of zeros (PCM16, 16 kHz) at real
+        // time. No limit looks at what the bytes contain, so the pause ends nothing.
+        use std::cell::Cell;
+        let pcm = vec![0u8; 120 * 32_000];
+        let now = Cell::new(0u64);
+        let last_data = Cell::new(0u64);
+        let mut received = 0usize;
+        let end = drain(
+            pcm.as_slice(),
+            || {
+                wait_ready(
+                    || SourceState { idle_ms: now.get() - last_data.get(), ..open(now.get(), true) },
+                    |_| Ok(true),
+                )
+            },
+            |bytes| {
+                // One read holds this much audio; a real-time writer took that long.
+                now.set(now.get() + bytes.len() as u64 / 32);
+                last_data.set(now.get());
+                received += bytes.len();
+            },
+        )
+        .unwrap();
+        assert!(matches!(end, InputEnd::Closed));
+        assert_eq!(received, pcm.len());
+        assert!(now.get() >= 120_000 - 1);
     }
 
     #[test]
@@ -489,7 +588,11 @@ pub(crate) mod pipe_tests {
             received_data: true,
         };
         assert!(matches!(
-            wait_ready(open, |_| panic!("idle input must not poll")).unwrap(),
+            wait_ready(open, |timeout| {
+                assert_eq!(timeout, 0, "idle input must not wait");
+                Ok(false)
+            })
+            .unwrap(),
             Readiness::Idle
         ));
         // Recent bytes keep the input open and polling.
@@ -518,7 +621,11 @@ pub(crate) mod pipe_tests {
         let ready = wait_ready(|| waiting(IDLE_INPUT_MS * 3), |_| Ok(true));
         assert!(matches!(ready.unwrap(), Readiness::Readable));
         assert!(matches!(
-            wait_ready(|| waiting(FIRST_INPUT_MS), |_| panic!("expired wait must not poll")).unwrap(),
+            wait_ready(|| waiting(FIRST_INPUT_MS), |timeout| {
+                assert_eq!(timeout, 0, "expired wait must not wait");
+                Ok(false)
+            })
+            .unwrap(),
             Readiness::Idle
         ));
     }
@@ -626,7 +733,10 @@ pub(crate) mod pipe_tests {
         let ready = wait_ready_or_stop(
             &stop_after_ms,
             || SourceState { idle_ms: FIRST_INPUT_MS, stop_after_ms: u64::MAX, ..stopped() },
-            |_| panic!("expired wait must not poll"),
+            |timeout| {
+                assert_eq!(timeout, 0, "expired wait must not wait");
+                Ok(false)
+            },
         );
         assert!(matches!(ready.unwrap(), Readiness::Idle));
         assert!(!request_stop(&stop_after_ms, 500));

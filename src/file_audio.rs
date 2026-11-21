@@ -18,6 +18,15 @@ impl Buffer {
         self.samples.drain(..consumed);
         Some(piece)
     }
+    pub(crate) fn samples(&self) -> &[f32] { &self.samples }
+    /// A window that ends at `end`, chosen by the caller instead of the size bound.
+    /// The same overlap stays buffered for reconciliation with the next window.
+    pub(crate) fn take_at(&mut self, end: usize, limit: usize) -> Vec<f32> {
+        let end = end.min(self.samples.len());
+        let piece = self.samples[..end].to_vec();
+        self.samples.drain(..end.saturating_sub(crate::long_audio::overlap_samples(limit)));
+        piece
+    }
     pub(crate) fn finish(&mut self) -> Vec<f32> {
         std::mem::take(&mut self.samples)
     }
