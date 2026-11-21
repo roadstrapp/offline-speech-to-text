@@ -70,12 +70,16 @@ final class FileApiDeviceTest {
      * Measures the existing caller-audio path ({@code EXTRA_AUDIO_SOURCE}) with a long saved
      * recording: {@code minutes} of the public clip streamed through a pipe, unpaced or at
      * {@code pace} times real time, then EOF. Reports timings and the surviving repetitions.
+     * With {@code pauseSeconds}, that much silence is streamed after half of the clips.
+     * A stream paced at real time is a live dictation: it must be read to its end, however
+     * long it lasts, and answered with one result that keeps the speech on both sides of
+     * the pause.
      */
-    static void runCallerAudio(Instrumentation test, int minutes, int pace) {
+    static void runCallerAudio(Instrumentation test, int minutes, int pace, int pauseSeconds) {
         FileApiDeviceTest fixture = new FileApiDeviceTest(test);
         int code = Activity.RESULT_OK;
         try {
-            fixture.callerAudio(minutes, pace);
+            fixture.callerAudio(minutes, pace, pauseSeconds);
             fixture.report.putString("status", "PASS");
         } catch (Throwable error) {
             code = Activity.RESULT_CANCELED;
@@ -87,7 +91,7 @@ final class FileApiDeviceTest {
         test.finish(code, fixture.report);
     }
 
-    private void callerAudio(int minutes, int pace) throws Exception {
+    private void callerAudio(int minutes, int pace, int pauseSeconds) throws Exception {
         check(directory.isDirectory() || directory.mkdirs(), "fixture directory");
         byte[] clip = pcm(copyAsset("file-api-bench.wav"));
         int times = repetitions(clip.length / 2, minutes);
@@ -117,14 +121,17 @@ final class FileApiDeviceTest {
         Thread feeder = new Thread(() -> {
             try (OutputStream out = new ParcelFileDescriptor.AutoCloseOutputStream(pipe[1])) {
                 long t0 = SystemClock.elapsedRealtime();
+                byte[] quiet = new byte[3200];
                 for (int i = 0; i < times && terminal.getCount() > 0; i++) {
+                    // Silence is still PCM: 100 ms buffers of zeros, as a live recorder sends.
+                    for (int n = 0; i == times / 2 && n < pauseSeconds * 10 && terminal.getCount() > 0; n++) {
+                        out.write(quiet);
+                        written[0] += quiet.length;
+                        pace(t0, written[0], pace);
+                    }
                     out.write(clip);
                     written[0] += clip.length;
-                    if (pace > 0) {
-                        long due = t0 + written[0] * 1000L / 32000 / pace;
-                        long wait = due - SystemClock.elapsedRealtime();
-                        if (wait > 0) SystemClock.sleep(wait);
-                    }
+                    pace(t0, written[0], pace);
                 }
             } catch (Exception closedByProvider) {
                 // EPIPE: the provider stopped reading.
@@ -138,11 +145,28 @@ final class FileApiDeviceTest {
         report.putLong("caller_pace", pace);
         report.putLong("caller_error", outcome.error);
         report.putLong("caller_bytes_written", written[0]);
-        report.putLong("caller_bytes_total", (long) clip.length * times);
+        long total = (long) clip.length * times + pauseSeconds * 32000L;
+        long countries = count(words(outcome.text), "country");
+        report.putLong("caller_pause_seconds", pauseSeconds);
+        report.putLong("caller_bytes_total", total);
         report.putLong("caller_write_ms", wroteAt[0] - started);
         report.putLong("caller_result_ms", SystemClock.elapsedRealtime() - started);
-        report.putLong("caller_country_count", count(words(outcome.text), "country"));
+        report.putLong("caller_result_after_eof_ms", SystemClock.elapsedRealtime() - wroteAt[0]);
+        report.putLong("caller_results", outcome.results);
+        report.putLong("caller_country_count", countries);
         report.putLong("caller_expected_count", 2L * times);
+        if (pace == 1) {
+            check(written[0] == total, "live stream was not read to its end");
+            check(outcome.error == 0 && outcome.results == 1, "live stream did not end with one result");
+            // Window joins may cost a word; a dropped minute or a lost side of the pause may not.
+            check(countries * 10 >= 2L * times * 9, "live stream lost speech");
+        }
+    }
+
+    private static void pace(long startedAt, long writtenBytes, int pace) {
+        if (pace <= 0) return;
+        long wait = startedAt + writtenBytes * 1000L / 32000 / pace - SystemClock.elapsedRealtime();
+        if (wait > 0) SystemClock.sleep(wait);
     }
 
     private void runAll(int longMinutes) throws Exception {
@@ -300,6 +324,7 @@ final class FileApiDeviceTest {
         volatile String text;
         volatile int error = TIMEOUT_CODE;
         volatile boolean ready, endOfSpeech;
+        volatile int results;
     }
 
     private RecognitionListener listener(Outcome outcome, CountDownLatch terminal, CountDownLatch any) {
@@ -316,6 +341,7 @@ final class FileApiDeviceTest {
                 ArrayList<String> hypotheses = result.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
                 outcome.text = hypotheses == null || hypotheses.isEmpty() ? "" : hypotheses.get(0);
                 outcome.error = 0;
+                outcome.results++;
                 terminal.countDown();
             }
         };

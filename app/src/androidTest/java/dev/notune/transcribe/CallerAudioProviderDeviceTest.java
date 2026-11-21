@@ -101,7 +101,7 @@ final class CallerAudioProviderDeviceTest {
                 catch (Throwable failure) { feederFailed[0] = true; terminal.countDown(); }
             }, "caller-audio-late-fixture");
             feeder.start();
-            // The 60 s session cap counts from start; input ends about 31 s in.
+            // Input ends about 31 s in, inside the 60 s wait for a caller's first audio.
             if (!terminal.await(28, TimeUnit.SECONDS)) throw new AssertionError("caller service timed out");
             feeder.join(5000);
             if (feeder.isAlive() || feederFailed[0])

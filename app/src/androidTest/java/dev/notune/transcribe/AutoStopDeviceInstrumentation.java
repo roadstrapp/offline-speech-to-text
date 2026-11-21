@@ -39,6 +39,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
     private int fileApiMinutes;
     private int callerAudioMinutes;
     private int callerAudioPace;
+    private int callerAudioPauseSeconds;
     private boolean bluetoothMic;
     private boolean lengthSweep;
     private boolean callerAudioLateStart;
@@ -74,6 +75,8 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
             callerAudioMinutes = Integer.parseInt(arguments.getString("caller_audio_minutes"));
             String pace = arguments.getString("caller_audio_pace");
             callerAudioPace = pace == null ? 0 : Integer.parseInt(pace);
+            String pause = arguments.getString("caller_audio_pause_seconds");
+            callerAudioPauseSeconds = pause == null ? 0 : Integer.parseInt(pause);
         }
         callerAudioOnly = arguments != null && "true".equals(arguments.getString("caller_audio_only"));
         qualifySetup = arguments != null && "true".equals(arguments.getString("qualify_setup"));
@@ -125,7 +128,7 @@ public final class AutoStopDeviceInstrumentation extends Instrumentation {
         if (qualifyPrepared) { ModelQualificationDeviceTest.runPrepared(this); return; }
         if (fileApi) { FileApiDeviceTest.run(this, fileApiMinutes); return; }
         if (callerAudioMinutes > 0) {
-            FileApiDeviceTest.runCallerAudio(this, callerAudioMinutes, callerAudioPace);
+            FileApiDeviceTest.runCallerAudio(this, callerAudioMinutes, callerAudioPace, callerAudioPauseSeconds);
             return;
         }
         if (bluetoothMic) { testBluetoothMic(); return; }
