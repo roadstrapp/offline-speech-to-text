@@ -114,6 +114,8 @@ public class VoiceRecognitionService extends RecognitionService {
             try { callback.error(SpeechRecognizer.ERROR_CLIENT); } catch (RemoteException ignored) {}
             return;
         }
+        // The caller's own words for this request; handed to its native job and nowhere else.
+        String biasingWords = biasingWords(recognizerIntent);
         ParcelFileDescriptor callerAudio = callerAudioSource(recognizerIntent);
         if (hasExtra(recognizerIntent, RecognizerIntent.EXTRA_AUDIO_SOURCE) && callerAudio == null) {
             try { callback.error(SpeechRecognizer.ERROR_CLIENT); } catch (RemoteException ignored) {}
@@ -131,7 +133,7 @@ public class VoiceRecognitionService extends RecognitionService {
                 return;
             }
             NativeCallbacks target = claim(file, callback);
-            startListeningFromFile(recognizerIntent, callback, rejection, target);
+            startListeningFromFile(recognizerIntent, callback, rejection, target, biasingWords);
             return;
         }
         if (callerAudio != null) preemptFinishedCallerJob(callingUid(callback));
@@ -148,7 +150,7 @@ public class VoiceRecognitionService extends RecognitionService {
         if (action == RecognitionSessionPolicy.Action.START_BACKGROUND) {
             NativeCallbacks target = claim(caller, callback);
             Log.i(TAG, "service caller_audio: start");
-            startListeningFromCallerAudio(recognizerIntent, callback, callerAudio, target);
+            startListeningFromCallerAudio(recognizerIntent, callback, callerAudio, target, biasingWords);
             if (caller.callback == callback && caller.generation == target.generation) {
                 watchCallerJob(callback, target.generation, false);
             }
@@ -185,7 +187,7 @@ public class VoiceRecognitionService extends RecognitionService {
         }
 
         try {
-            startListening(target);
+            startListening(target, biasingWords);
             mainHandler.postDelayed(() -> {
                 if (mic.callback == callback && mic.generation == target.generation && !target.readyDelivered) {
                     try { cancelNative(); } catch (Throwable ignored) { }
@@ -312,7 +314,7 @@ public class VoiceRecognitionService extends RecognitionService {
      * that contains one.
      */
     private void startListeningFromCallerAudio(Intent recognizerIntent, Callback callback,
-            ParcelFileDescriptor callerAudio, NativeCallbacks target) {
+            ParcelFileDescriptor callerAudio, NativeCallbacks target, String biasingWords) {
         attributeSessionToCaller(callback);
 
         int fd;
@@ -334,7 +336,8 @@ public class VoiceRecognitionService extends RecognitionService {
                             RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1),
                     recognizerIntent.getIntExtra(
                             RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING,
-                            AudioFormat.ENCODING_PCM_16BIT));
+                            AudioFormat.ENCODING_PCM_16BIT),
+                    biasingWords);
             if (!started) {
                 Log.e(TAG, "service caller_audio: native start failed before any callback");
                 safeError(caller, SpeechRecognizer.ERROR_SERVER);
@@ -385,7 +388,7 @@ public class VoiceRecognitionService extends RecognitionService {
         return 0;
     }
 
-    private void startListeningFromFile(Intent intent, Callback callback, int rejection, NativeCallbacks target) {
+    private void startListeningFromFile(Intent intent, Callback callback, int rejection, NativeCallbacks target, String biasingWords) {
         attributeSessionToCaller(callback);
         if (rejection != 0) {
             safeError(file, rejection);
@@ -395,7 +398,7 @@ public class VoiceRecognitionService extends RecognitionService {
         boolean outputRequested = hasExtra(intent, FileTranscriptionContract.EXTRA_OUTPUT_URI);
         Uri output = outputRequested ? uriExtra(intent, FileTranscriptionContract.EXTRA_OUTPUT_URI) : null;
 
-        FileRequest request = new FileRequest(target);
+        FileRequest request = new FileRequest(target, biasingWords);
         fileRequest = request;
         // Provider calls may block on another process: keep them off the main thread.
         Thread opener = new Thread(() -> request.open(audio, output), "transcribe-file-open");
@@ -432,12 +435,14 @@ public class VoiceRecognitionService extends RecognitionService {
     /** One file request. Every terminal path goes through the request's exact callbacks. */
     private final class FileRequest implements FileTranscription.Listener {
         private final NativeCallbacks target;
+        private final String biasingWords;
         private volatile boolean cancelled;
         private FileTranscription job;
         private ParcelFileDescriptor output;
 
-        FileRequest(NativeCallbacks target) {
+        FileRequest(NativeCallbacks target, String biasingWords) {
             this.target = target;
+            this.biasingWords = biasingWords;
         }
 
         /** Worker thread: separate a missing grant from undecodable audio, then start. */
@@ -457,7 +462,7 @@ public class VoiceRecognitionService extends RecognitionService {
                 }
             }
             FileTranscription created = new FileTranscription(
-                    VoiceRecognitionService.this, audio, false, this);
+                    VoiceRecognitionService.this, audio, false, this, biasingWords);
             synchronized (this) {
                 if (cancelled) {
                     closeQuietly(opened);
@@ -529,6 +534,21 @@ public class VoiceRecognitionService extends RecognitionService {
         }
         @Override public void onFailure(FileTranscriptionContract.Failure failure) {
             finishWithFailure(failure);
+        }
+    }
+
+    /**
+     * The words the caller sent for this request ({@code RecognizerIntent.EXTRA_BIASING_STRINGS},
+     * accepted on every Android version), cleaned and bounded, or null. They are merged with
+     * the user's own preferred words for this one request. They are never stored, shown,
+     * logged or returned, so nothing about them is reported here either.
+     */
+    private static String biasingWords(Intent recognizerIntent) {
+        try {
+            return BiasingWords.sanitize(recognizerIntent.getStringArrayListExtra(BiasingWords.EXTRA));
+        } catch (Throwable t) {
+            // A list of another type, or one that cannot be read, is no list.
+            return null;
         }
     }
 
@@ -792,14 +812,16 @@ public class VoiceRecognitionService extends RecognitionService {
     // --- Native methods (implemented in src/recog_service.rs) ----------------
 
     private native void initNative(VoiceRecognitionService service);
-    private native void startListening(android.content.Context service);
+    /** {@code biasingWords}: one word per line from {@link BiasingWords#sanitize}, or null. */
+    private native void startListening(android.content.Context service, String biasingWords);
     /** False when native code could not start and will deliver nothing for this request. */
     private native boolean startListeningFromAudioSource(
             android.content.Context service,
             int fd,
             int sampleRate,
             int channelCount,
-            int encoding);
+            int encoding,
+            String biasingWords);
     /** Microphone request only. */
     private native void stopListening();
     /** Microphone request only. */

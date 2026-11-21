@@ -55,6 +55,7 @@ final class FileTranscription extends ContextWrapper {
     private final Uri uri;
     private final boolean partials;
     private final Listener listener;
+    private final String biasingWords;
     private final AtomicBoolean started = new AtomicBoolean();
     private final AtomicBoolean decodeStarted = new AtomicBoolean();
     private final AtomicBoolean terminal = new AtomicBoolean();
@@ -67,10 +68,19 @@ final class FileTranscription extends ContextWrapper {
     private boolean readyPending;
 
     FileTranscription(Context base, Uri uri, boolean partials, Listener listener) {
+        this(base, uri, partials, listener, null);
+    }
+
+    /**
+     * {@code biasingWords}: the words a recognition-service caller sent for this request,
+     * as {@link BiasingWords#sanitize} joined them, or null. Held for this job only.
+     */
+    FileTranscription(Context base, Uri uri, boolean partials, Listener listener, String biasingWords) {
         super(base.getApplicationContext() != null ? base.getApplicationContext() : base);
         this.uri = uri;
         this.partials = partials;
         this.listener = listener;
+        this.biasingWords = biasingWords;
     }
 
     /** Starts model loading; decoding follows on its own thread. Call once. */
@@ -81,7 +91,7 @@ final class FileTranscription extends ContextWrapper {
         lastProgressAt = startedAt;
         long created;
         try {
-            created = nativeCreate(this, partials);
+            created = nativeCreate(this, partials, biasingWords);
         } catch (Throwable t) {
             Log.e(TAG, "file job creation failed");
             created = 0;
@@ -247,7 +257,7 @@ final class FileTranscription extends ContextWrapper {
         if (!terminal.get() && !cancelled) fail(FileTranscriptionContract.Failure.ENGINE);
     }
 
-    private static native long nativeCreate(FileTranscription owner, boolean partials);
+    private static native long nativeCreate(FileTranscription owner, boolean partials, String biasingWords);
     private static native void nativeRelease(long handle);
     private static native boolean nativePush(long handle, float[] samples, int length);
     private static native void nativeFinish(long handle);

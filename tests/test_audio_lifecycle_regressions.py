@@ -13,7 +13,7 @@ class AudioLifecycleRegressionTest(unittest.TestCase):
         prefix = source[:source.index("    private static native long nativeCreate")]
         fake = """
     static boolean cancelInCreate; static int released, creates; static long createResult = 7; static FileTranscription owner;
-    private static long nativeCreate(FileTranscription o, boolean p) {
+    private static long nativeCreate(FileTranscription o, boolean p, String words) {
         creates++; owner = o; if (createResult > 0) o.onStatusUpdate("Ready");
         try { Thread.sleep(25); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         if (cancelInCreate) o.cancel();

@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cpal::traits::HostTrait;
-use jni::objects::{GlobalRef, JClass, JObject, JValue};
+use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jint, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 use once_cell::sync::Lazy;
@@ -135,6 +135,8 @@ struct CallerJob {
     /// The one published `EndReason` (0 until the input ends); set by whoever
     /// finalizes the input, and the only source of the tail's priority.
     end_reason: AtomicU8,
+    /// Words the caller sent for this request; see `request_terms`.
+    request_terms: Vec<String>,
     started_at: Instant,
     jvm: Arc<jni::JavaVM>,
     target: GlobalRef,
@@ -209,6 +211,21 @@ fn call_metrics(env: &mut JNIEnv, obj: &JObject, audio_ms: u64, compute_ms: u64)
     }
 }
 
+/// The request's `EXTRA_BIASING_STRINGS`, one word per line as the service joined them
+/// (null when the caller sent none). Bounded and validated again here; never logged.
+fn request_terms(env: &mut JNIEnv, words: &JString) -> Vec<String> {
+    if words.is_null() {
+        return Vec::new();
+    }
+    match env.get_string(words) {
+        Ok(raw) => crate::custom_terms::parse_request_terms(&String::from(raw)),
+        Err(_) => {
+            let _ = env.exception_clear();
+            Vec::new()
+        }
+    }
+}
+
 // --- JNI entry points ---------------------------------------------------------
 
 /// Called from `onCreate`. Warms up the model in the background so the first
@@ -244,7 +261,9 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
     mut env: JNIEnv,
     _class: JClass,
     service: JObject,
+    biasing_words: JString,
 ) {
+    let request_terms = request_terms(&mut env, &biasing_words);
     let jvm = match env.get_java_vm() {
         Ok(vm) => Arc::new(vm),
         Err(_) => return,
@@ -254,7 +273,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
         Err(_) => return,
     };
 
-    let (shared, stream_holder) = match begin_session(&jvm, target) {
+    let (shared, stream_holder) = match begin_session(&jvm, target, request_terms) {
         Some(session) => session,
         None => return,
     };
@@ -346,19 +365,21 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
 /// owner use this engine at all — see the Java side for why the microphone path cannot serve it.
 #[no_mangle]
 pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService_startListeningFromAudioSource(
-    env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
     service: JObject,
     fd: jint,
     sample_rate: jint,
     channel_count: jint,
     encoding: jint,
+    biasing_words: JString,
 ) -> jboolean {
     // JNI_FALSE: nothing was or will be delivered, so Java must end the request itself.
     if fd < 0 {
         return JNI_FALSE;
     }
     let source = File::from_raw_fd(fd);
+    let request_terms = request_terms(&mut env, &biasing_words);
     let jvm = match env.get_java_vm() {
         Ok(vm) => Arc::new(vm),
         Err(_) => {
@@ -405,6 +426,7 @@ pub unsafe extern "system" fn Java_dev_notune_transcribe_VoiceRecognitionService
             first_data_ms: AtomicU64::new(u64::MAX),
             input_end_ms: AtomicU64::new(u64::MAX),
             end_reason: AtomicU8::new(0),
+            request_terms,
             started_at: Instant::now(),
             jvm: jvm.clone(),
             target,
@@ -574,6 +596,7 @@ fn fail_microphone(env: &mut JNIEnv, shared: &Arc<Endpoint>) {
 fn begin_session(
     jvm: &Arc<jni::JavaVM>,
     target: GlobalRef,
+    request_terms: Vec<String>,
 ) -> Option<(Arc<Endpoint>, Arc<Mutex<Option<SendStream>>>)> {
     // A second wrapper start must never replace the process-global owner.
     // Busy, not an audio fault: the keyboard, popup or long recording holds
@@ -593,7 +616,11 @@ fn begin_session(
     }
 
     let now = Instant::now();
-    let background = Arc::new(BackgroundTranscriber::start(jvm.clone(), target.clone()));
+    let background = Arc::new(BackgroundTranscriber::start_with_request_terms(
+        jvm.clone(),
+        target.clone(),
+        request_terms,
+    ));
     let shared = Arc::new(Endpoint {
         audio_buffer: Mutex::new(CaptureBuffer::default()),
         background,
@@ -905,7 +932,7 @@ fn run_caller_decode(job: &Arc<CallerJob>, timing: &mut CallerTiming) -> CallerD
         let eng = engine::get_engine().ok_or_else(|| "model not loaded".to_string())?;
         let setup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let guard = eng.lock().unwrap_or_else(|p| p.into_inner());
-            (guard.file_window_limit(), guard.begin_transcription())
+            (guard.file_window_limit(), guard.begin_request_transcription(&job.request_terms))
         }))
         .map_err(|_| "transcription setup failed unexpectedly".to_string())?;
         Ok((eng, setup))

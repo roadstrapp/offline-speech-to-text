@@ -1103,7 +1103,9 @@ class ReleaseConfigurationTest(unittest.TestCase):
         self.assertIn('transcribe_complete(&eng, &mut job, &audio)', background)
         self.assertIn('let text = job.finish();', background)
         self.assertEqual(engine.count('crate::custom_terms::load_terms(&self.custom_terms_path)'), 1)
-        self.assertIn('and_then(crate::custom_terms::compile_prompt)', engine)
+        # The user's own words are compiled first and unchanged; a request's words follow.
+        self.assertIn('crate::custom_terms::compile_request_prompt(preferred_terms.as_deref(), request_terms)', engine)
+        self.assertIn('own.and_then(compile_prompt)', (ROOT / 'src/custom_terms.rs').read_text())
         self.assertIn('preferred_terms::apply_with_ranges(&text, terms, &protected)', cleanup)
         self.assertLess(engine.index('let (preferred_terms, corrections) = self.snapshot_cleanup_terms()'),
                         engine.index('pub(crate) fn transcribe_into'))

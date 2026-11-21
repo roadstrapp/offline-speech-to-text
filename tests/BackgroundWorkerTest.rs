@@ -101,6 +101,7 @@ struct Control {
     calls: usize,
     decoded_lengths: Vec<usize>,
     refreshes: usize,
+    request_terms: Vec<String>,
     panic_on_refresh: bool,
     entered: bool,
     release: bool,
@@ -161,7 +162,8 @@ mod engine {
             drop(state);
             assert!(!panic, "injected term refresh panic");
         }
-        pub fn begin_transcription(&self) -> TranscriptionJob {
+        pub fn begin_request_transcription(&self, request_terms: &[String]) -> TranscriptionJob {
+            self.control.0.lock().unwrap().request_terms = request_terms.to_vec();
             TranscriptionJob {
                 count: 0,
                 text: String::new(),
@@ -384,6 +386,35 @@ fn panic_after_a_success_discards_mutated_cache_and_decodes_every_word() {
     let (actual, prepared) = finish(&worker, &capture);
     assert_eq!(actual, expected);
     assert_eq!(prepared, 0);
+}
+
+#[test]
+fn request_words_reach_the_one_job_of_their_request_and_no_other() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    let (_, _, control) = setup(None, None, None, false);
+    let words = vec!["Droneboard".to_string(), "Zapstore".to_string()];
+    let worker = background_transcription::BackgroundTranscriber::start_with_request_terms(
+        Arc::new(JavaVM),
+        objects::GlobalRef,
+        words.clone(),
+    );
+    let completion = worker.finish(audio(), 55_000).unwrap();
+    assert!(matches!(
+        completion.recv_timeout(Duration::from_secs(5)).unwrap(),
+        background_transcription::Completion::Finished { .. }
+    ));
+    assert_eq!(control.0.lock().unwrap().request_terms, words);
+    // The next request sent none: nothing is carried over from the previous one.
+    let worker = background_transcription::BackgroundTranscriber::start(
+        Arc::new(JavaVM),
+        objects::GlobalRef,
+    );
+    let completion = worker.finish(audio(), 55_000).unwrap();
+    assert!(matches!(
+        completion.recv_timeout(Duration::from_secs(5)).unwrap(),
+        background_transcription::Completion::Finished { .. }
+    ));
+    assert!(control.0.lock().unwrap().request_terms.is_empty());
 }
 
 #[test]

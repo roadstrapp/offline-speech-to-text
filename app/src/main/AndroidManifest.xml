@@ -190,6 +190,12 @@
             <meta-data
                 android:name="app.offlinespeechtotext.capability.CALLER_AUDIO_MAX_SECONDS"
                 android:value="3600" />
+            <!-- How many RecognizerIntent.EXTRA_BIASING_STRINGS one request may carry, for
+                 callers to read before they send any (docs/android-integration.md). Builds
+                 without this entry ignore the extra. -->
+            <meta-data
+                android:name="app.offlinespeechtotext.capability.BIASING_STRINGS_MAX_COUNT"
+                android:value="1000" />
         </service>
 
         <!-- Keeps a keyboard dictation recording while the keyboard is hidden -->

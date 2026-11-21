@@ -47,6 +47,44 @@ final class CallerAudioProviderDeviceTest {
         }
     }
 
+    /** Words sent with one request ({@code EXTRA_BIASING_STRINGS}) spell that request's
+     * result and no later one. The spellings are ones no model produces by itself, and
+     * the list also carries entries that must be dropped without failing the request. */
+    static void runBiasingWords(Instrumentation fixture) throws Exception {
+        byte[] pcm = benchmarkPcm(fixture);
+        android.content.pm.ServiceInfo service = fixture.getTargetContext().getPackageManager().getServiceInfo(
+                new ComponentName(fixture.getTargetContext(), VoiceRecognitionService.class),
+                android.content.pm.PackageManager.GET_META_DATA);
+        if (service.metaData == null || service.metaData.getInt(BiasingWords.CAPABILITY, 0) != BiasingWords.MAX_WORDS)
+            throw new AssertionError("biasing capability is not declared on the recognition service");
+        ArrayList<String> words = new ArrayList<>();
+        words.add("AmeriCANS");
+        words.add("");
+        words.add("<|notimestamps|>");
+        words.add("COUNtry");
+        for (int index = 0; index < 5000; index++) words.add("filler" + index);
+        SpeechRecognizer[] recognizer = new SpeechRecognizer[1];
+        fixture.runOnMainSync(() -> recognizer[0] = SpeechRecognizer.createSpeechRecognizer(
+                fixture.getTargetContext(), new ComponentName(fixture.getTargetContext(),
+                        VoiceRecognitionService.class)));
+        try {
+            // bench.wav: "and so my fellow americans ask not ... what you can do for your country".
+            Outcome biased = attempt(fixture, recognizer[0], pcm, false, words);
+            if (biased.error != 0 || biased.text == null)
+                throw new AssertionError("biased request error=" + biased.error);
+            if (!biased.text.contains("AmeriCANS") || !biased.text.contains("COUNtry"))
+                throw new AssertionError("request words did not spell the result");
+            Outcome plain = attempt(fixture, recognizer[0], pcm, false);
+            if (plain.error != 0 || plain.text == null)
+                throw new AssertionError("plain request error=" + plain.error);
+            if (plain.text.contains("AmeriCANS") || plain.text.contains("COUNtry"))
+                throw new AssertionError("request words outlived their request");
+        } finally {
+            fixture.runOnMainSync(() -> recognizer[0].destroy());
+            fixture.waitForIdleSync();
+        }
+    }
+
     /** A caller that records into its own buffer first: the descriptor stays open and
      * silent for 30 s, then the benchmark arrives and the writer closes. The request must
      * stay open through the silence and end with exactly one complete result. Returns
@@ -285,6 +323,11 @@ final class CallerAudioProviderDeviceTest {
 
     private static Outcome attempt(Instrumentation fixture, SpeechRecognizer recognizer,
             byte[] pcm, boolean stop) throws Exception {
+        return attempt(fixture, recognizer, pcm, stop, null);
+    }
+
+    private static Outcome attempt(Instrumentation fixture, SpeechRecognizer recognizer,
+            byte[] pcm, boolean stop, ArrayList<String> biasingWords) throws Exception {
         CountDownLatch terminal = new CountDownLatch(1);
         CountDownLatch ready = new CountDownLatch(1);
         java.util.concurrent.atomic.AtomicBoolean feederFailed = new java.util.concurrent.atomic.AtomicBoolean();
@@ -321,6 +364,7 @@ final class CallerAudioProviderDeviceTest {
                         .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, 16000)
                         .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
                         .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT);
+                if (biasingWords != null) intent.putStringArrayListExtra(BiasingWords.EXTRA, biasingWords);
                 recognizer.startListening(intent);
             });
             // A separate producer bounds a stalled service independently of the fixture thread.

@@ -223,6 +223,56 @@ class DocumentationContractTest(unittest.TestCase):
         self.assertIn("up to 30 more seconds", guide)
         self.assertNotIn("bounded to 60 seconds of wall-clock time", guide)
 
+    def test_biasing_words_are_bounded_declared_and_kept_out_of_logs(self):
+        guide = GUIDE.read_text()
+        manifest = MANIFEST.read_text()
+        service = SERVICE.read_text()
+        words = (ROOT / "app/src/main/java/dev/notune/transcribe/BiasingWords.java").read_text()
+        native = (ROOT / "src/custom_terms.rs").read_text()
+        matching = (ROOT / "src/preferred_terms.rs").read_text()
+        name = "app.offlinespeechtotext.capability.BIASING_STRINGS_MAX_COUNT"
+        declared = re.search(
+            r'<meta-data\s+android:name="' + re.escape(name) + r'"\s+android:value="(\d+)"\s*/>', manifest)
+        self.assertIsNotNone(declared, "the recognition service must declare its biasing-word bound")
+        count = int(declared.group(1))
+        recognizer = manifest[manifest.index('android:name=".VoiceRecognitionService"'):]
+        self.assertIn(name, recognizer[:recognizer.index("</service>")])
+        # Java and native code enforce the declared bounds, and the guide states them.
+        self.assertIn(f'CAPABILITY = "{name}"', words)
+        self.assertIn('EXTRA = "android.speech.extra.BIASING_STRINGS"', words)
+        self.assertIn(f"MAX_WORDS = {count};", words)
+        self.assertIn("MAX_TOTAL_BYTES = 16 * 1024;", words)
+        self.assertIn("MAX_EXAMINED = 4 * MAX_WORDS;", words)
+        self.assertIn(f"MAX_REQUEST_TERMS: usize = {count};", native)
+        self.assertIn("MAX_REQUEST_BYTES: usize = 16 * 1024;", native)
+        self.assertIn("REQUEST_GUESSED_TERMS: usize = 128;", matching)
+        self.assertEqual(2, guide.count(name + '"'))
+        self.assertIn(f'android:value="{count}"', guide)
+        for expected in ("EXTRA_BIASING_STRINGS", '"android.speech.extra.BIASING_STRINGS"',
+                         "The first 1,000 usable entries", "16 KiB of UTF-8", "80 characters",
+                         "at most 4,000 entries", "the first 128 words", "at most 200 bytes",
+                         "getInt(BIASING_STRINGS_MAX_COUNT, 0)", "never stored",
+                         "never matched by sound"):
+            self.assertIn(expected, guide)
+        # Every recognition-service route hands the words to its own native job.
+        self.assertIn("startListening(target, biasingWords);", service)
+        self.assertIn("new FileRequest(target, biasingWords)", service)
+        caller = self._method_body(
+            service, "startListeningFromCallerAudio(Intent recognizerIntent, Callback callback,\n"
+                     "            ParcelFileDescriptor callerAudio, NativeCallbacks target, String biasingWords)")
+        self.assertIn("biasingWords);", caller)
+        # The words reach no log, diagnostic record, file or callback.
+        sources = {path: path.read_text() for path in (ROOT / "src").glob("*.rs")}
+        sources.update({path: path.read_text() for path in
+                        (ROOT / "app/src/main/java/dev/notune/transcribe").glob("*.java")})
+        for path, text in sources.items():
+            for line in text.splitlines():
+                if not re.search(r"biasing|request_terms", line, re.IGNORECASE):
+                    continue
+                for sink in ("Log.", "log::", "DiagnosticLog", "println", "troubleshooting",
+                             "std::fs", "File::", "write(", "call_method", "putExtra", "Bundle"):
+                    self.assertNotIn(sink, line, f"{path.name}: caller words must not reach {sink}")
+
     def test_caller_audio_sample_links_executable_lifecycle_contract(self):
         sample = self._caller_audio_sample()
         guide = GUIDE.read_text()
@@ -278,7 +328,7 @@ class DocumentationContractTest(unittest.TestCase):
             self.assertIn(code, guide)
         # The file session is attributed to the caller before any failure is delivered.
         body = self._method_body(
-            service, "startListeningFromFile(Intent intent, Callback callback, int rejection, NativeCallbacks target)")
+            service, "startListeningFromFile(Intent intent, Callback callback, int rejection, NativeCallbacks target, String biasingWords)")
         self.assertLess(body.index("attributeSessionToCaller(callback)"), body.index("safeError(file, rejection)"))
         checks = self._method_body(
             service, "fileRequestRejection(Intent intent, Callback callback, boolean hasCallerAudio)")
