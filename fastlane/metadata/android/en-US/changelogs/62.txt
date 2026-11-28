@@ -1,0 +1,1 @@
+Fix Parakeet dictations that came back empty or cut short at certain recording lengths. Update the speech engine to transcribe.cpp 0.4.2.

@@ -1,0 +1,1 @@
+package dev.notune.transcribe; class NativeLibraries {static void load(){} }

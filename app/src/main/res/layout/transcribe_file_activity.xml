@@ -76,13 +76,44 @@
                 android:textIsSelectable="true" />
         </ScrollView>
 
-        <!-- Copy button (shown after transcription) -->
-        <Button
-            android:id="@+id/btn_copy"
-            android:layout_width="wrap_content"
+        <!-- Result actions (shown after transcription, or with recovered partial text) -->
+        <LinearLayout
+            android:id="@+id/result_actions"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Copy to clipboard"
-            android:visibility="gone" />
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <Button
+                android:id="@+id/btn_copy"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="8dp"
+                android:text="@string/file_copy"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/btn_share"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="8dp"
+                android:text="@string/file_share"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/btn_save"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/file_save"
+                android:visibility="gone" />
+        </LinearLayout>
 
     </LinearLayout>
 

@@ -23,7 +23,7 @@ final class VerifiedModelProvenance {
             return false;
         }
         try {
-            File expectedParent = new File(filesDir, "models").getCanonicalFile();
+            File expectedParent = new File(filesDir, descriptor.auxiliary ? ModelInstaller.AUXILIARY_DIRECTORY : "models").getCanonicalFile();
             if (!expectedParent.equals(model.getCanonicalFile().getParentFile())) return false;
             List<String> lines = Files.readAllLines(
                     marker(filesDir, descriptor.fileName).toPath(), StandardCharsets.UTF_8);
@@ -66,7 +66,7 @@ final class VerifiedModelProvenance {
                 || !model.isFile() || model.length() != descriptor.byteSize) {
             return false;
         }
-        return new File(filesDir, "models").getCanonicalFile()
+        return new File(filesDir, descriptor.auxiliary ? ModelInstaller.AUXILIARY_DIRECTORY : "models").getCanonicalFile()
                 .equals(model.getCanonicalFile().getParentFile());
     }
 
