@@ -177,6 +177,102 @@ class DocumentationContractTest(unittest.TestCase):
         self.assertIn("PCM 16-bit", guide)
         self.assertIn("OsConstants.O_NONBLOCK", guide)
 
+    def test_caller_audio_session_bound_is_declared_documented_and_enforced(self):
+        guide = GUIDE.read_text()
+        manifest = MANIFEST.read_text()
+        native = (ROOT / "src/recog_service.rs").read_text()
+        limits = (ROOT / "src/caller_audio_input.rs").read_text()
+        queue = (ROOT / "src/caller_audio_job.rs").read_text()
+        name = "app.offlinespeechtotext.capability.CALLER_AUDIO_MAX_SECONDS"
+        declared = re.search(
+            r'<meta-data\s+android:name="' + re.escape(name) + r'"\s+android:value="(\d+)"\s*/>', manifest)
+        self.assertIsNotNone(declared, "the recognition service must declare its caller-audio bound")
+        seconds = int(declared.group(1))
+        # The declaration belongs to the recognition service, where callers look for it.
+        service = manifest[manifest.index('android:name=".VoiceRecognitionService"'):]
+        self.assertIn(name, service[:service.index("</service>")])
+        # One native constant enforces exactly the declared bound; the microphone keeps its own.
+        minutes = re.search(r"pub\(crate\) const MAX_SESSION_MS: u64 = (\d+) \* 60_000;", limits)
+        self.assertIsNotNone(minutes)
+        self.assertEqual(seconds, int(minutes.group(1)) * 60)
+        monitor = native[native.index("fn caller_cap_monitor"):native.index("fn decode_caller_audio")]
+        self.assertIn("caller_audio_input::MAX_SESSION_MS", monitor)
+        self.assertIn("const MAX_SESSION_MS: u64 = 60000;", native)
+        self.assertIn("pub(crate) const IDLE_INPUT_MS: u64 = 10_000;", limits)
+        self.assertIn("pub(crate) const FIRST_INPUT_MS: u64 = 60_000;", limits)
+        self.assertIn("pub(crate) const MAX_QUEUED: usize = 120 * 16_000;", queue)
+        self.assertIn("pub(crate) const STOP_DRAIN_EXTRA: usize = 30 * 16_000;", queue)
+        # The guide states the same numbers and shows callers how to read the bound.
+        self.assertEqual(2, guide.count(name + '"'))
+        self.assertIn(f'android:value="{seconds}"', guide)
+        self.assertIn(f"{seconds // 60} minutes after `startListening`", guide)
+        self.assertIn("No byte for 10 seconds after audio started, or no first byte for 60 seconds", guide)
+        self.assertIn("PackageManager.GET_META_DATA", guide)
+        self.assertIn("getInt(CALLER_AUDIO_MAX_SECONDS, 60)", guide)
+        # Earlier windows for a live stream: the guide states the rule the queue applies.
+        for constant in ("LIVE_MIN_WINDOW: usize = 12 * 16_000;", "LIVE_PAUSE_FRAMES: usize = 25;",
+                         "LIVE_CUT_INTO_PAUSE: usize = 3_200;", "LIVE_QUIET_ABOVE_FLOOR_DB: f32 = 8.0;",
+                         "LIVE_QUIET_BELOW_SPEECH_DB: f32 = 15.0;", "LIVE_OVERLAP_SPEECH_FRAMES: usize = 75;",
+                         "LIVE_RATE_PERCENT: u64 = 125;", "LIVE_HEAD_START_MS: u64 = 2_000;"):
+            self.assertIn(constant, queue)
+        for expected in ("Once twelve seconds are buffered", "200 ms into the latest pause of at least half a second",
+                         "within 8 dB of the quietest tenth", "15 dB below its loudest frames",
+                         "at most 1.25 times the time it took to arrive", "A cut is not a sentence end"):
+            self.assertIn(expected, guide)
+        self.assertIn("bounded to two minutes", guide)
+        self.assertIn("up to 30 more seconds", guide)
+        self.assertNotIn("bounded to 60 seconds of wall-clock time", guide)
+
+    def test_biasing_words_are_bounded_declared_and_kept_out_of_logs(self):
+        guide = GUIDE.read_text()
+        manifest = MANIFEST.read_text()
+        service = SERVICE.read_text()
+        words = (ROOT / "app/src/main/java/dev/notune/transcribe/BiasingWords.java").read_text()
+        native = (ROOT / "src/custom_terms.rs").read_text()
+        matching = (ROOT / "src/preferred_terms.rs").read_text()
+        name = "app.offlinespeechtotext.capability.BIASING_STRINGS_MAX_COUNT"
+        declared = re.search(
+            r'<meta-data\s+android:name="' + re.escape(name) + r'"\s+android:value="(\d+)"\s*/>', manifest)
+        self.assertIsNotNone(declared, "the recognition service must declare its biasing-word bound")
+        count = int(declared.group(1))
+        recognizer = manifest[manifest.index('android:name=".VoiceRecognitionService"'):]
+        self.assertIn(name, recognizer[:recognizer.index("</service>")])
+        # Java and native code enforce the declared bounds, and the guide states them.
+        self.assertIn(f'CAPABILITY = "{name}"', words)
+        self.assertIn('EXTRA = "android.speech.extra.BIASING_STRINGS"', words)
+        self.assertIn(f"MAX_WORDS = {count};", words)
+        self.assertIn("MAX_TOTAL_BYTES = 16 * 1024;", words)
+        self.assertIn("MAX_EXAMINED = 4 * MAX_WORDS;", words)
+        self.assertIn(f"MAX_REQUEST_TERMS: usize = {count};", native)
+        self.assertIn("MAX_REQUEST_BYTES: usize = 16 * 1024;", native)
+        self.assertIn("REQUEST_GUESSED_TERMS: usize = 128;", matching)
+        self.assertEqual(2, guide.count(name + '"'))
+        self.assertIn(f'android:value="{count}"', guide)
+        for expected in ("EXTRA_BIASING_STRINGS", '"android.speech.extra.BIASING_STRINGS"',
+                         "The first 1,000 usable entries", "16 KiB of UTF-8", "80 characters",
+                         "at most 4,000 entries", "the first 128 words", "at most 200 bytes",
+                         "getInt(BIASING_STRINGS_MAX_COUNT, 0)", "never stored",
+                         "never matched by sound"):
+            self.assertIn(expected, guide)
+        # Every recognition-service route hands the words to its own native job.
+        self.assertIn("startListening(target, biasingWords);", service)
+        self.assertIn("new FileRequest(target, biasingWords)", service)
+        caller = self._method_body(
+            service, "startListeningFromCallerAudio(Intent recognizerIntent, Callback callback,\n"
+                     "            ParcelFileDescriptor callerAudio, NativeCallbacks target, String biasingWords)")
+        self.assertIn("biasingWords);", caller)
+        # The words reach no log, diagnostic record, file or callback.
+        sources = {path: path.read_text() for path in (ROOT / "src").glob("*.rs")}
+        sources.update({path: path.read_text() for path in
+                        (ROOT / "app/src/main/java/dev/notune/transcribe").glob("*.java")})
+        for path, text in sources.items():
+            for line in text.splitlines():
+                if not re.search(r"biasing|request_terms", line, re.IGNORECASE):
+                    continue
+                for sink in ("Log.", "log::", "DiagnosticLog", "println", "troubleshooting",
+                             "std::fs", "File::", "write(", "call_method", "putExtra", "Bundle"):
+                    self.assertNotIn(sink, line, f"{path.name}: caller words must not reach {sink}")
+
     def test_caller_audio_sample_links_executable_lifecycle_contract(self):
         sample = self._caller_audio_sample()
         guide = GUIDE.read_text()
@@ -211,6 +307,48 @@ class DocumentationContractTest(unittest.TestCase):
                 if depth == 0:
                     return sample[brace + 1:index]
         raise AssertionError(f"unclosed method: {signature}")
+
+    def test_file_contracts_match_source_and_manifest(self):
+        guide = GUIDE.read_text()
+        service = SERVICE.read_text()
+        manifest = MANIFEST.read_text()
+        contract = (ROOT / "app/src/main/java/dev/notune/transcribe/FileTranscriptionContract.java").read_text()
+        job = (ROOT / "app/src/main/java/dev/notune/transcribe/FileTranscription.java").read_text()
+        native = (ROOT / "src/transcribe_file.rs").read_text()
+        for name in ("app.offlinespeechtotext.extra.AUDIO_URI",
+                     "app.offlinespeechtotext.extra.OUTPUT_URI",
+                     "app.offlinespeechtotext.action.TRANSCRIBE_AUDIO"):
+            self.assertIn(f'"{name}"', contract)
+            self.assertIn(name, guide)
+        self.assertIn('android:name="app.offlinespeechtotext.action.TRANSCRIBE_AUDIO"', manifest)
+        self.assertIn("grantUriPermission", guide)
+        self.assertIn("revokeUriPermission", guide)
+        for code in ("ERROR_CLIENT", "ERROR_AUDIO", "ERROR_NO_MATCH", "ERROR_LANGUAGE_UNAVAILABLE",
+                     "ERROR_SERVER", "RESULT_AUDIO_ERROR", "RESULT_NO_MATCH"):
+            self.assertIn(code, guide)
+        # The file session is attributed to the caller before any failure is delivered.
+        body = self._method_body(
+            service, "startListeningFromFile(Intent intent, Callback callback, int rejection, NativeCallbacks target, String biasingWords)")
+        self.assertLess(body.index("attributeSessionToCaller(callback)"), body.index("safeError(file, rejection)"))
+        checks = self._method_body(
+            service, "fileRequestRejection(Intent intent, Callback callback, boolean hasCallerAudio)")
+        self.assertIn("acceptRequest(", checks)
+        # Provider calls stay off the recognition service's main thread.
+        self.assertIn('new Thread(() -> request.open(audio, output)', body)
+        # No interactive limit may end a file job.
+        for interactive in ("MAX_INTERACTIVE_SESSION_MS", "MAX_SESSION_MS", "NO_SPEECH_TIMEOUT_MS",
+                            "AutoStopDelay", "interactive_endpointing"):
+            self.assertNotIn(interactive, job + native)
+        self.assertIn("crate::file_audio::Buffer", native)
+        # Generic binary shares are claimed by SEND only, never by Open with.
+        view = manifest[manifest.index("android.intent.action.VIEW"):]
+        view = view[:view.index("</intent-filter>")]
+        self.assertNotIn("application/octet-stream", view)
+        self.assertIn('android:mimeType="application/octet-stream"', manifest)
+        # Result screen must not be singleTask, or results would not reach the caller.
+        result_activity = manifest[manifest.index('android:name=".TranscribeAudioActivity"'):]
+        result_activity = result_activity[:result_activity.index("</activity>")]
+        self.assertNotIn("launchMode", result_activity)
 
     def test_manifest_supports_documented_entry_points_and_privacy_claim(self):
         readme = README.read_text()

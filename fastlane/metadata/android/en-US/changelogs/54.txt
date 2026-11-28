@@ -1,0 +1,5 @@
+New microphone artwork and accessible keyboard status announcements.
+More reliable model downloads with pinned sources.
+Long dictation no longer gains an unnecessary decode window from final silence padding.
+Dictionary entries with letters and digits now restore their exact spelling. Explicit corrections and preferred terms survive filler cleanup.
+English cleanup removes “um” as well as “uh”, while preserving capitals, quotes, code and paths. Select English for cleanup with multilingual Parakeet.

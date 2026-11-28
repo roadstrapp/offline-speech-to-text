@@ -269,3 +269,122 @@ fn spaced_quotes_and_unknown_compound_names_stay_literal() {
     }
     assert_eq!(apply("helibord’s", &["HeliBoard"]), "HeliBoard’s");
 }
+
+#[test]
+fn mixed_letter_digit_names_restore_only_exact_whole_tokens() {
+    let terms = &["Model7", "B2B", "3D", "RX-7"];
+    assert_eq!(apply("model7 b2b 3d rx-7", terms), "Model7 B2B 3D RX-7");
+    for text in [
+        "model8 model77 b3b 4d rx-8",
+        "premodel7 model7x x3d",
+        "folder/model7 folder\\b2b",
+        "model7.example user@b2b.example",
+        "`model7 b2b`",
+        "model7-variant",
+    ] {
+        assert_eq!(apply(text, terms), text);
+    }
+    assert_eq!(apply("123", &["456"]), "123");
+}
+
+#[test]
+fn greek_phrases_use_the_same_contextual_lowercase_as_single_words() {
+    assert_eq!(apply("ΚΌΣΜΟΣ ΝΈΟΣ", &["Κόσμος Νέος"]), "Κόσμος Νέος");
+    assert_eq!(
+        apply("\"ΚΌΣΜΟΣ ΝΈΟΣ\"", &["Κόσμος Νέος"]),
+        "\"ΚΌΣΜΟΣ ΝΈΟΣ\""
+    );
+}
+
+fn request(input: &str, terms: &[&str]) -> String {
+    preferred_terms::apply_request(
+        input,
+        &terms.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        &[],
+    )
+    .0
+}
+
+#[test]
+fn request_words_restore_spelling_and_fix_close_spellings_like_the_users_own() {
+    assert_eq!(
+        request("we met at droneboard and zapsore in kosice", &["Droneboard", "Zapstore", "Košice"]),
+        "we met at Droneboard and Zapstore in kosice"
+    );
+    assert_eq!(request("send it to satoshi nakamoto", &["Satoshi Nakamoto"]), "send it to Satoshi Nakamoto");
+    assert_eq!(request("my enpub is public", &["npub"]), "my npub is public");
+}
+
+#[test]
+fn request_words_are_never_matched_by_sound() {
+    let terms = ["Nostr", "Tailscale"];
+    assert_eq!(request("I use no stir and tail scale daily", &terms), "I use no stir and tail scale daily");
+}
+
+#[test]
+fn lowercase_request_words_never_lower_a_capital() {
+    // A keyboard dictionary is mostly ordinary lowercase words.
+    let terms = ["ahoj", "dobre", "new york", "e-mail"];
+    assert_eq!(request("Ahoj, mam sa dobre. Dobre!", &terms), "Ahoj, mam sa dobre. Dobre!");
+    assert_eq!(request("We flew to New York. E-mail me.", &terms), "We flew to New York. E-mail me.");
+    // A close spelling is still fixed inside a sentence, and left alone where it is capitalized.
+    assert_eq!(request("it was dobree. Dobree it was", &terms), "it was dobre. Dobree it was");
+}
+
+#[test]
+fn request_words_after_the_first_128_only_restore_their_exact_spelling() {
+    let mut terms: Vec<String> = (0..preferred_terms::REQUEST_GUESSED_TERMS).map(|index| format!("Filler{index}x")).collect();
+    terms.push("Droneboard".to_string());
+    let terms: Vec<&str> = terms.iter().map(String::as_str).collect();
+    assert_eq!(request("droneboard and droneboad", &terms), "Droneboard and droneboad");
+    // The same word among the first 128 also fixes the close spelling.
+    assert_eq!(request("droneboard and droneboad", &["Droneboard"]), "Droneboard and Droneboard");
+}
+
+#[test]
+fn a_thousand_ordinary_request_words_leave_a_long_transcript_alone() {
+    // What a keyboard might send: ordinary words, many of them one edit apart.
+    let stems = ["plan", "desert", "affect", "later", "stat", "form", "cover", "rest", "point", "light"];
+    let endings = ["", "s", "ed", "er", "ing", "ned", "ted", "ion", "ly", "al"];
+    let mut dictionary: Vec<String> = Vec::new();
+    for round in 0..10 {
+        for stem in stems {
+            for ending in endings {
+                dictionary.push(format!("{stem}{ending}{}", "x".repeat(round)));
+            }
+        }
+    }
+    assert_eq!(dictionary.len(), 1000);
+    let sentence = "We planed the desert trip later and covered every point of the plan. ";
+    let transcript = sentence.repeat(1500);
+    let terms: Vec<&str> = dictionary.iter().map(String::as_str).collect();
+    assert_eq!(request(&transcript, &terms), transcript);
+}
+
+#[test]
+fn request_words_never_change_what_the_users_list_or_a_correction_matched() {
+    let own = vec!["Nostr".to_string()];
+    let (text, protected) = preferred_terms::apply_with_ranges("i like noster and nostr", &own, &[]);
+    assert_eq!(text, "i like Nostr and Nostr");
+    // The request spells the same word differently and lists a near miss of it.
+    let request_terms = vec!["NOSTR".to_string(), "Nostra".to_string()];
+    let (text, _) = preferred_terms::apply_request(&text, &request_terms, &protected);
+    assert_eq!(text, "i like Nostr and Nostr");
+    // Without the user's list the request's spelling applies.
+    assert_eq!(request("i like nostr", &["NOSTR"]), "i like NOSTR");
+}
+
+#[test]
+fn a_lowercase_request_word_after_the_first_128_still_blocks_a_close_spelling_guess() {
+    let mut terms = vec!["Nostr".to_string()];
+    terms.extend((1..preferred_terms::REQUEST_GUESSED_TERMS).map(|index| format!("Filler{index}x")));
+    terms.push("nostar".to_string());
+    let terms: Vec<&str> = terms.iter().map(String::as_str).collect();
+    assert_eq!(request("nostar and noster", &terms), "nostar and Nostr");
+}
+
+#[test]
+fn a_lowercase_request_word_never_lowers_a_capital_inside_a_word() {
+    assert_eq!(request("my macBoook broke", &["macbook"]), "my macBoook broke");
+    assert_eq!(request("my macboook broke", &["macbook"]), "my macbook broke");
+}

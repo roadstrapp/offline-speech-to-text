@@ -17,6 +17,7 @@
 
         <TextView
             android:id="@+id/ime_status_text"
+            android:accessibilityLiveRegion="polite"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -24,6 +25,25 @@
             android:textColor="?attr/colorOnSurfaceVariant"
             android:textAppearance="?attr/textAppearanceBodyMedium"
             android:paddingStart="4dp"/>
+
+        <!-- Which microphone carries the recording; tap to switch. Shown while
+             recording when a Bluetooth microphone is usable. -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/ime_mic_source"
+            style="@style/Widget.Material3.Button.TonalButton.Icon"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="40dp"
+            android:paddingStart="12dp"
+            android:paddingEnd="14dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:text="@string/mic_toggle_phone"
+            android:textAppearance="?attr/textAppearanceLabelLarge"
+            android:visibility="gone"
+            app:icon="@drawable/ic_phone_android"
+            app:iconSize="18dp"
+            app:iconPadding="6dp" />
 
     </LinearLayout>
 

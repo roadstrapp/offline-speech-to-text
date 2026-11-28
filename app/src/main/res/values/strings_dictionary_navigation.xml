@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="dictionary_title">Dictionary</string>
+    <string name="dictionary_preferred_words">Preferred words</string>
+    <string name="dictionary_corrections">Corrections</string>
+    <string name="dictionary_how_it_works">How it works</string>
+    <string name="dictionary_correction_item">%1$s → %2$s</string>
+    <string name="dictionary_edit_correction">Edit correction</string>
+    <string name="dictionary_add_correction">Add correction</string>
+    <string name="dictionary_save_correction">Save correction</string>
+    <string name="dictionary_discard_title">Discard changes?</string>
+    <string name="dictionary_discard_message">Your unsaved changes will be lost.</string>
+    <string name="dictionary_keep_editing">Keep editing</string>
+    <string name="dictionary_discard">Discard</string>
+    <string name="dictionary_correction_explanation">Replace a recurring recognition mistake with your wording. Corrections apply after recognition.</string>
+    <string name="dictionary_words_explanation">Add words or phrases you want the app to preserve. Availability depends on the selected model.</string>
+    <string name="dictionary_corrections_unreadable">Saved corrections could not be read. Clear them to start again.</string>
+</resources>

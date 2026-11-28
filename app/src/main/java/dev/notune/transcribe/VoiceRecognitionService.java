@@ -4,6 +4,8 @@ import android.content.ContextParams;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.media.AudioFormat;
+import android.net.Uri;
+import android.os.Process;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -31,6 +33,13 @@ import java.util.ArrayList;
  * <p>The heavy lifting (capture, silence endpointing, model inference) happens in
  * native code ({@code src/recog_service.rs}); this class only bridges the
  * {@link RecognitionService.Callback} to it.
+ *
+ * <p>Two independent request slots: one microphone request and one caller-audio
+ * request ({@link RecognizerIntent#EXTRA_AUDIO_SOURCE}). Caller audio opens no
+ * microphone and is transcribed as background work on the shared engine, so a
+ * long one neither blocks nor is cancelled by a microphone request from another
+ * app (or by OSTT's own keyboard). A second caller-audio request while one runs
+ * receives {@link SpeechRecognizer#ERROR_RECOGNIZER_BUSY}.
  */
 public class VoiceRecognitionService extends RecognitionService {
 
@@ -46,9 +55,33 @@ public class VoiceRecognitionService extends RecognitionService {
         }
     }
 
+    /** Concurrent sessions: one microphone request plus one caller-audio request. */
+    private static final int MAX_SESSIONS = 2;
+
+    private static final int CALLER_JOB_NONE = 0;
+    private static final int CALLER_JOB_INPUT_CLOSED = 2;
+    private static final long CALLER_WATCH_MS = 2_000L;
+
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private volatile Callback mCallback;
-    private volatile TroubleshootingSession troubleshooting;
+
+    /** One request slot. Fields are written on the main thread. */
+    private static final class Slot {
+        final String route;
+        volatile Callback callback;
+        long generation;
+        /** Calling app of the live request, or -1 when unknown (before API 28). */
+        int uid = -1;
+        volatile TroubleshootingSession troubleshooting;
+
+        Slot(String route) {
+            this.route = route;
+        }
+    }
+
+    private final Slot mic = new Slot("microphone");
+    private final Slot caller = new Slot("caller_audio");
+    private final Slot file = new Slot("file");
+    private FileRequest fileRequest;
 
     @Override
     public void onCreate() {
@@ -62,42 +95,200 @@ public class VoiceRecognitionService extends RecognitionService {
         }
     }
 
+    /**
+     * Android 13+ admits at most this many sessions at once (the default is one);
+     * the slots below decide what each may do.
+     */
+    @Override
+    public int getMaxConcurrentSessionsCount() {
+        return MAX_SESSIONS;
+    }
+
     @Override
     protected void onStartListening(Intent recognizerIntent, Callback callback) {
+        try {
+            if (recognizerIntent == null) throw new IllegalArgumentException();
+            recognizerIntent.hasExtra(FileTranscriptionContract.EXTRA_AUDIO_URI);
+            recognizerIntent.getExtras();
+        } catch (RuntimeException malformed) {
+            try { callback.error(SpeechRecognizer.ERROR_CLIENT); } catch (RemoteException ignored) {}
+            return;
+        }
+        // The caller's own words for this request; handed to its native job and nowhere else.
+        String biasingWords = biasingWords(recognizerIntent);
+        ParcelFileDescriptor callerAudio = callerAudioSource(recognizerIntent);
+        if (hasExtra(recognizerIntent, RecognizerIntent.EXTRA_AUDIO_SOURCE) && callerAudio == null) {
+            try { callback.error(SpeechRecognizer.ERROR_CLIENT); } catch (RemoteException ignored) {}
+            return;
+        }
+        if (hasExtra(recognizerIntent, FileTranscriptionContract.EXTRA_AUDIO_URI)) {
+            boolean ambiguous = callerAudio != null;
+            closeQuietly(callerAudio);
+            // Check the request before it may take over a finished caller job,
+            // so a request that will fail anyway never costs that job its result.
+            int rejection = fileRequestRejection(recognizerIntent, callback, ambiguous);
+            if (rejection == 0) preemptFinishedCallerJob(callingUid(callback));
+            if (file.callback != null || caller.callback != null) {
+                refuseBusy("file", file.callback != null ? file : caller, callback);
+                return;
+            }
+            NativeCallbacks target = claim(file, callback);
+            startListeningFromFile(recognizerIntent, callback, rejection, target, biasingWords);
+            return;
+        }
+        if (callerAudio != null) preemptFinishedCallerJob(callingUid(callback));
+        Callback previous = mic.callback;
+        RecognitionSessionPolicy.Action action = RecognitionSessionPolicy.admit(
+                callerAudio != null, caller.callback != null || file.callback != null,
+                previous != null && previous != callback);
+        if (action == RecognitionSessionPolicy.Action.REFUSE_BUSY) {
+            // One caller-audio job at a time; never cancel the running one.
+            closeQuietly(callerAudio);
+            refuseBusy("caller_audio", caller.callback != null ? caller : file, callback);
+            return;
+        }
+        if (action == RecognitionSessionPolicy.Action.START_BACKGROUND) {
+            NativeCallbacks target = claim(caller, callback);
+            Log.i(TAG, "service caller_audio: start");
+            startListeningFromCallerAudio(recognizerIntent, callback, callerAudio, target, biasingWords);
+            if (caller.callback == callback && caller.generation == target.generation) {
+                watchCallerJob(callback, target.generation, false);
+            }
+            return;
+        }
+
         // Android can deliver a replacement request before the dead caller's
         // cancellation reaches us (for example during a fast app/editor
-        // switch). Retire native work first so the new request never receives
-        // a false ERROR_AUDIO from the stale process-wide owner.
-        mCallback = null;
-        finishTroubleshooting("cancel");
+        // switch). Retire the previous microphone request first so the new one
+        // never receives a false error from the stale process-wide owner, and
+        // tell the replaced caller (busy, as a refused request is told) so it
+        // never waits for a result that cannot come. A caller-audio job in the
+        // other slot is left alone.
+        retire(mic, "replaced");
         try {
             cancelNative();
         } catch (Throwable t) {
             Log.e(TAG, "stale-session cleanup failed", t);
         }
-        mCallback = callback;
-
-        ParcelFileDescriptor callerAudio = callerAudioSource(recognizerIntent);
-        troubleshooting = TroubleshootingSession.start(this, "service",
-                callerAudio == null ? "microphone" : "caller_audio");
-        if (callerAudio != null) {
-            startListeningFromCallerAudio(recognizerIntent, callback, callerAudio);
-            return;
+        if (action == RecognitionSessionPolicy.Action.REPLACE_MICROPHONE) {
+            Log.i(TAG, "service microphone: replacing the previous request (busy sent to it)");
+            DiagnosticLog.recognizerError(getFilesDir(), SpeechRecognizer.ERROR_RECOGNIZER_BUSY);
+            try { previous.error(SpeechRecognizer.ERROR_RECOGNIZER_BUSY); } catch (RemoteException ignored) {}
         }
+        NativeCallbacks target = claim(mic, callback);
+        Log.i(TAG, "service microphone: start" + (caller.callback != null
+                ? " (caller-audio job keeps running)" : ""));
 
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
             Log.w(TAG, "RECORD_AUDIO not granted — open the app to grant it");
-            safeError(SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS);
+            safeError(mic, SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS);
             return;
         }
 
         try {
-            startListening(this);
+            startListening(target, biasingWords);
+            mainHandler.postDelayed(() -> {
+                if (mic.callback == callback && mic.generation == target.generation && !target.readyDelivered) {
+                    try { cancelNative(); } catch (Throwable ignored) { }
+                    safeError(mic, SpeechRecognizer.ERROR_AUDIO);
+                }
+            }, 15_000L);
         } catch (Throwable t) {
             Log.e(TAG, "startListening failed", t);
-            safeError(SpeechRecognizer.ERROR_CLIENT);
+            safeError(mic, SpeechRecognizer.ERROR_CLIENT);
         }
+    }
+
+    /** Refuses a background request with busy; logcat names the holder, diagnostics stay content-free. */
+    private void refuseBusy(String route, Slot holder, Callback requester) {
+        int requesterUid = callingUid(requester);
+        Log.i(TAG, "service " + route + ": busy, refusing a second request; held by " + holder.route
+                + " for " + appLabel(holder.uid) + ", requested by " + appLabel(requesterUid));
+        try { requester.error(SpeechRecognizer.ERROR_RECOGNIZER_BUSY); } catch (RemoteException ignored) {}
+        DiagnosticLog.recognizerError(getFilesDir(), SpeechRecognizer.ERROR_RECOGNIZER_BUSY);
+    }
+
+    /**
+     * A caller-audio job whose input already ended only has decoding left. A request from a
+     * different app takes over its slot instead of being refused; the old caller hears busy.
+     */
+    private void preemptFinishedCallerJob(int requesterUid) {
+        Callback holder = caller.callback;
+        if (holder == null) return;
+        boolean inputClosed;
+        try {
+            inputClosed = callerJobState() == CALLER_JOB_INPUT_CLOSED;
+        } catch (Throwable t) {
+            return;
+        }
+        if (!RecognitionSessionPolicy.mayPreempt(inputClosed, caller.uid, requesterUid)) return;
+        Log.i(TAG, "service caller_audio: input ended, " + appLabel(requesterUid)
+                + " takes over from " + appLabel(caller.uid) + " (busy sent to it)");
+        deliverError(caller, holder, SpeechRecognizer.ERROR_RECOGNIZER_BUSY);
+        try {
+            cancelCallerAudio();
+        } catch (Throwable t) {
+            Log.e(TAG, "cancelCallerAudio failed", t);
+        }
+    }
+
+    /**
+     * Ends a caller-audio request whose native job is gone without a delivered callback, so a
+     * lost result can never hold the slot. Two misses in a row: native clears its job just
+     * before it posts the final callback, which then lands within milliseconds.
+     */
+    private void watchCallerJob(Callback callback, long generation, boolean missedOnce) {
+        mainHandler.postDelayed(() -> {
+            if (caller.callback != callback || caller.generation != generation) return;
+            boolean missing;
+            try {
+                missing = callerJobState() == CALLER_JOB_NONE;
+            } catch (Throwable t) {
+                missing = false;
+            }
+            if (missing && missedOnce) {
+                Log.w(TAG, "service caller_audio: native job ended without a callback");
+                deliverError(caller, callback, SpeechRecognizer.ERROR_SERVER);
+                return;
+            }
+            watchCallerJob(callback, generation, missing);
+        }, CALLER_WATCH_MS);
+    }
+
+    private static int callingUid(Callback callback) {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ? callback.getCallingUid() : -1;
+    }
+
+    /** Logcat-only identity of a calling app; never written to diagnostics. */
+    private String appLabel(int uid) {
+        if (uid < 0) return "unknown app";
+        String name = null;
+        try { name = getPackageManager().getNameForUid(uid); } catch (RuntimeException ignored) {}
+        return (name != null ? name : "unknown") + " (uid " + uid + ")";
+    }
+
+    /** Installs {@code callback} in {@code slot} and returns the exact native target for it. */
+    private NativeCallbacks claim(Slot slot, Callback callback) {
+        ++slot.generation;
+        slot.callback = callback;
+        slot.uid = callingUid(callback);
+        slot.troubleshooting = TroubleshootingSession.start(this, "service", slot.route);
+        return new NativeCallbacks(slot, callback);
+    }
+
+    /** Empties {@code slot}; late native callbacks for its old request are dropped. */
+    private void retire(Slot slot, String reason) {
+        ++slot.generation;
+        slot.callback = null;
+        slot.uid = -1;
+        finishTroubleshooting(slot, reason);
+        if (slot == file) cancelFileRequest();
+    }
+
+    private static void closeQuietly(ParcelFileDescriptor descriptor) {
+        if (descriptor == null) return;
+        try { descriptor.close(); } catch (java.io.IOException ignored) {}
     }
 
     /**
@@ -122,8 +313,8 @@ public class VoiceRecognitionService extends RecognitionService {
      * a microphone-mode heuristic, and applying it to supplied audio would truncate any recording
      * that contains one.
      */
-    private void startListeningFromCallerAudio(
-            Intent recognizerIntent, Callback callback, ParcelFileDescriptor callerAudio) {
+    private void startListeningFromCallerAudio(Intent recognizerIntent, Callback callback,
+            ParcelFileDescriptor callerAudio, NativeCallbacks target, String biasingWords) {
         attributeSessionToCaller(callback);
 
         int fd;
@@ -131,13 +322,13 @@ public class VoiceRecognitionService extends RecognitionService {
             fd = callerAudio.detachFd();
         } catch (Throwable t) {
             Log.e(TAG, "audio source descriptor unusable", t);
-            safeError(SpeechRecognizer.ERROR_AUDIO);
+            safeError(caller, SpeechRecognizer.ERROR_AUDIO);
             return;
         }
 
         try {
-            startListeningFromAudioSource(
-                    this,
+            boolean started = startListeningFromAudioSource(
+                    target,
                     fd,
                     recognizerIntent.getIntExtra(
                             RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, SAMPLE_RATE_HZ),
@@ -145,10 +336,219 @@ public class VoiceRecognitionService extends RecognitionService {
                             RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1),
                     recognizerIntent.getIntExtra(
                             RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING,
-                            AudioFormat.ENCODING_PCM_16BIT));
+                            AudioFormat.ENCODING_PCM_16BIT),
+                    biasingWords);
+            if (!started) {
+                Log.e(TAG, "service caller_audio: native start failed before any callback");
+                safeError(caller, SpeechRecognizer.ERROR_SERVER);
+            }
         } catch (Throwable t) {
             Log.e(TAG, "startListeningFromAudioSource failed", t);
-            safeError(SpeechRecognizer.ERROR_CLIENT);
+            safeError(caller, SpeechRecognizer.ERROR_CLIENT);
+        }
+    }
+
+    /**
+     * Transcribes an existing audio file named by {@link FileTranscriptionContract#EXTRA_AUDIO_URI}.
+     *
+     * <p>The caller grants read access to a {@code content:} Uri before {@code startListening};
+     * nothing here opens a microphone or launches an activity, so a caller running as a
+     * foreground service with the screen locked is served the same way. The session is
+     * attributed to the caller for the same reason as caller-supplied audio: the platform's
+     * RECORD_AUDIO data-delivery note guards a microphone this path never opens.
+     *
+     * <p>Decoding and inference use the bounded file pipeline shared with the share screen,
+     * with no interactive timeout, silence stop or session cap. The final transcript arrives
+     * through {@code onResults}; when {@link FileTranscriptionContract#EXTRA_OUTPUT_URI} is
+     * present it is first written there as UTF-8, and a failed write fails the request.
+     * {@code stopListening} does not end a file request early; {@code cancel} discards it.
+     */
+    /** Returns the error a file request would fail with, or 0 when it can start. */
+    private int fileRequestRejection(Intent intent, Callback callback, boolean hasCallerAudio) {
+        Uri audio = uriExtra(intent, FileTranscriptionContract.EXTRA_AUDIO_URI);
+        boolean outputRequested = hasExtra(intent, FileTranscriptionContract.EXTRA_OUTPUT_URI);
+        Uri output = outputRequested ? uriExtra(intent, FileTranscriptionContract.EXTRA_OUTPUT_URI) : null;
+        boolean callerIsSelf = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                && callback.getCallingUid() == Process.myUid();
+        if (!FileTranscriptionContract.acceptRequest(
+                FileTranscriptionAccess.scheme(audio), FileTranscriptionAccess.isOwnProvider(this, audio),
+                FileTranscriptionAccess.scheme(output), FileTranscriptionAccess.isOwnProvider(this, output),
+                outputRequested && output == null, hasCallerAudio, callerIsSelf)) {
+            return SpeechRecognizer.ERROR_CLIENT;
+        }
+        int uid = callingUid(callback);
+        if (!FileTranscriptionAccess.callerCanAccess(this, audio, uid, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                || (outputRequested && !FileTranscriptionAccess.callerCanAccess(
+                        this, output, uid, Intent.FLAG_GRANT_WRITE_URI_PERMISSION))) {
+            return SpeechRecognizer.ERROR_CLIENT;
+        }
+        if (!SpeechModelInventory.hasUsableModel(getFilesDir(), BuildConfig.HAS_BUNDLED_MODEL)) {
+            return FileTranscriptionContract.recognizerError(FileTranscriptionContract.Failure.NO_MODEL);
+        }
+        return 0;
+    }
+
+    private void startListeningFromFile(Intent intent, Callback callback, int rejection, NativeCallbacks target, String biasingWords) {
+        attributeSessionToCaller(callback);
+        if (rejection != 0) {
+            safeError(file, rejection);
+            return;
+        }
+        Uri audio = uriExtra(intent, FileTranscriptionContract.EXTRA_AUDIO_URI);
+        boolean outputRequested = hasExtra(intent, FileTranscriptionContract.EXTRA_OUTPUT_URI);
+        Uri output = outputRequested ? uriExtra(intent, FileTranscriptionContract.EXTRA_OUTPUT_URI) : null;
+
+        FileRequest request = new FileRequest(target, biasingWords);
+        fileRequest = request;
+        // Provider calls may block on another process: keep them off the main thread.
+        Thread opener = new Thread(() -> request.open(audio, output), "transcribe-file-open");
+        opener.start();
+    }
+
+    private void cancelFileRequest() {
+        FileRequest request = fileRequest;
+        fileRequest = null;
+        if (request != null) request.cancel();
+    }
+
+    private static boolean hasExtra(Intent intent, String name) {
+        try {
+            return intent != null && intent.hasExtra(name);
+        } catch (Throwable t) {
+            // Unparcelable extras from another process make the whole request malformed.
+            return false;
+        }
+    }
+    @SuppressWarnings("deprecation")
+    private static Uri uriExtra(Intent intent, String name) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                return intent.getParcelableExtra(name, Uri.class);
+            }
+            Object value = intent.getParcelableExtra(name);
+            return value instanceof Uri ? (Uri) value : null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** One file request. Every terminal path goes through the request's exact callbacks. */
+    private final class FileRequest implements FileTranscription.Listener {
+        private final NativeCallbacks target;
+        private final String biasingWords;
+        private volatile boolean cancelled;
+        private FileTranscription job;
+        private ParcelFileDescriptor output;
+
+        FileRequest(NativeCallbacks target, String biasingWords) {
+            this.target = target;
+            this.biasingWords = biasingWords;
+        }
+
+        /** Worker thread: separate a missing grant from undecodable audio, then start. */
+        void open(Uri audio, Uri outputUri) {
+            if (!FileTranscriptionAccess.canRead(VoiceRecognitionService.this, audio)) {
+                finishWithFailure(FileTranscriptionContract.Failure.CLIENT);
+                return;
+            }
+            ParcelFileDescriptor opened = null;
+            if (outputUri != null) {
+                // Open before decoding so an unwritable destination fails in milliseconds,
+                // not after a long file has been transcribed. It stays empty until success.
+                opened = FileTranscriptionAccess.openForWrite(VoiceRecognitionService.this, outputUri);
+                if (opened == null) {
+                    finishWithFailure(FileTranscriptionContract.Failure.CLIENT);
+                    return;
+                }
+            }
+            FileTranscription created = new FileTranscription(
+                    VoiceRecognitionService.this, audio, false, this, biasingWords);
+            synchronized (this) {
+                if (cancelled) {
+                    closeQuietly(opened);
+                    return;
+                }
+                output = opened;
+                job = created;
+            }
+            created.start();
+        }
+
+        void cancel() {
+            FileTranscription running;
+            ParcelFileDescriptor pending;
+            synchronized (this) {
+                cancelled = true;
+                running = job;
+                pending = output;
+                job = null;
+                output = null;
+            }
+            if (running != null) running.cancel();
+            closeQuietly(pending);
+        }
+
+        private synchronized ParcelFileDescriptor takeOutput() {
+            ParcelFileDescriptor taken = output;
+            output = null;
+            return taken;
+        }
+
+        private void finishWithFailure(FileTranscriptionContract.Failure failure) {
+            closeQuietly(takeOutput());
+            if (cancelled) return;
+            int outcome = failure == FileTranscriptionContract.Failure.NO_SPEECH ? 2 : 3;
+            if (failure != FileTranscriptionContract.Failure.NO_MODEL
+                    && failure != FileTranscriptionContract.Failure.BUSY
+                    && failure != FileTranscriptionContract.Failure.ENGINE) {
+                target.onRecognitionOutcome(outcome, 0);
+            }
+            target.onError(FileTranscriptionContract.recognizerError(failure));
+        }
+
+        @Override public void onStatus(String status) {
+            target.onStatusUpdate(status);
+        }
+        @Override public void onReady() {
+            if (!cancelled) target.onReadyForSpeech();
+        }
+        @Override public void onPartial(String text) { }
+        @Override public void onProgress(long decodedSamples, long durationUs) { }
+        @Override public void onDecodeComplete() {
+            if (!cancelled) target.onEndOfSpeech();
+        }
+        @Override public void onResult(String text, long audioMs, long computeMs) {
+            ParcelFileDescriptor destination = takeOutput();
+            if (cancelled) {
+                closeQuietly(destination);
+                return;
+            }
+            if (destination != null && !FileTranscriptionAccess.write(destination, text)) {
+                finishWithFailure(FileTranscriptionContract.Failure.CLIENT);
+                return;
+            }
+            if (cancelled) return;
+            target.onTranscriptionMetrics(audioMs, computeMs, 0);
+            target.onRecognitionOutcome(0, audioMs);
+            target.onResults(text);
+        }
+        @Override public void onFailure(FileTranscriptionContract.Failure failure) {
+            finishWithFailure(failure);
+        }
+    }
+
+    /**
+     * The words the caller sent for this request ({@code RecognizerIntent.EXTRA_BIASING_STRINGS},
+     * accepted on every Android version), cleaned and bounded, or null. They are merged with
+     * the user's own preferred words for this one request. They are never stored, shown,
+     * logged or returned, so nothing about them is reported here either.
+     */
+    private static String biasingWords(Intent recognizerIntent) {
+        try {
+            return BiasingWords.sanitize(recognizerIntent.getStringArrayListExtra(BiasingWords.EXTRA));
+        } catch (Throwable t) {
+            // A list of another type, or one that cannot be read, is no list.
+            return null;
         }
     }
 
@@ -189,8 +589,18 @@ public class VoiceRecognitionService extends RecognitionService {
 
     @Override
     protected void onStopListening(Callback callback) {
-        if (callback != mCallback) return;
-        if (troubleshooting != null) troubleshooting.event("processing", "stop");
+        if (callback == null) return;
+        if (callback == file.callback) return;
+        if (callback == caller.callback) {
+            try {
+                stopCallerAudio();
+            } catch (Throwable t) {
+                Log.e(TAG, "stopCallerAudio failed", t);
+            }
+            return;
+        }
+        if (callback != mic.callback) return;
+        if (mic.troubleshooting != null) mic.troubleshooting.event("processing", "stop");
         try {
             stopListening();
         } catch (Throwable t) {
@@ -200,9 +610,24 @@ public class VoiceRecognitionService extends RecognitionService {
 
     @Override
     protected void onCancel(Callback callback) {
-        if (callback != mCallback) return;
-        mCallback = null;
-        finishTroubleshooting("cancel");
+        if (callback == null) return;
+        if (callback == file.callback) {
+            retire(file, "cancel");
+            return;
+        }
+        if (callback == caller.callback) {
+            Log.i(TAG, "service caller_audio: cancelled by the caller");
+            retire(caller, "cancel");
+            try {
+                cancelCallerAudio();
+            } catch (Throwable t) {
+                Log.e(TAG, "cancelCallerAudio failed", t);
+            }
+            return;
+        }
+        if (callback != mic.callback) return;
+        Log.i(TAG, "service microphone: cancelled by the caller");
+        retire(mic, "cancel");
         try {
             cancelNative();
         } catch (Throwable t) {
@@ -212,8 +637,16 @@ public class VoiceRecognitionService extends RecognitionService {
 
     @Override
     public void onDestroy() {
-        mCallback = null;
-        finishTroubleshooting("destroy");
+        // A live request must not wait for a result that can no longer come.
+        int gone = RecognitionSessionPolicy.destroyedError(Build.VERSION.SDK_INT);
+        for (Slot slot : new Slot[] { mic, caller, file }) {
+            Callback cb = slot.callback;
+            retire(slot, "destroy");
+            if (cb != null) {
+                Log.i(TAG, "service " + slot.route + ": error " + gone + " (service destroyed)");
+                try { cb.error(gone); } catch (RemoteException ignored) {}
+            }
+        }
         try {
             destroyNative();
         } catch (Throwable t) {
@@ -222,73 +655,46 @@ public class VoiceRecognitionService extends RecognitionService {
         super.onDestroy();
     }
 
-    // --- Callbacks invoked from native code (any thread) ---------------------
+    // --- Callbacks invoked from native code, delivered on the main thread -----
+    // Each is called through a request's NativeCallbacks, which has already
+    // checked that the slot still belongs to that request.
 
-    public void onReadyForSpeech() {
-        Callback cb = mCallback;
-        if (cb == null) return;
-        mainHandler.post(() -> {
-            if (mCallback != cb) return;
-            try { cb.readyForSpeech(new Bundle()); } catch (RemoteException ignored) {}
-        });
+    private void deliverReadyForSpeech(Callback cb) {
+        try { cb.readyForSpeech(new Bundle()); } catch (RemoteException ignored) {}
     }
 
-    public void onBeginningOfSpeech() {
-        Callback cb = mCallback;
-        if (cb == null) return;
-        mainHandler.post(() -> {
-            if (mCallback != cb) return;
-            try { cb.beginningOfSpeech(); } catch (RemoteException ignored) {}
-        });
+    private void deliverBeginningOfSpeech(Callback cb) {
+        try { cb.beginningOfSpeech(); } catch (RemoteException ignored) {}
     }
 
-    public void onRmsChanged(float rmsdB) {
-        Callback cb = mCallback;
-        if (cb == null) return;
-        mainHandler.post(() -> {
-            if (mCallback != cb) return;
-            try { cb.rmsChanged(rmsdB); } catch (RemoteException ignored) {}
-        });
+    private void deliverRmsChanged(Callback cb, float rmsdB) {
+        try { cb.rmsChanged(rmsdB); } catch (RemoteException ignored) {}
     }
 
-    public void onEndOfSpeech() {
-        Callback cb = mCallback;
-        if (cb == null) return;
-        mainHandler.post(() -> {
-            if (mCallback != cb) return;
-            if (troubleshooting != null) troubleshooting.event("processing", "end");
-            try { cb.endOfSpeech(); } catch (RemoteException ignored) {}
-        });
+    private void deliverEndOfSpeech(Slot slot, Callback cb) {
+        if (slot.troubleshooting != null) slot.troubleshooting.event("processing", "end");
+        try { cb.endOfSpeech(); } catch (RemoteException ignored) {}
     }
 
-    public void onResults(String text) {
-        Callback cb = mCallback;
-        if (cb == null) return;
-        mainHandler.post(() -> {
-            if (mCallback != cb) return;
-            ArrayList<String> hypotheses = new ArrayList<>();
-            hypotheses.add(text);
-            Bundle bundle = new Bundle();
-            bundle.putStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION, hypotheses);
-            boolean delivered = false;
-            try { cb.results(bundle); delivered = true; } catch (RemoteException ignored) {}
-            String reason = delivered ? "delivered" : "callback_failed";
-            DiagnosticLog.event(getFilesDir(), "callback_delivery", "process=service,reason=" + reason);
-            finishTroubleshooting(reason);
-            if (mCallback == cb) mCallback = null;
-        });
+    private void deliverResults(Slot slot, Callback cb, String text) {
+        ArrayList<String> hypotheses = new ArrayList<>();
+        hypotheses.add(text);
+        Bundle bundle = new Bundle();
+        bundle.putStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION, hypotheses);
+        bundle.putFloatArray(SpeechRecognizer.CONFIDENCE_SCORES, new float[] { -1.0f });
+        boolean delivered = false;
+        try { cb.results(bundle); delivered = true; } catch (RemoteException ignored) {}
+        String reason = delivered ? "delivered" : "callback_failed";
+        Log.i(TAG, "service " + slot.route + ": results " + reason);
+        DiagnosticLog.event(getFilesDir(), "callback_delivery", "process=service,reason=" + reason);
+        retire(slot, reason);
     }
 
-    public void onError(int errorCode) {
-        Callback cb = mCallback;
-        if (cb == null) return;
+    private void deliverError(Slot slot, Callback cb, int errorCode) {
+        Log.i(TAG, "service " + slot.route + ": error " + errorCode);
         DiagnosticLog.recognizerError(getFilesDir(), errorCode);
-        mainHandler.post(() -> {
-            if (mCallback != cb) return;
-            try { cb.error(errorCode); } catch (RemoteException ignored) {}
-            finishTroubleshooting("error");
-            if (mCallback == cb) mCallback = null;
-        });
+        try { cb.error(errorCode); } catch (RemoteException ignored) {}
+        retire(slot, "error");
     }
 
     /** Invoked by the shared engine loader during model warm-up; UI-less here. */
@@ -305,52 +711,124 @@ public class VoiceRecognitionService extends RecognitionService {
                         + ",cpu_threads=" + Math.max(0, threads));
     }
 
-    public long getTroubleshootingSessionId() {
-        TroubleshootingSession session = troubleshooting;
+    /**
+     * Where a caller-audio request's time went, alongside the timing line above: first
+     * byte and end of input (since start), model warm-up, inference queueing, decode, and
+     * end of input to result. Negative means the stage never happened and is omitted.
+     */
+    public void onCallerAudioTiming(long firstInputMs, long inputMs, long warmupMs,
+            long gateWaitMs, long decodeMs, long stopWaitMs) {
+        StringBuilder detail = new StringBuilder("process=service,route=caller_audio");
+        appendTiming(detail, "first_input_ms", firstInputMs);
+        appendTiming(detail, "input_ms", inputMs);
+        appendTiming(detail, "warmup_ms", warmupMs);
+        appendTiming(detail, "gate_wait_ms", gateWaitMs);
+        appendTiming(detail, "decode_ms", decodeMs);
+        appendTiming(detail, "stop_wait_ms", stopWaitMs);
+        DiagnosticLog.event(getFilesDir(), "timing", detail.toString());
+    }
+
+    private static void appendTiming(StringBuilder detail, String key, long ms) {
+        if (ms >= 0) detail.append(',').append(key).append('=').append(ms);
+    }
+
+    private static long troubleshootingId(Slot slot) {
+        TroubleshootingSession session = slot.troubleshooting;
         return session == null ? 0L : session.id();
     }
 
-    public void onPipelineMetrics(long sessionId, long prepareMs, long decodeMs, long postprocessMs, long stopWaitMs, int windows, int family, int warm) {
-        TroubleshootingSession session = troubleshooting;
+    private void onWindowPlan(Slot slot, long sessionId, long rawLimitMs, int plannedWindows) {
+        TroubleshootingSession session = slot.troubleshooting;
+        if (session != null && session.id() == sessionId) session.windowPlan(rawLimitMs, plannedWindows);
+    }
+
+    private void onPipelineMetrics(Slot slot, long sessionId, long prepareMs, long decodeMs, long postprocessMs, long stopWaitMs, int windows, int family, int warm) {
+        TroubleshootingSession session = slot.troubleshooting;
         if (session != null && session.id() == sessionId) session.pipeline(prepareMs, decodeMs, postprocessMs, stopWaitMs, windows, family, warm);
     }
 
-    private void finishTroubleshooting(String reason) {
-        TroubleshootingSession session = troubleshooting;
-        troubleshooting = null;
+    private static void finishTroubleshooting(Slot slot, String reason) {
+        TroubleshootingSession session = slot.troubleshooting;
+        slot.troubleshooting = null;
         if (session != null) session.finish(reason);
     }
 
     /** Fixed numeric native outcome; never implies that empty recognition was silent audio. */
-    public void onRecognitionOutcome(int reason, long audioMs) {
-        if (mCallback == null) return;
+    private void onRecognitionOutcome(Slot slot, int reason, long audioMs) {
         DiagnosticLog.recognitionOutcome(getFilesDir(), reason, audioMs);
-        if (troubleshooting != null) {
+        if (slot.troubleshooting != null) {
             String[] reasons = {"text", "insufficient_audio", "empty_decode", "input_error"};
-            if (reason >= 0 && reason < reasons.length) troubleshooting.event("processing", reasons[reason]);
+            if (reason >= 0 && reason < reasons.length) slot.troubleshooting.event("processing", reasons[reason]);
         }
     }
 
-    private void safeError(int errorCode) {
-        Callback cb = mCallback;
+    /** Synchronous error for a request that never reached native code. */
+    private void safeError(Slot slot, int errorCode) {
+        Callback cb = slot.callback;
         if (cb == null) return;
-        DiagnosticLog.recognizerError(getFilesDir(), errorCode);
-        try { cb.error(errorCode); } catch (RemoteException ignored) {}
-        finishTroubleshooting("error");
-        mCallback = null;
+        deliverError(slot, cb, errorCode);
+    }
+
+    /** JNI holds this exact request target, never a mutable current callback. */
+    private final class NativeCallbacks extends android.content.ContextWrapper {
+        private final Slot slot;
+        private final Callback callback;
+        private final long sessionId;
+        private final long generation;
+        private boolean readyDelivered;
+        NativeCallbacks(Slot slot, Callback callback) {
+            super(VoiceRecognitionService.this);
+            this.slot = slot;
+            this.callback = callback;
+            this.generation = slot.generation;
+            this.sessionId = troubleshootingId(slot);
+        }
+        private void deliver(Runnable action) {
+            mainHandler.post(() -> {
+                if (slot.callback == callback && slot.generation == generation) action.run();
+            });
+        }
+        public void onReadyForSpeech() { deliver(() -> { readyDelivered = true; deliverReadyForSpeech(callback); }); }
+        public void onBeginningOfSpeech() { deliver(() -> deliverBeginningOfSpeech(callback)); }
+        public void onEndOfSpeech() { deliver(() -> deliverEndOfSpeech(slot, callback)); }
+        public void onRmsChanged(float value) { deliver(() -> deliverRmsChanged(callback, value)); }
+        public void onResults(String text) { deliver(() -> deliverResults(slot, callback, text)); }
+        public void onError(int code) { deliver(() -> deliverError(slot, callback, code)); }
+        public void onStatusUpdate(String status) { deliver(() -> VoiceRecognitionService.this.onStatusUpdate(status)); }
+        public void onTranscriptionMetrics(long audio, long compute, int threads) { deliver(() -> VoiceRecognitionService.this.onTranscriptionMetrics(audio, compute, threads)); }
+        public void onCallerAudioTiming(long first, long input, long warmup, long gate, long decode, long stopWait) {
+            deliver(() -> VoiceRecognitionService.this.onCallerAudioTiming(first, input, warmup, gate, decode, stopWait));
+        }
+        public long getTroubleshootingSessionId() { return sessionId; }
+        public void onRecognitionOutcome(int reason, long audio) { deliver(() -> VoiceRecognitionService.this.onRecognitionOutcome(slot, reason, audio)); }
+        public void onWindowPlan(long id, long rawLimitMs, int plannedWindows) {
+            deliver(() -> VoiceRecognitionService.this.onWindowPlan(slot, id, rawLimitMs, plannedWindows));
+        }
+        public void onPipelineMetrics(long id, long prepare, long decode, long post, long wait, int windows, int family, int warm) {
+            deliver(() -> VoiceRecognitionService.this.onPipelineMetrics(slot, id, prepare, decode, post, wait, windows, family, warm));
+        }
     }
 
     // --- Native methods (implemented in src/recog_service.rs) ----------------
 
     private native void initNative(VoiceRecognitionService service);
-    private native void startListening(VoiceRecognitionService service);
-    private native void startListeningFromAudioSource(
-            VoiceRecognitionService service,
+    /** {@code biasingWords}: one word per line from {@link BiasingWords#sanitize}, or null. */
+    private native void startListening(android.content.Context service, String biasingWords);
+    /** False when native code could not start and will deliver nothing for this request. */
+    private native boolean startListeningFromAudioSource(
+            android.content.Context service,
             int fd,
             int sampleRate,
             int channelCount,
-            int encoding);
+            int encoding,
+            String biasingWords);
+    /** Microphone request only. */
     private native void stopListening();
+    /** Microphone request only. */
     private native void cancelNative();
+    private native void stopCallerAudio();
+    private native void cancelCallerAudio();
+    /** {@link #CALLER_JOB_NONE}, 1 while receiving audio, or {@link #CALLER_JOB_INPUT_CLOSED}. */
+    private native int callerJobState();
     private native void destroyNative();
 }

@@ -11,6 +11,7 @@ public final class DiagnosticRegressionTest {
         if (args.length == 0 || args[0].equals("lease")) dayLease();
         if (args.length == 0 || args[0].equals("timestamp")) eventTimestamp();
         if (args.length == 0 || args[0].equals("retention")) retention();
+        if (args.length == 0 || args[0].equals("caller_timing")) callerTiming();
         System.out.println("Diagnostic regression tests passed");
     }
 
@@ -22,6 +23,10 @@ public final class DiagnosticRegressionTest {
                 : "Explicit day consent must remain valid after one hour";
         assert !DiagnosticLog.validTroubleshootingLease(start, end, end);
         assert !DiagnosticLog.validTroubleshootingLease(start, end, start - 1);
+        assert DiagnosticLog.validTroubleshootingLease(start, Long.MAX_VALUE, start + 48 * hour);
+        assert !DiagnosticLog.validTroubleshootingLease(start, Long.MAX_VALUE, start - 1);
+        assert !DiagnosticLog.validTroubleshootingLease(start, start + 2 * hour, start + hour);
+
     }
 
     private static void eventTimestamp() throws Exception {
@@ -46,6 +51,20 @@ public final class DiagnosticRegressionTest {
         long recorded = Long.parseLong(line.substring(0, line.indexOf(' ')));
         assert recorded >= before && recorded < released
                 : "Timestamp must describe the event, not delayed disk IO";
+    }
+
+    private static void callerTiming() throws Exception {
+        Path root = Files.createTempDirectory("ostt-caller-timing-");
+        DiagnosticLog.setEnabled(root.toFile(), true);
+        // Worst case: every stage present with the widest accepted value.
+        String detail = "process=service,route=caller_audio,first_input_ms=999999999999"
+                + ",input_ms=999999999999,warmup_ms=999999999999,gate_wait_ms=999999999999"
+                + ",decode_ms=999999999999,stop_wait_ms=999999999999";
+        DiagnosticLog.event(root.toFile(), "timing", detail);
+        assert DiagnosticLog.awaitIdleForTest(5000);
+        assert new String(DiagnosticLog.snapshot(root.toFile()), StandardCharsets.UTF_8)
+                .endsWith(" timing " + detail + "\n")
+                : "Caller audio stage timing must pass the diagnostic allowlist";
     }
 
     private static void retention() throws Exception {

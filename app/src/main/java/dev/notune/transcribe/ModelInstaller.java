@@ -16,6 +16,9 @@ import java.util.function.BooleanSupplier;
 
 /** Serializes immutable model installation and atomic active-pointer changes across processes. */
 final class ModelInstaller {
+    /** Where {@linkplain ModelDescriptor#auxiliary auxiliary} models live, under filesDir. */
+    static final String AUXILIARY_DIRECTORY = "aux-models";
+
     private ModelInstaller() {}
 
     static String installVerified(File filesDir, File staged, ModelDescriptor descriptor)
@@ -36,7 +39,7 @@ final class ModelInstaller {
             throw new IOException("staged model failed integrity verification");
         }
         checkCancelled(cancelled);
-        File modelsDir = new File(filesDir, "models");
+        File modelsDir = new File(filesDir, descriptor.auxiliary ? AUXILIARY_DIRECTORY : "models");
         if (!modelsDir.isDirectory() && !modelsDir.mkdirs()) {
             throw new IOException("model directory is unavailable");
         }
@@ -48,22 +51,25 @@ final class ModelInstaller {
                  FileLock ignored = lockChannel.lock()) {
             checkCancelled(cancelled);
             File destination = new File(modelsDir, descriptor.fileName);
-            if (destination.exists()) {
-                if (destination.length() != descriptor.byteSize
-                        || !descriptor.sha256.equalsIgnoreCase(sha256(destination, cancelled))) {
-                    throw new IOException(
-                            "A different model already uses this filename. Remove it and retry.");
-                }
+            boolean same = destination.isFile() && destination.length() == descriptor.byteSize
+                    && descriptor.sha256.equalsIgnoreCase(sha256(destination, cancelled));
+            if (same) {
                 Files.deleteIfExists(staged.toPath());
             } else {
+                if (destination.exists() && !descriptor.auxiliary) {
+                    throw new IOException("A different model already uses this filename. Remove it and retry.");
+                }
                 try {
-                    Files.move(staged.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE);
+                    Files.move(staged.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE,
+                            StandardCopyOption.REPLACE_EXISTING);
                 } catch (AtomicMoveNotSupportedException unsupported) {
-                    Files.move(staged.toPath(), destination.toPath());
+                    Files.move(staged.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING);
                 }
             }
             VerifiedModelProvenance.markVerified(filesDir, destination, descriptor);
-            ImportedModelSelection.activateWhileLocked(filesDir, destination.getName());
+            if (!descriptor.auxiliary) {
+                ImportedModelSelection.activateWhileLocked(filesDir, destination.getName());
+            }
             return destination.getName();
             }
         } finally {

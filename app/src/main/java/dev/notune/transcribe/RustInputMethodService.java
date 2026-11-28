@@ -11,6 +11,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.text.TextUtils;
 import android.util.Log;
 import android.view.ContextThemeWrapper;
 import android.view.KeyEvent;
@@ -50,6 +51,10 @@ public class RustInputMethodService extends InputMethodService {
 
     private TextView statusView;
     private TextView hintView;
+    private com.google.android.material.button.MaterialButton micSourceButton;
+    private androidx.appcompat.app.AlertDialog micSwitchDialog;
+    private Context micSwitchContext;
+    private final Runnable micSourceListener = this::onMicSourceChanged;
     private View recordContainer;
     private ImageView micIcon;
     private View processingRing;
@@ -70,6 +75,15 @@ public class RustInputMethodService extends InputMethodService {
     private boolean viewIsNight = false;
     private Handler mainHandler;
     private boolean isRecording = false;
+    /** The running keyboard, for the dictation notification's Stop. */
+    private static java.lang.ref.WeakReference<RustInputMethodService> current =
+            new java.lang.ref.WeakReference<>(null);
+    /**
+     * True while {@link ImeDictationService} holds the microphone for this
+     * dictation: the keyboard hiding (screen lock, app switch, editor gone)
+     * then no longer ends the recording; only the user's stop does.
+     */
+    private final ImeKeepAliveState keepAlive = new ImeKeepAliveState();
     private boolean recordingPaused = false;
     private boolean processingResult = false;
     private boolean pendingSwitchBack = false;
@@ -170,6 +184,7 @@ public class RustInputMethodService extends InputMethodService {
     public void onCreate() {
         super.onCreate();
         mainHandler = new Handler(Looper.getMainLooper());
+        current = new java.lang.ref.WeakReference<>(this);
         DiagnosticLog.event(getFilesDir(), "ime_start",
                 "process=ime,version_code=" + BuildConfig.VERSION_CODE);
         try {
@@ -205,6 +220,7 @@ public class RustInputMethodService extends InputMethodService {
             view.setOnApplyWindowInsetsListener((v, insets) -> {
                 v.setPadding(basePaddingLeft, basePaddingTop, basePaddingRight,
                         basePaddingBottom + insets.getSystemWindowInsetBottom());
+                v.post(v::requestLayout);
                 return insets;
             });
 
@@ -217,6 +233,11 @@ public class RustInputMethodService extends InputMethodService {
             micLevelView = view.findViewById(R.id.ime_mic_level);
             recordKey = view.findViewById(R.id.ime_record_key);
             hintView = view.findViewById(R.id.ime_hint);
+            micSourceButton = view.findViewById(R.id.ime_mic_source);
+            micSwitchContext = themed;
+            micSourceButton.setOnClickListener(v -> confirmMicSwitch());
+            BluetoothMicRoute.removeListener(micSourceListener);
+            BluetoothMicRoute.addListener(micSourceListener);
             recordingActions = view.findViewById(R.id.ime_recording_actions);
             pauseResumeButton = view.findViewById(R.id.ime_pause_resume);
             cancelRecordingButton = view.findViewById(R.id.ime_cancel_recording);
@@ -245,6 +266,11 @@ public class RustInputMethodService extends InputMethodService {
                 }
             };
 
+            backspaceButton.setOnClickListener(v -> sendOneTapBackspace());
+            spaceButton.setOnClickListener(v -> {
+                InputConnection editor = getCurrentInputConnection();
+                if (editor != null) editor.commitText(" ", 1);
+            });
             backspaceButton.setOnTouchListener((v, event) -> {
                 switch (event.getActionMasked()) {
                     case MotionEvent.ACTION_DOWN:
@@ -326,13 +352,13 @@ public class RustInputMethodService extends InputMethodService {
                 // Check microphone permission
                 if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
                         != PackageManager.PERMISSION_GRANTED) {
-                    if (statusView != null) statusView.setText("No mic permission - grant in app");
+                    if (statusView != null) setStatusText("No mic permission - grant in app");
                     if (hintView != null) hintView.setText("Open the app to grant permission");
                     return;
                 }
 
                 if (!editorSafeForDictation || !inputActive || getCurrentInputConnection() == null) {
-                    if (statusView != null) statusView.setText(R.string.ime_sensitive_field);
+                    if (statusView != null) setStatusText(R.string.ime_sensitive_field);
                     if (hintView != null) hintView.setText(R.string.ime_sensitive_field);
                     return;
                 }
@@ -340,17 +366,19 @@ public class RustInputMethodService extends InputMethodService {
                     audioPauser.request(this);
                     pauseAudioActive = true;
                 }
-                recordingSession.begin(getCurrentInputConnection(), editorGeneration);
+                recordingSession.begin(getCurrentInputConnection(), editorGeneration, editorPackage());
                 recordingPaused = false;
                 processingResult = false;
                 updateRecordButtonUI(true);
                 startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
+                refreshMicSource();
+                beginKeepAlive();
             });
 
             recordContainer.setOnLongClickListener(v -> {
                 if (!editorSafeForDictation || !inputActive
                         || getCurrentInputConnection() == null) {
-                    if (statusView != null) statusView.setText(R.string.ime_sensitive_field);
+                    if (statusView != null) setStatusText(R.string.ime_sensitive_field);
                     if (hintView != null) hintView.setText(R.string.ime_sensitive_field);
                     return true;
                 }
@@ -399,7 +427,7 @@ public class RustInputMethodService extends InputMethodService {
         super.onWindowHidden();
         windowVisible = false;
         unbindLongRecordingState();
-        if (isRecording && isStopOnHideEnabled()) {
+        if (isRecording && (isStopOnHideEnabled() || !keepAlive.ready())) {
             // Stop the microphone, but preserve recognized speech for private
             // recovery instead of treating an Android lifecycle transition as
             // the user's Cancel action.
@@ -417,25 +445,34 @@ public class RustInputMethodService extends InputMethodService {
         boolean sameEditorRestart = restarting && inputActive;
         if (!sameEditorRestart) editorGeneration++;
         super.onStartInput(attribute, restarting);
-        inputActive = true;
-        editorSafeForDictation = attribute != null
+        inputActive = attribute != null && ImeTextEdit.isTextEditor(
+                attribute.inputType, attribute.initialSelStart, attribute.fieldId);
+        editorSafeForDictation = inputActive
                 && !ImeTextEdit.isSensitiveEditor(attribute.inputType, attribute.imeOptions);
         if (!editorSafeForDictation) unbindLongRecordingState();
         if (isRecording && (!sameEditorRestart || !editorSafeForDictation)) {
-            stopForRecovery();
+            recordingSession.markEditorMoved();
+            if (keepAlive.ready()) {
+                // the lock screen or another app took input; keep recording,
+                // delivery decides where the text may go
+                Log.i(ImeDictationService.TAG, "input moved during dictation; still recording");
+            } else {
+                stopForRecovery();
+            }
         }
     }
 
     @Override
     public void onStartInputView(EditorInfo info, boolean restarting) {
         super.onStartInputView(info, restarting);
-        inputActive = true;
-        editorSafeForDictation = info != null
+        inputActive = info != null && ImeTextEdit.isTextEditor(
+                info.inputType, info.initialSelStart, info.fieldId);
+        editorSafeForDictation = inputActive
                 && !ImeTextEdit.isSensitiveEditor(info.inputType, info.imeOptions);
         if (isRecording && !recordingSession.canCommitTo(
                 getCurrentInputConnection(), editorGeneration,
                 editorSafeForDictation, inputActive)) {
-            stopForRecovery();
+            if (!keepAlive.ready()) stopForRecovery();
         }
         // Rebuild the keyboard if the theme preference changed while this
         // (long-lived) IME process stayed alive, so it matches the app setting.
@@ -480,10 +517,12 @@ public class RustInputMethodService extends InputMethodService {
                 audioPauser.request(this);
                 pauseAudioActive = true;
             }
-            recordingSession.begin(getCurrentInputConnection(), editorGeneration);
+            recordingSession.begin(getCurrentInputConnection(), editorGeneration, editorPackage());
             recordingPaused = false;
             updateRecordButtonUI(true);
             startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
+            refreshMicSource();
+            beginKeepAlive();
         } finally {
             automaticStartInFlight = false;
         }
@@ -494,7 +533,12 @@ public class RustInputMethodService extends InputMethodService {
         cancelDeletePreview();
         unbindLongRecordingState();
         if (isRecording) {
-            stopForRecovery();
+            recordingSession.markEditorMoved();
+            if (keepAlive.ready()) {
+                Log.i(ImeDictationService.TAG, "input finished during dictation (screen off or app left); still recording");
+            } else {
+                stopForRecovery();
+            }
         }
         super.onFinishInput();
         inputActive = false;
@@ -544,10 +588,10 @@ public class RustInputMethodService extends InputMethodService {
         }
         if (statusView != null) {
             switch (states[ordinal]) {
-                case STARTING: statusView.setText("Preparing long recording"); break;
-                case RECORDING: statusView.setText("Long recording active · use notification controls"); break;
-                case TRANSCRIBING: statusView.setText("Long recording is transcribing"); break;
-                default: statusView.setText("Long recording is stopping"); break;
+                case STARTING: setStatusText("Preparing long recording"); break;
+                case RECORDING: setStatusText("Long recording active · use notification controls"); break;
+                case TRANSCRIBING: setStatusText("Long recording is transcribing"); break;
+                default: setStatusText("Long recording is stopping"); break;
             }
         }
         if (hintView != null) hintView.setText("Transcript returns only to private review");
@@ -570,7 +614,7 @@ public class RustInputMethodService extends InputMethodService {
         releasePauseAudio();
         updateRecordButtonUI(false);
         lastStatus = "Ready";
-        if (statusView != null) statusView.setText(R.string.ime_recording_discarded);
+        if (statusView != null) setStatusText(R.string.ime_recording_discarded);
     }
 
     private void toggleRecordingPaused() {
@@ -641,7 +685,7 @@ public class RustInputMethodService extends InputMethodService {
             if (switchAfterEmptyStop) {
                 switchToOtherInputMethod();
             } else if (!lifecycleHandoff && statusView != null) {
-                statusView.setText(R.string.ime_no_audio_captured);
+                setStatusText(R.string.ime_no_audio_captured);
             }
             return;
         }
@@ -690,7 +734,7 @@ public class RustInputMethodService extends InputMethodService {
             if (backspaceButton != null) {
                 backspaceButton.announceForAccessibility("Selection preview unavailable");
             }
-            if (statusView != null) statusView.setText("Selection preview unavailable");
+            if (statusView != null) setStatusText("Selection preview unavailable");
             return;
         }
         deletePreviewActive = true;
@@ -837,6 +881,7 @@ public class RustInputMethodService extends InputMethodService {
         refreshTroubleshootingBanner();
         boolean wasRecording = isRecording;
         isRecording = recording;
+        if (!recording) endKeepAlive();
         if (!recording) recordingPaused = false;
         if (recording && !wasRecording) {
             finishTroubleshooting("cancel");
@@ -860,13 +905,92 @@ public class RustInputMethodService extends InputMethodService {
         tintRecordButton(recording);
         if (recording) {
             if (statusView != null) {
-                statusView.setText(recordingPaused ? "Paused" : "Listening...");
+                setStatusText(recordingPaused ? "Paused" : "Listening...");
             }
             if (hintView != null) hintView.setText("Pause, cancel, or insert");
         } else {
             if (micLevelView != null) micLevelView.setLevel(0f);
+            dismissMicSwitch();
             updateUiState();
         }
+        refreshMicSource();
+    }
+
+    private void onMicSourceChanged() {
+        dismissMicSwitch();
+        refreshMicSource();
+        if (!isRecording || statusView == null) return;
+        if (BluetoothMicRoute.takeFallbackNotice()) {
+            setStatusText(R.string.mic_fallback_status);
+        } else if (BluetoothMicRoute.isWaitingForSound()) {
+            setStatusText(R.string.mic_bt_waiting);
+        } else if (!recordingPaused && TextUtils.equals(statusView.getText(),
+                getString(R.string.mic_bt_waiting))) {
+            setStatusText("Listening...");
+        }
+    }
+
+    /** Shows the microphone that really carries the recording (Bluetooth or phone). */
+    private void refreshMicSource() {
+        MicSourceToggle.refresh(micSourceButton, this, isRecording);
+    }
+
+    private void confirmMicSwitch() {
+        if (!isRecording || inputView == null || micSwitchContext == null) return;
+        dismissMicSwitch();
+        try {
+            micSwitchDialog = MicSourceToggle.confirm(micSwitchContext,
+                    inputView.getWindowToken(), this::restartOnMicrophone);
+        } catch (RuntimeException e) {
+            // A window that went away between the tap and the dialog keeps recording.
+            Log.w(TAG, "microphone switch dialog unavailable", e);
+            micSwitchDialog = null;
+        }
+    }
+
+    private void dismissMicSwitch() {
+        if (micSwitchDialog != null && micSwitchDialog.isShowing()) {
+            try { micSwitchDialog.dismiss(); } catch (RuntimeException ignored) { }
+        }
+        micSwitchDialog = null;
+    }
+
+    /**
+     * The switch's confirmed choice: discard this recording completely and
+     * record again, into the same editor, on the other microphone.
+     */
+    private void restartOnMicrophone(boolean bluetooth) {
+        micSwitchDialog = null;
+        if (!isRecording) return;
+        processingResult = false;
+        pendingSwitchBack = false;
+        recordingSession.discard();
+        finishTroubleshooting("discarded");
+        try {
+            cancelRecording();
+        } catch (Throwable t) {
+            Log.w(TAG, "cancelRecording failed, stopping without commit", t);
+            try { stopRecording(); } catch (Throwable ignored) { }
+        }
+        updateRecordButtonUI(false);
+        lastStatus = "Ready";
+        InputConnection editor = getCurrentInputConnection();
+        if (!editorSafeForDictation || !inputActive || editor == null) {
+            releasePauseAudio();
+            if (statusView != null) setStatusText(R.string.ime_recording_discarded);
+            return;
+        }
+        if (isPauseAudioEnabled() && !pauseAudioActive) {
+            audioPauser.request(this);
+            pauseAudioActive = true;
+        }
+        BluetoothMicRoute.overrideNextStart(bluetooth);
+        recordingSession.begin(editor, editorGeneration, editorPackage());
+        recordingPaused = false;
+        updateRecordButtonUI(true);
+        startRecording(isAutoStopEnabled(), AutoStopDelay.get(getFilesDir()));
+        refreshMicSource();
+        beginKeepAlive();
     }
 
     private void updateRecordingActionsUi() {
@@ -877,7 +1001,7 @@ public class RustInputMethodService extends InputMethodService {
                 recordingPaused ? R.string.ime_resume_recording : R.string.ime_pause_recording));
         pauseResumeButton.setSelected(recordingPaused);
         if (isRecording && statusView != null) {
-            statusView.setText(recordingPaused ? "Paused" : "Listening...");
+            setStatusText(recordingPaused ? "Paused" : "Listening...");
         }
     }
 
@@ -897,10 +1021,14 @@ public class RustInputMethodService extends InputMethodService {
 
     @Override
     public void onDestroy() {
+        BluetoothMicRoute.removeListener(micSourceListener);
+        dismissMicSwitch();
         finishTroubleshooting("destroy");
         unbindLongRecordingState();
         cancelDeletePreview();
         DiagnosticLog.event(getFilesDir(), "ime_stop", "process=ime");
+        if (isRecording) stopForRecovery();
+        endKeepAlive();
         super.onDestroy();
         cleanupNative();
         if (pauseAudioActive) {
@@ -930,6 +1058,7 @@ public class RustInputMethodService extends InputMethodService {
                 processingResult = false;
                 recordingSession.onError();
                 if (isRecording) updateRecordButtonUI(false);
+                endKeepAlive();
             }
             updateUiState();
             if (pendingSwitchBack && error) {
@@ -952,6 +1081,17 @@ public class RustInputMethodService extends InputMethodService {
         });
     }
 
+    private void setStatusText(int resource) {
+        setStatusText(getString(resource));
+    }
+
+    private void setStatusText(CharSequence text) {
+        // The polite live region announces phase changes, not repeated redraws.
+        if (statusView != null && !android.text.TextUtils.equals(statusView.getText(), text)) {
+            statusView.setText(text);
+        }
+    }
+
     private void updateUiState() {
         boolean recoveryPending = hasPendingTranscriptRecovery();
         boolean isWaiting = NativeStatus.isWaiting(lastStatus);
@@ -962,13 +1102,13 @@ public class RustInputMethodService extends InputMethodService {
         // Don't show internal loading states to the user
         if (statusView != null && !isRecording) {
             if (recoveryPending) {
-                statusView.setText(R.string.ime_recovery_ready);
+                setStatusText(R.string.ime_recovery_ready);
             } else if (isError) {
-                statusView.setText(lastStatus);
+                setStatusText(lastStatus);
             } else if (isProcessing) {
-                statusView.setText("Processing...");
+                setStatusText("Processing...");
             } else {
-                statusView.setText(R.string.ime_tap_to_record);
+                setStatusText(R.string.ime_tap_to_record);
             }
         }
 
@@ -977,9 +1117,9 @@ public class RustInputMethodService extends InputMethodService {
                     isProcessing && !recoveryPending ? View.VISIBLE : View.GONE);
         }
 
-        // Disable button only during transcription/processing/waiting or fatal errors
+        // A transient model/microphone error must leave an explicit retry available.
         if (recordContainer != null) {
-            boolean disable = !recoveryPending && (isProcessing || isError);
+            boolean disable = !recoveryPending && isProcessing;
             recordContainer.setEnabled(!disable);
             recordContainer.setAlpha(disable ? 0.5f : 1.0f);
         }
@@ -1016,7 +1156,7 @@ public class RustInputMethodService extends InputMethodService {
                 // Nothing recognized — don't insert a stray space.
                 recordingSession.finish();
                 updateRecordButtonUI(false);
-                if (statusView != null) statusView.setText(R.string.ime_tap_to_record);
+                if (statusView != null) setStatusText(R.string.ime_tap_to_record);
                 if (pauseAudioActive) {
                     audioPauser.abandon(this);
                     pauseAudioActive = false;
@@ -1051,6 +1191,11 @@ public class RustInputMethodService extends InputMethodService {
         return session == null ? 0L : session.id();
     }
 
+    public void onWindowPlan(long sessionId, long rawLimitMs, int plannedWindows) {
+        TroubleshootingSession session = troubleshooting;
+        if (session != null && session.id() == sessionId) session.windowPlan(rawLimitMs, plannedWindows);
+    }
+
     public void onPipelineMetrics(long sessionId, long prepareMs, long decodeMs, long postprocessMs, long stopWaitMs, int windows, int family, int warm) {
         TroubleshootingSession session = troubleshooting;
         if (session != null && session.id() == sessionId) session.pipeline(prepareMs, decodeMs, postprocessMs, stopWaitMs, windows, family, warm);
@@ -1070,7 +1215,7 @@ public class RustInputMethodService extends InputMethodService {
     private void deliverStagedTranscription(String text, boolean staged, int attempt) {
         InputConnection current = getCurrentInputConnection();
         boolean safeTarget = recordingSession.canDeliverToCurrent(
-                current, editorSafeForDictation, inputActive);
+                current, editorSafeForDictation, inputActive, editorPackage());
         String committed = text + " ";
         boolean inserted = safeTarget && commitTranscribedText(current, committed);
 
@@ -1082,7 +1227,7 @@ public class RustInputMethodService extends InputMethodService {
             // of opening OSTT over the app or declaring the result lost.
             processingResult = true;
             lastStatus = "Processing...";
-            if (statusView != null) statusView.setText(R.string.ime_waiting_for_composer);
+            if (statusView != null) setStatusText(R.string.ime_waiting_for_composer);
             mainHandler.postDelayed(
                     () -> deliverStagedTranscription(text, staged, attempt + 1),
                     DELIVERY_RETRY_DELAY_MS);
@@ -1092,6 +1237,7 @@ public class RustInputMethodService extends InputMethodService {
         processingResult = false;
         lastStatus = "Ready";
         recordingSession.finish();
+        endKeepAlive();
         finishTroubleshooting(inserted ? "delivered" : "retained");
         releasePauseAudio();
         if (inserted && staged) {
@@ -1105,7 +1251,7 @@ public class RustInputMethodService extends InputMethodService {
         if (!inserted) {
             pendingSwitchBack = false;
             if (staged) {
-                if (statusView != null) statusView.setText(R.string.ime_recovery_ready);
+                if (statusView != null) setStatusText(R.string.ime_recovery_ready);
             } else {
                 EmergencyTranscriptBuffer.putIfEmpty(text);
                 copyEmergencyTranscript(text);
@@ -1117,12 +1263,12 @@ public class RustInputMethodService extends InputMethodService {
     private void finishTranscriptDelivery(boolean inserted, boolean recoveryCleared) {
         if (inserted && !recoveryCleared) {
             String message = getString(R.string.ime_recovery_inserted_clear_failed);
-            if (statusView != null) statusView.setText(message);
+            if (statusView != null) setStatusText(message);
             Toast.makeText(getApplicationContext(), message, Toast.LENGTH_LONG).show();
         }
         updateRecordButtonUI(false);
         if (inserted && statusView != null && recoveryCleared) {
-            statusView.setText(R.string.ime_tap_to_record);
+            setStatusText(R.string.ime_tap_to_record);
         }
         if (inserted && pendingSwitchBack) {
             pendingSwitchBack = false;
@@ -1131,11 +1277,14 @@ public class RustInputMethodService extends InputMethodService {
     }
 
     private void switchToOtherInputMethod() {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-            switchToPreviousInputMethod();
-            return;
-        }
         InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            if (switchToPreviousInputMethod() || switchToNextInputMethod(false)) return;
+        } else if (imm != null && getWindow() != null && getWindow().getWindow() != null) {
+            android.os.IBinder token = getWindow().getWindow().getAttributes().token;
+            if (token != null && (imm.switchToLastInputMethod(token)
+                    || imm.switchToNextInputMethod(token, false))) return;
+        }
         if (imm != null) imm.showInputMethodPicker();
     }
 
@@ -1156,7 +1305,7 @@ public class RustInputMethodService extends InputMethodService {
         try {
             if (TranscriptClipboard.copy(this, text)) {
                 String message = getString(R.string.ime_recovery_storage_failed);
-                if (statusView != null) statusView.setText(message);
+                if (statusView != null) setStatusText(message);
                 Toast.makeText(getApplicationContext(), message, Toast.LENGTH_LONG).show();
             }
         } catch (RuntimeException ignored) {
@@ -1174,22 +1323,26 @@ public class RustInputMethodService extends InputMethodService {
     // selecting it afterwards (select_transcription setting).
     private boolean commitTranscribedText(InputConnection ic, String committed) {
         try {
+            committed = ImeTextEdit.separateDictation(ic.getTextBeforeCursor(1, 0), committed);
+        } catch (RuntimeException unavailableContext) {
+            // Some editors cannot supply surrounding text; insertion still works.
+        }
+        try {
             if (!ic.commitText(committed, 1)) return false;
-
-            if (!pendingSwitchBack && new File(getFilesDir(), "select_transcription").exists()) {
-                ExtractedText et = ic.getExtractedText(new ExtractedTextRequest(), 0);
-                if (et != null) {
-                    int end = et.selectionStart;
-                    int start = end - committed.length();
-                    if (start >= 0) {
-                        ic.setSelection(start, end);
-                    }
-                }
-            }
-            return true;
         } catch (RuntimeException rejected) {
             return false;
         }
+        // Selection is optional after acknowledged insertion. Its failure must
+        // never mark already-inserted text pending and cause a duplicate retry.
+        try {
+            if (!pendingSwitchBack && new File(getFilesDir(), "select_transcription").exists()) {
+                ExtractedText et = ic.getExtractedText(new ExtractedTextRequest(), 0);
+                ImeTextEdit.Range range = et == null ? null : ImeTextEdit.insertedSelection(
+                        et.startOffset, et.selectionStart, committed.length());
+                if (range != null) ic.setSelection(range.start, range.end);
+            }
+        } catch (RuntimeException optionalSelectionFailed) { }
+        return true;
     }
 
 
@@ -1220,6 +1373,55 @@ public class RustInputMethodService extends InputMethodService {
 
     private boolean isAutoStopEnabled() {
         return new File(getFilesDir(), "auto_stop").exists();
+    }
+
+    private String editorPackage() {
+        EditorInfo info = getCurrentInputEditorInfo();
+        return info == null ? null : info.packageName;
+    }
+
+    private void beginKeepAlive() {
+        if (!isRecording || keepAlive.pending() || isStopOnHideEnabled()) return;
+        long token = keepAlive.begin();
+        if (!ImeDictationService.start(this, token)) keepAlive.finish();
+    }
+
+    private void endKeepAlive() {
+        if (!keepAlive.pending()) return;
+        long token = keepAlive.token();
+        keepAlive.finish();
+        ImeDictationService.stop(this, token);
+    }
+
+    /** The dictation notification's Stop: ends it like the stop key, text kept. */
+    static boolean ownsDictation(long token) {
+        RustInputMethodService ime = current.get();
+        return ime != null && ime.isRecording && ime.keepAlive.matches(token);
+    }
+
+    /** Called on the main thread only after Android accepted foreground promotion. */
+    static boolean dictationForegroundReady(long token) {
+        RustInputMethodService ime = current.get();
+        return ownsDictation(token) && ime.keepAlive.acknowledge(token);
+    }
+
+    static void dictationForegroundUnavailable(long token) {
+        RustInputMethodService ime = current.get();
+        if (ime == null || !ime.keepAlive.matches(token)) return;
+        ime.keepAlive.finish();
+        if (ime.isRecording && (!ime.windowVisible || !ime.inputActive)) ime.stopForRecovery();
+    }
+
+    static void stopDictationFromNotification(long token) {
+        RustInputMethodService ime = current.get();
+        if (ime == null) return;
+        Runnable stop = () -> {
+            if (!ime.keepAlive.matches(token)) return;
+            if (ime.isRecording) ime.stopTranscribe(false);
+            else if (!ime.processingResult) ime.endKeepAlive();
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) stop.run();
+        else ime.mainHandler.post(stop);
     }
 
     /** "Record in background" is default ON; the marker file is the opt-out. */

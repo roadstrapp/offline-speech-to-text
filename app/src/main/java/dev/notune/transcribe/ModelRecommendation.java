@@ -48,7 +48,8 @@ public final class ModelRecommendation {
         }
 
         public Request(String languageTag, boolean translation, Goal goal) {
-            this.languageTag = languageTag == null ? "" : languageTag;
+            this.languageTag = languageTag == null || languageTag.trim().equalsIgnoreCase("auto")
+                    ? "" : languageTag.trim();
             this.translation = translation;
             this.goal = goal == null ? Goal.BALANCED : goal;
         }
@@ -101,6 +102,10 @@ public final class ModelRecommendation {
         String preferredFile;
         switch (request.goal) {
             case COMPACT:
+                if (!request.translation && (english || "de".equals(language))) {
+                    ModelDescriptor canary = ModelCatalog.findByFileName(ModelCatalog.CANARY_FLASH_FILE);
+                    if (canary != null && hardCompatible(canary, device)) return canary;
+                }
                 preferredFile = english
                         ? "whisper-tiny.en-Q4_K_M.gguf" : "whisper-tiny-Q4_K_M.gguf";
                 break;

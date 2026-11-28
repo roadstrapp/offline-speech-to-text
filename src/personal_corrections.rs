@@ -100,8 +100,44 @@ pub(crate) fn apply_with_ranges(
     text: &str,
     rules: &[Rule],
 ) -> (String, Vec<std::ops::Range<usize>>) {
+    let (result, protected, _) = apply_recording(text, rules);
+    (result, protected)
+}
+
+/// As `apply_with_ranges`, also moving `joins` (byte offsets in `text`) to
+/// output offsets. A join strictly inside a replaced span is dropped.
+pub(crate) fn apply_with_joins(
+    text: &str,
+    rules: &[Rule],
+    joins: &mut Vec<usize>,
+) -> (String, Vec<std::ops::Range<usize>>) {
+    let (result, protected, edits) = apply_recording(text, rules);
+    joins.retain_mut(|join| {
+        let index = edits.partition_point(|edit| edit.input_end <= *join);
+        if edits.get(index).is_some_and(|edit| edit.input_start < *join) {
+            return false;
+        }
+        if let Some(edit) = index.checked_sub(1).map(|before| &edits[before]) {
+            *join = *join - edit.input_end + edit.output_end;
+        }
+        true
+    });
+    (result, protected)
+}
+
+struct Edit {
+    input_start: usize,
+    input_end: usize,
+    output_end: usize,
+}
+
+fn apply_recording(
+    text: &str,
+    rules: &[Rule],
+) -> (String, Vec<std::ops::Range<usize>>, Vec<Edit>) {
+    let mut edits = Vec::new();
     if text.is_empty() || rules.is_empty() {
-        return (text.to_string(), Vec::new());
+        return (text.to_string(), Vec::new(), edits);
     }
     let mut result = String::with_capacity(text.len());
     let mut protected = Vec::new();
@@ -127,16 +163,17 @@ pub(crate) fn apply_with_ranges(
             let start = result.len();
             result.push_str(written);
             protected.push(start..result.len());
+            edits.push(Edit { input_start: offset, input_end: end, output_end: result.len() });
             offset = end;
             if result.len() > text.len().saturating_add(MAX_TOTAL_EXPANSION_BYTES) {
-                return (text.to_string(), Vec::new());
+                return (text.to_string(), Vec::new(), Vec::new());
             }
         } else {
             result.push(current);
             offset += current.len_utf8();
         }
     }
-    (result, protected)
+    (result, protected, edits)
 }
 
 fn normalize(value: &str) -> String {

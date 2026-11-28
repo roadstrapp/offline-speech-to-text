@@ -99,7 +99,9 @@ mod long_audio;
 #[derive(Default)]
 struct Control {
     calls: usize,
+    decoded_lengths: Vec<usize>,
     refreshes: usize,
+    request_terms: Vec<String>,
     panic_on_refresh: bool,
     entered: bool,
     release: bool,
@@ -109,7 +111,11 @@ struct Control {
 }
 type SharedControl = Arc<(Mutex<Control>, Condvar)>;
 
+#[path = "../src/inference_gate.rs"]
+mod inference_gate;
 mod engine {
+    pub(crate) static INFERENCE_GATE: std::sync::LazyLock<crate::inference_gate::Gate> =
+        std::sync::LazyLock::new(crate::inference_gate::Gate::default);
     use super::*;
     static ENGINE: OnceLock<Mutex<Option<Arc<Mutex<Engine>>>>> = OnceLock::new();
     pub struct Engine {
@@ -156,7 +162,8 @@ mod engine {
             drop(state);
             assert!(!panic, "injected term refresh panic");
         }
-        pub fn begin_transcription(&self) -> TranscriptionJob {
+        pub fn begin_request_transcription(&self, request_terms: &[String]) -> TranscriptionJob {
+            self.control.0.lock().unwrap().request_terms = request_terms.to_vec();
             TranscriptionJob {
                 count: 0,
                 text: String::new(),
@@ -169,6 +176,7 @@ mod engine {
             let (state, changed) = &*self.control;
             let mut state = state.lock().unwrap();
             state.calls += 1;
+            state.decoded_lengths.push(samples.len());
             let call = state.calls;
             state.entered = true;
             changed.notify_all();
@@ -214,6 +222,7 @@ mod engine {
             &mut self,
             job: &mut TranscriptionJob,
             samples: &[f32],
+            pad_final: bool,
         ) -> Result<(), String> {
             let windows = self
                 .limit
@@ -222,7 +231,7 @@ mod engine {
             assert!(job.count < windows.len());
             for (index, window) in windows.iter().enumerate().skip(job.count) {
                 let mut audio = samples[window.clone()].to_vec();
-                if index + 1 < windows.len() {
+                if index + 1 < windows.len() || pad_final {
                     audio_finalization::append_final_decode_silence(&mut audio);
                 }
                 let text = self.decode(&audio)?;
@@ -380,6 +389,35 @@ fn panic_after_a_success_discards_mutated_cache_and_decodes_every_word() {
 }
 
 #[test]
+fn request_words_reach_the_one_job_of_their_request_and_no_other() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    let (_, _, control) = setup(None, None, None, false);
+    let words = vec!["Droneboard".to_string(), "Zapstore".to_string()];
+    let worker = background_transcription::BackgroundTranscriber::start_with_request_terms(
+        Arc::new(JavaVM),
+        objects::GlobalRef,
+        words.clone(),
+    );
+    let completion = worker.finish(audio(), 55_000).unwrap();
+    assert!(matches!(
+        completion.recv_timeout(Duration::from_secs(5)).unwrap(),
+        background_transcription::Completion::Finished { .. }
+    ));
+    assert_eq!(control.0.lock().unwrap().request_terms, words);
+    // The next request sent none: nothing is carried over from the previous one.
+    let worker = background_transcription::BackgroundTranscriber::start(
+        Arc::new(JavaVM),
+        objects::GlobalRef,
+    );
+    let completion = worker.finish(audio(), 55_000).unwrap();
+    assert!(matches!(
+        completion.recv_timeout(Duration::from_secs(5)).unwrap(),
+        background_transcription::Completion::Finished { .. }
+    ));
+    assert!(control.0.lock().unwrap().request_terms.is_empty());
+}
+
+#[test]
 fn default_worker_stop_then_discard_still_delivers_cleanup() {
     let _serial = TEST_LOCK.lock().unwrap();
     let (_, _, control) = setup(None, None, None, true);
@@ -461,6 +499,20 @@ fn short_audio_and_whisper_never_decode_during_capture() {
         assert_eq!(prepared, 0);
         assert_eq!(control.0.lock().unwrap().calls, 1);
     }
+}
+
+#[test]
+fn final_padding_cannot_create_an_extra_window_below_raw_audio_limit() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    let limit = 59 * 16_000 + 8_000;
+    let (worker, capture, control) = setup(Some(limit), None, None, false);
+    // 59.2s fits the raw59.5s budget; adding500ms before planning used to split it.
+    capture.lock().unwrap().push(&vec![0.25; 59 * 16_000 + 3_200]);
+    let (_, prepared) = finish(&worker, &capture);
+    assert_eq!(prepared, 0);
+    let state = control.0.lock().unwrap();
+    assert_eq!(state.calls, 1);
+    assert_eq!(state.decoded_lengths, vec![59 * 16_000 + 3_200 + 8_000]);
 }
 
 #[test]
